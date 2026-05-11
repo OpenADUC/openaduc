@@ -5,8 +5,7 @@
 <h1 align="center">OpenADUC</h1>
 
 <p align="center">
-  <strong>A small self-hosted web app that talks to your domain controllers over LDAPS so you don't have to.</strong><br />
-  Manage users, groups, computers, and OUs from a browser — with a real audit trail behind every change.
+  <strong>Manage users, groups, computers, and OUs from a browser — with a real audit trail behind every change.</strong>
 </p>
 
 <p align="center">
