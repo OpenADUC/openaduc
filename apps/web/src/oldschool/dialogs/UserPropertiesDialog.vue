@@ -166,7 +166,8 @@ type TabId =
   | 'sessions'
   | 'remoteControl'
   | 'rdsProfile'
-  | 'comPlus';
+  | 'comPlus'
+  | 'attributes';
 
 const tabs: { id: TabId; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -182,8 +183,45 @@ const tabs: { id: TabId; label: string }[] = [
   { id: 'remoteControl', label: 'Remote control' },
   { id: 'rdsProfile', label: 'Remote Desktop Services Profile' },
   { id: 'comPlus', label: 'COM+' },
+  // Equivalent to ADUC's "Attribute Editor" tab when Advanced
+  // Features is on — surfaces every populated LDAP attribute on the
+  // user object via UserDetail.rawAttributes.
+  { id: 'attributes', label: 'Attribute Editor' },
 ];
 const activeTab = ref<TabId>('general');
+
+// --- Attribute Editor tab --------------------------------------------
+const attrFilter = ref('');
+const onlyWithValues = ref(true);
+const selectedAttr = ref<string | null>(null);
+
+function formatAttrValue(v: unknown): string {
+  if (v == null) return '<not set>';
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '<not set>';
+    if (v.length === 1) return String(v[0]);
+    return v.map((x) => String(x)).join('; ');
+  }
+  return String(v);
+}
+
+const attributeRows = computed(() => {
+  if (!user.value) return [];
+  const all = Object.entries(user.value.rawAttributes);
+  const filter = attrFilter.value.trim().toLowerCase();
+  return all
+    .filter(([k, v]) => {
+      if (onlyWithValues.value) {
+        if (v == null) return false;
+        if (Array.isArray(v) && v.length === 0) return false;
+        if (typeof v === 'string' && v.length === 0) return false;
+      }
+      if (!filter) return true;
+      return k.toLowerCase().includes(filter) || formatAttrValue(v).toLowerCase().includes(filter);
+    })
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => ({ key: k, value: formatAttrValue(v) }));
+});
 
 // --- Save -------------------------------------------------------------
 async function save(closeAfter: boolean): Promise<void> {
@@ -379,7 +417,7 @@ function rawAttr(u: UserDetail, key: string): string {
 
       <!-- ====== ACCOUNT ====== -->
       <template v-else-if="activeTab === 'account'">
-        <div class="os-form" style="grid-template-columns: 200px 1fr">
+        <div class="os-form" style="grid-template-columns: 200px minmax(0, 1fr)">
           <label class="label">User logon name:</label>
           <div style="display: flex; gap: 4px">
             <input class="os-input" :value="upnLogonName.local" disabled />
@@ -460,7 +498,7 @@ function rawAttr(u: UserDetail, key: string): string {
       <template v-else-if="activeTab === 'profile'">
         <fieldset class="os-groupbox">
           <legend>User profile</legend>
-          <div class="os-form" style="grid-template-columns: 110px 1fr">
+          <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
             <label class="label">Profile path:</label>
             <input class="os-input" :value="rawAttr(user, 'profilePath')" disabled />
             <label class="label">Logon script:</label>
@@ -493,7 +531,7 @@ function rawAttr(u: UserDetail, key: string): string {
       <template v-else-if="activeTab === 'telephones'">
         <fieldset class="os-groupbox">
           <legend>Telephone numbers</legend>
-          <div class="os-form" style="grid-template-columns: 80px 1fr 80px">
+          <div class="os-form" style="grid-template-columns: 80px minmax(0, 1fr) 80px">
             <label class="label">Home:</label>
             <input class="os-input" v-model="draft.values.homePhone" />
             <button class="os-btn" disabled>Other…</button>
@@ -529,7 +567,7 @@ function rawAttr(u: UserDetail, key: string): string {
         </div>
         <fieldset class="os-groupbox">
           <legend>Manager</legend>
-          <div class="os-form" style="grid-template-columns: 60px 1fr; column-gap: 6px">
+          <div class="os-form" style="grid-template-columns: 60px minmax(0, 1fr); column-gap: 6px">
             <label class="label">Name:</label>
             <div style="display: flex; gap: 6px">
               <input
@@ -596,7 +634,7 @@ function rawAttr(u: UserDetail, key: string): string {
         </div>
         <fieldset class="os-groupbox" style="margin-top: 14px">
           <legend>Primary group:</legend>
-          <div class="os-form" style="grid-template-columns: 110px 1fr">
+          <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
             <label class="label">Primary group:</label>
             <input class="os-input" value="Domain Users" disabled />
           </div>
@@ -659,7 +697,7 @@ function rawAttr(u: UserDetail, key: string): string {
           <label class="os-check disabled">
             <input type="checkbox" disabled /> Start the following program at logon:
           </label>
-          <div class="os-form" style="grid-template-columns: 110px 1fr; margin-top: 6px">
+          <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr); margin-top: 6px">
             <label class="label">Program file name:</label>
             <input class="os-input" disabled />
             <label class="label">Start in:</label>
@@ -683,7 +721,7 @@ function rawAttr(u: UserDetail, key: string): string {
       <!-- ====== SESSIONS ====== -->
       <template v-else-if="activeTab === 'sessions'">
         <p>Use this tab to set Remote Desktop Services timeout and reconnection settings.</p>
-        <div class="os-form" style="grid-template-columns: 220px 1fr">
+        <div class="os-form" style="grid-template-columns: 220px minmax(0, 1fr)">
           <label class="label">End a disconnected session:</label>
           <select class="os-select" disabled>
             <option>Never</option>
@@ -753,7 +791,7 @@ function rawAttr(u: UserDetail, key: string): string {
         </p>
         <fieldset class="os-groupbox">
           <legend>Remote Desktop Services User Profile</legend>
-          <div class="os-form" style="grid-template-columns: 100px 1fr">
+          <div class="os-form" style="grid-template-columns: 100px minmax(0, 1fr)">
             <label class="label">Profile Path:</label>
             <input class="os-input" disabled />
           </div>
@@ -785,7 +823,7 @@ function rawAttr(u: UserDetail, key: string): string {
         <p>This user is a member of the following COM+ partition set:</p>
         <fieldset class="os-groupbox">
           <legend>Partition Set</legend>
-          <div class="os-form" style="grid-template-columns: 70px 1fr">
+          <div class="os-form" style="grid-template-columns: 70px minmax(0, 1fr)">
             <label class="label">Name:</label>
             <div style="display: flex; gap: 4px">
               <input class="os-input" disabled value="(none)" />
@@ -794,6 +832,95 @@ function rawAttr(u: UserDetail, key: string): string {
           </div>
         </fieldset>
       </template>
+
+      <!-- ====== ATTRIBUTE EDITOR ====== -->
+      <template v-else-if="activeTab === 'attributes'">
+        <div style="margin-bottom: 6px">Attributes:</div>
+        <div style="display: flex; gap: 6px; margin-bottom: 6px">
+          <input class="os-input" v-model="attrFilter" placeholder="Filter…" style="flex: 1" />
+          <label class="os-check" style="white-space: nowrap">
+            <input type="checkbox" v-model="onlyWithValues" />
+            Only attributes with values
+          </label>
+        </div>
+        <div class="os-listbox os-attr-list">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 38%">Attribute</th>
+                <th>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="row in attributeRows"
+                :key="row.key"
+                :class="{ selected: selectedAttr === row.key }"
+                @click="selectedAttr = row.key"
+              >
+                <td :title="row.key">{{ row.key }}</td>
+                <td :title="row.value">{{ row.value }}</td>
+              </tr>
+              <tr v-if="attributeRows.length === 0">
+                <td colspan="2" class="empty">No attributes match the current filter.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display: flex; gap: 6px; margin-top: 8px">
+          <button class="os-btn" disabled>Edit…</button>
+          <button class="os-btn" disabled>Filter…</button>
+        </div>
+      </template>
     </div>
   </WinDialog>
 </template>
+
+<style scoped>
+.os-attr-list {
+  min-height: 280px;
+  max-height: none;
+  padding: 0;
+  font-family: 'Consolas', 'Cascadia Mono', monospace;
+}
+.os-attr-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.os-attr-list thead th {
+  position: sticky;
+  top: 0;
+  background: var(--os-window-bg);
+  border-bottom: 1px solid var(--os-window-border);
+  text-align: left;
+  padding: 3px 6px;
+  font-weight: 600;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+}
+.os-attr-list tbody td {
+  padding: 1px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-bottom: 1px solid transparent;
+}
+.os-attr-list tbody tr {
+  cursor: default;
+}
+.os-attr-list tbody tr:hover {
+  background: var(--os-selection-soft);
+}
+.os-attr-list tbody tr.selected {
+  background: var(--os-selection);
+  color: #ffffff;
+}
+.os-attr-list .empty {
+  padding: 16px;
+  color: var(--os-window-text-muted);
+  font-style: italic;
+  text-align: center;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+}
+</style>

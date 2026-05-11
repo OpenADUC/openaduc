@@ -82,7 +82,7 @@ async function submit(): Promise<void> {
         New password for: <strong>{{ samAccountName }}</strong>
       </div>
 
-      <div class="os-form" style="grid-template-columns: 160px 1fr; row-gap: 8px">
+      <div class="os-form" style="grid-template-columns: 160px minmax(0, 1fr); row-gap: 8px">
         <label class="label" for="np">New password:</label>
         <input
           id="np"

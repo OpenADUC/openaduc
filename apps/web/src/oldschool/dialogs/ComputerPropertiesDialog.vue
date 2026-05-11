@@ -172,7 +172,7 @@ function rawAttr(c: ComputerDetail, k: string): string {
       </template>
 
       <template v-else-if="tab === 'location'">
-        <div class="os-form" style="grid-template-columns: 80px 1fr">
+        <div class="os-form" style="grid-template-columns: 80px minmax(0, 1fr)">
           <label class="label">Location:</label>
           <div style="display: flex; gap: 6px">
             <input class="os-input" :value="rawAttr(computer, 'location')" disabled />
@@ -182,7 +182,7 @@ function rawAttr(c: ComputerDetail, k: string): string {
       </template>
 
       <template v-else-if="tab === 'managedBy'">
-        <div class="os-form" style="grid-template-columns: 80px 1fr">
+        <div class="os-form" style="grid-template-columns: 80px minmax(0, 1fr)">
           <label class="label">Name:</label>
           <div style="display: flex; gap: 6px">
             <input

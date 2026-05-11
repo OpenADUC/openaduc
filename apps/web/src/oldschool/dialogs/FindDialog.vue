@@ -103,7 +103,7 @@ function openHit(h: Hit): void {
     @close="$emit('close')"
   >
     <div style="padding: 14px 16px">
-      <div class="os-form" style="grid-template-columns: 110px 1fr">
+      <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
         <label class="label" for="findKind">Find:</label>
         <select id="findKind" class="os-select" v-model="kind">
           <option value="user">Users</option>

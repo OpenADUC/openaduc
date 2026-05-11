@@ -599,13 +599,22 @@
   box-sizing: border-box;
 }
 
-/* Form layout used in Properties dialogs */
+/* Form layout used in Properties dialogs. `minmax(0, 1fr)` keeps the
+   value column from expanding past its share when the content has
+   wide intrinsic size (e.g. a row with three buttons next to an
+   input) — without this, CSS Grid's default `1fr` is equivalent to
+   `minmax(auto, 1fr)` and the column blows out wider than the
+   dialog. Grid children also get `min-width: 0` so flex containers
+   nested inside the grid can themselves shrink under their content. */
 .os-form {
   display: grid;
-  grid-template-columns: 130px 1fr;
+  grid-template-columns: 130px minmax(0, 1fr);
   row-gap: 6px;
   column-gap: 8px;
   align-items: center;
+}
+.os-form > * {
+  min-width: 0;
 }
 .os-form .label {
   font-size: 12px;
@@ -645,6 +654,11 @@
   border-radius: 0;
   box-sizing: border-box;
   width: 100%;
+  /* Allow inputs to shrink below their intrinsic size when packed
+     into a flex row alongside fixed-width buttons (Change… / Properties
+     / Clear). Without this the input's text-input min-content baseline
+     wins and shoves siblings past the dialog edge. */
+  min-width: 0;
 }
 .os-input:focus,
 .os-select:focus,
