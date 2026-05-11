@@ -18,6 +18,13 @@ export default fp(async (app) => {
   const pool = createDbPool(env);
   const db = createKysely(pool);
 
+  // node-postgres pools emit 'error' when an idle client dies (postgres
+  // restart, network blip, failover). Without a listener, Node throws and
+  // the api process exits — turning every db hiccup into a downtime window.
+  pool.on('error', (err) => {
+    app.log.error({ err }, 'idle pg client error (pool will reconnect on next checkout)');
+  });
+
   app.decorate('pgPool', pool);
   app.decorate('db', db);
 
