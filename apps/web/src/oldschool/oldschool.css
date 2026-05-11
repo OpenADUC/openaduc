@@ -1,0 +1,810 @@
+/* SPDX-License-Identifier: BUSL-1.1
+ * Old School — classic Active Directory Users and Computers paint.
+ *
+ * Everything here is scoped under `.os-root` (the MMC container) or
+ * `.os-dialog` (modal frame) so the surrounding app shell keeps its own
+ * theme. Colors and metrics are picked to evoke Windows 10-era MMC:
+ * cool grey toolbar, bright white list/dialog body, blue selection.
+ */
+
+.os-root,
+.os-dialog {
+  --os-window-bg: #f0f0f0;
+  --os-window-bg-dark: #e1e1e1;
+  --os-window-text: #000000;
+  --os-window-text-muted: #525252;
+  --os-window-border: #a0a0a0;
+  --os-window-border-soft: #d0d0d0;
+  --os-window-border-darker: #6e6e6e;
+  --os-list-bg: #ffffff;
+  --os-list-alt: #f7f7f7;
+  --os-selection: #0078d7;
+  --os-selection-soft: #cce8ff;
+  --os-selection-border: #99d1ff;
+  --os-title-active-1: #2a4170;
+  --os-title-active-2: #173063;
+  --os-title-inactive-1: #7a7a7a;
+  --os-title-inactive-2: #5b5b5b;
+  --os-button-bg: #e1e1e1;
+  --os-button-hover: #e5f1fb;
+  --os-button-hover-border: #0078d7;
+  --os-button-active: #cce4f7;
+  --os-link: #0066cc;
+  --os-disabled: #a0a0a0;
+
+  font-family:
+    'Segoe UI',
+    Tahoma,
+    'Helvetica Neue',
+    Arial,
+    sans-serif;
+  font-size: 12px;
+  color: var(--os-window-text);
+}
+
+/* === MMC outer window ============================================== */
+.os-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--os-window-bg);
+  border: 1px solid var(--os-window-border-darker);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+/* Title bar */
+.os-titlebar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 6px 0 8px;
+  background: linear-gradient(
+    to bottom,
+    var(--os-title-active-1),
+    var(--os-title-active-2)
+  );
+  color: #ffffff;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  user-select: none;
+  flex: 0 0 30px;
+}
+.os-titlebar-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+.os-titlebar-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+}
+.os-titlebar-controls {
+  display: flex;
+  gap: 0;
+}
+.os-titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 45px;
+  height: 30px;
+  background: transparent;
+  border: 0;
+  color: #ffffff;
+  font-family: 'Segoe MDL2 Assets', 'Segoe UI Symbol', monospace;
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+.os-titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.os-titlebar-btn.close:hover {
+  background: #e81123;
+}
+
+/* Menu bar */
+.os-menubar {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 4px;
+  background: var(--os-window-bg);
+  border-bottom: 1px solid var(--os-window-border-soft);
+  flex: 0 0 22px;
+  user-select: none;
+}
+.os-menu-item {
+  position: relative;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: default;
+  border-radius: 0;
+}
+.os-menu-item:hover,
+.os-menu-item.open {
+  background: var(--os-selection-soft);
+  outline: 1px solid var(--os-selection-border);
+}
+.os-menu-underline {
+  text-decoration: underline;
+}
+
+/* Dropdown panel */
+.os-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: var(--os-window-bg);
+  border: 1px solid var(--os-window-border-darker);
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.2);
+  padding: 2px 0;
+  z-index: 1000;
+}
+.os-menu-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 24px 0 28px;
+  position: relative;
+  cursor: default;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.os-menu-row .os-menu-icon {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.os-menu-row .os-menu-accel {
+  position: absolute;
+  right: 8px;
+  color: var(--os-window-text-muted);
+  font-size: 11px;
+}
+.os-menu-row:hover,
+.os-menu-row.focused {
+  background: var(--os-selection);
+  color: #ffffff;
+}
+.os-menu-row:hover .os-menu-accel,
+.os-menu-row.focused .os-menu-accel {
+  color: #ffffff;
+}
+.os-menu-row.disabled {
+  color: var(--os-disabled);
+  pointer-events: none;
+}
+.os-menu-row.disabled .os-menu-accel {
+  color: var(--os-disabled);
+}
+.os-menu-separator {
+  height: 1px;
+  background: var(--os-window-border-soft);
+  margin: 3px 1px;
+}
+.os-menu-row .os-submenu-arrow {
+  position: absolute;
+  right: 4px;
+  font-size: 8px;
+}
+
+/* Toolbar */
+.os-toolbar {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 1px 2px;
+  background: var(--os-window-bg);
+  border-bottom: 1px solid var(--os-window-border-soft);
+  flex: 0 0 26px;
+  gap: 0;
+}
+.os-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.os-tool-btn:hover:not(:disabled) {
+  background: var(--os-button-hover);
+  border-color: var(--os-button-hover-border);
+}
+.os-tool-btn:active:not(:disabled) {
+  background: var(--os-button-active);
+}
+.os-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.os-tool-separator {
+  width: 1px;
+  height: 18px;
+  background: var(--os-window-border);
+  margin: 0 2px;
+}
+
+/* Body: split tree | list */
+.os-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: var(--os-window-bg);
+}
+.os-tree-pane {
+  flex: 0 0 var(--os-tree-width, 280px);
+  display: flex;
+  flex-direction: column;
+  background: var(--os-list-bg);
+  border-right: 1px solid var(--os-window-border);
+  min-height: 0;
+}
+.os-list-pane {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--os-list-bg);
+  min-height: 0;
+  min-width: 0;
+}
+.os-pane-header {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--os-window-bg);
+  border-bottom: 1px solid var(--os-window-border);
+  font-size: 12px;
+  font-weight: 600;
+  flex: 0 0 22px;
+}
+.os-splitter {
+  width: 4px;
+  background: var(--os-window-bg);
+  cursor: col-resize;
+  flex: 0 0 4px;
+}
+.os-splitter:hover {
+  background: var(--os-window-border-soft);
+}
+
+/* Tree */
+.os-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 2px 0;
+  font-size: 12px;
+  user-select: none;
+}
+.os-tree-node {
+  display: flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 4px 0 0;
+  cursor: default;
+  position: relative;
+  white-space: nowrap;
+}
+.os-tree-node .os-tree-expander {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--os-window-text-muted);
+  cursor: pointer;
+}
+.os-tree-node .os-tree-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.os-tree-node .os-tree-label {
+  padding: 1px 4px;
+  border: 1px dotted transparent;
+}
+.os-tree-node:hover {
+  background: var(--os-selection-soft);
+}
+.os-tree-node.selected {
+  background: var(--os-selection);
+  color: #ffffff;
+}
+.os-tree-node.selected .os-tree-label {
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.os-tree-node.selected .os-tree-expander {
+  color: #ffffff;
+}
+
+/* List view */
+.os-list {
+  flex: 1;
+  overflow: auto;
+  background: var(--os-list-bg);
+  min-height: 0;
+}
+.os-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.os-list-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--os-window-bg);
+  border-right: 1px solid var(--os-window-border-soft);
+  border-bottom: 1px solid var(--os-window-border);
+  padding: 3px 6px;
+  font-weight: 600;
+  text-align: left;
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+}
+.os-list-table thead th .sort-marker {
+  margin-left: 4px;
+  font-family: monospace;
+  color: var(--os-window-text-muted);
+}
+.os-list-table thead th:hover {
+  background: var(--os-button-hover);
+}
+.os-list-table tbody td {
+  padding: 2px 6px;
+  border-right: 1px solid transparent;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.os-list-row {
+  cursor: default;
+  height: 19px;
+}
+.os-list-row .os-row-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.os-list-row:hover {
+  background: var(--os-selection-soft);
+}
+.os-list-row.selected {
+  background: var(--os-selection);
+  color: #ffffff;
+}
+.os-list-row.selected a {
+  color: #ffffff;
+}
+.os-list-empty {
+  padding: 24px;
+  color: var(--os-window-text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* Status bar */
+.os-statusbar {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--os-window-bg);
+  border-top: 1px solid var(--os-window-border);
+  font-size: 11px;
+  color: var(--os-window-text-muted);
+  flex: 0 0 20px;
+  user-select: none;
+}
+.os-statusbar-section {
+  border-left: 1px solid var(--os-window-border-soft);
+  padding: 0 8px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+}
+.os-statusbar-section:first-child {
+  border-left: 0;
+  flex: 1;
+  padding-left: 4px;
+}
+
+/* === Context menu ================================================== */
+.os-ctx {
+  position: fixed;
+  background: var(--os-window-bg);
+  border: 1px solid var(--os-window-border-darker);
+  box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.25);
+  padding: 2px 0;
+  z-index: 2000;
+  min-width: 180px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--os-window-text);
+}
+
+/* === Dialogs ======================================================= */
+/* Dialogs are modeless — no darkening backdrop. Depth comes from a
+   double-layer drop shadow + a 2px outer rim, the way the real
+   Windows themes painted floating windows. */
+.os-dialog {
+  background: var(--os-window-bg);
+  border: 1px solid var(--os-window-border-darker);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 0 0 1px rgba(0, 0, 0, 0.12),
+    0 14px 32px -4px rgba(0, 0, 0, 0.45),
+    0 4px 10px -2px rgba(0, 0, 0, 0.3);
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+}
+.os-dialog-titlebar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 4px 0 8px;
+  background: linear-gradient(
+    to bottom,
+    var(--os-title-active-1),
+    var(--os-title-active-2)
+  );
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  user-select: none;
+  flex: 0 0 30px;
+}
+.os-dialog-titlebar .icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+.os-dialog-titlebar .title {
+  flex: 1;
+}
+.os-dialog-titlebar .help-btn,
+.os-dialog-titlebar .close-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.os-dialog-titlebar .help-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.os-dialog-titlebar .close-btn:hover {
+  background: #e81123;
+}
+/* The only scrolling region inside a dialog. Sits between the
+   (fixed) titlebar + tab strip above and the (fixed) footer below.
+   `scrollbar-gutter: stable` reserves the scrollbar's column so
+   content doesn't shift sideways when a taller tab makes the
+   scrollbar appear. */
+.os-dialog-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  background: var(--os-window-bg);
+  padding: 0;
+  position: relative;
+}
+.os-dialog-footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--os-window-border-soft);
+  background: var(--os-window-bg);
+}
+
+/* Tabs (classic Win32 tabbed dialog). Lives in the dialog's `#tabs`
+   slot — above the scrollable body, below the titlebar — so the tab
+   labels stay frozen as the active tab's content scrolls inside the
+   body. `flex-shrink: 0` keeps them at their natural height even
+   when surrounded by flex siblings competing for space.
+
+   `overflow: hidden` is load-bearing: with `flex-wrap: wrap` we
+   never have horizontal overflow, but browsers were occasionally
+   showing a phantom scrollbar on rows containing the active tab
+   because of sub-pixel rounding from the old negative-margin
+   trick. With overflow hidden the row strictly clips to the
+   strip's box and the active-tab pseudo (below) handles the
+   "merge with the body" effect without touching layout. */
+.os-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--os-window-border);
+  background: var(--os-window-bg);
+  overflow: hidden;
+  flex-wrap: wrap;
+}
+.os-tab {
+  position: relative;
+  padding: 4px 10px;
+  margin: 0 2px 0 0;
+  background: var(--os-window-bg-dark);
+  border: 1px solid var(--os-window-border);
+  border-bottom: 0;
+  border-radius: 3px 3px 0 0;
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+  color: var(--os-window-text);
+}
+.os-tab.active {
+  background: var(--os-window-bg);
+  font-weight: 500;
+  z-index: 1;
+}
+/* Active tab's "merge into body" effect: paint a 1px white strip
+   along its bottom edge that overlaps the .os-tabs border-bottom.
+   No layout impact — purely cosmetic. */
+.os-tab.active::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--os-window-bg);
+  z-index: 2;
+}
+/* Tab body is just the styled content area. Scrolling is handled
+   one level up on .os-dialog-body; this element just provides
+   padding and the white surface inside the dialog. */
+.os-tab-body {
+  background: var(--os-window-bg);
+  padding: 14px 14px 10px;
+  box-sizing: border-box;
+}
+
+/* Form layout used in Properties dialogs. `minmax(0, 1fr)` keeps the
+   value column from expanding past its share when the content has
+   wide intrinsic size (e.g. a row with three buttons next to an
+   input) — without this, CSS Grid's default `1fr` is equivalent to
+   `minmax(auto, 1fr)` and the column blows out wider than the
+   dialog. Grid children also get `min-width: 0` so flex containers
+   nested inside the grid can themselves shrink under their content. */
+.os-form {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  row-gap: 6px;
+  column-gap: 8px;
+  align-items: center;
+}
+.os-form > * {
+  min-width: 0;
+}
+.os-form .label {
+  font-size: 12px;
+  color: var(--os-window-text);
+  text-align: left;
+}
+.os-form .full {
+  grid-column: 1 / -1;
+}
+.os-form .row {
+  display: contents;
+}
+.os-groupbox {
+  border: 1px solid var(--os-window-border);
+  border-radius: 2px;
+  padding: 10px;
+  margin: 6px 0;
+  position: relative;
+}
+.os-groupbox > legend {
+  font-size: 12px;
+  padding: 0 4px;
+  background: var(--os-window-bg);
+}
+
+/* Inputs */
+.os-input,
+.os-select,
+.os-textarea {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  height: 21px;
+  border: 1px solid var(--os-window-border-darker);
+  background: #ffffff;
+  color: var(--os-window-text);
+  border-radius: 0;
+  box-sizing: border-box;
+  width: 100%;
+  /* Allow inputs to shrink below their intrinsic size when packed
+     into a flex row alongside fixed-width buttons (Change… / Properties
+     / Clear). Without this the input's text-input min-content baseline
+     wins and shoves siblings past the dialog edge. */
+  min-width: 0;
+}
+.os-input:focus,
+.os-select:focus,
+.os-textarea:focus {
+  outline: 1px solid var(--os-selection);
+  outline-offset: -1px;
+  border-color: var(--os-selection);
+}
+.os-input:disabled,
+.os-select:disabled,
+.os-textarea:disabled {
+  background: var(--os-window-bg-dark);
+  color: var(--os-window-text-muted);
+}
+.os-input[readonly],
+.os-textarea[readonly] {
+  background: var(--os-window-bg-dark);
+}
+.os-textarea {
+  height: auto;
+  min-height: 60px;
+  padding: 3px 4px;
+  resize: vertical;
+  font-family: inherit;
+}
+.os-select {
+  appearance: auto;
+}
+
+/* Checkbox/Radio rows */
+.os-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: default;
+  user-select: none;
+}
+.os-check input[type='checkbox'],
+.os-check input[type='radio'] {
+  margin: 0;
+  cursor: pointer;
+}
+.os-check.disabled {
+  color: var(--os-disabled);
+}
+
+/* Buttons */
+.os-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 75px;
+  height: 23px;
+  padding: 0 12px;
+  background: var(--os-button-bg);
+  border: 1px solid var(--os-window-border-darker);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--os-window-text);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.os-btn:hover:not(:disabled) {
+  background: var(--os-button-hover);
+  border-color: var(--os-button-hover-border);
+}
+.os-btn:active:not(:disabled) {
+  background: var(--os-button-active);
+}
+.os-btn.primary {
+  border-color: var(--os-selection);
+  background: var(--os-button-hover);
+  font-weight: 600;
+}
+.os-btn:disabled {
+  background: var(--os-window-bg-dark);
+  color: var(--os-disabled);
+  border-color: var(--os-window-border);
+  cursor: default;
+}
+.os-btn:focus {
+  outline: 1px dotted var(--os-window-text);
+  outline-offset: -3px;
+}
+
+/* List boxes used by Member Of, etc. */
+.os-listbox {
+  border: 1px solid var(--os-window-border-darker);
+  background: #ffffff;
+  overflow: auto;
+  max-height: 200px;
+  min-height: 120px;
+  font-size: 12px;
+}
+.os-listbox-row {
+  display: flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 6px;
+  cursor: default;
+  gap: 4px;
+}
+.os-listbox-row:hover {
+  background: var(--os-selection-soft);
+}
+.os-listbox-row.selected {
+  background: var(--os-selection);
+  color: #ffffff;
+}
+.os-listbox-empty {
+  padding: 12px;
+  color: var(--os-window-text-muted);
+  font-style: italic;
+  text-align: center;
+}
+
+/* Inline messages */
+.os-info {
+  font-size: 11px;
+  color: var(--os-window-text-muted);
+  margin: 4px 0;
+}
+.os-error {
+  font-size: 12px;
+  color: #b30000;
+  margin: 4px 0;
+}
+
+/* The container that paints over the routed view. Full-viewport
+   overlay sitting on the teal MMC "desktop" with a small gutter
+   around the window — matches how the real MMC console looks
+   floating on a Windows workspace. */
+.os-host {
+  position: fixed;
+  inset: 0;
+  /* Above sidebar / topbar / StepUpDialog / FAB, below floating
+     dialog windows (which use z-index in the thousands). */
+  z-index: 800;
+  display: block;
+  background: #245a8f;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.os-host .os-root {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}

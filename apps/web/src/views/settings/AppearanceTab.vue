@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { useRouter } from 'vue-router';
 import {
   useThemeStore,
   ACCENTS,
@@ -10,6 +11,21 @@ import {
 import Card from '../../design/primitives/Card.vue';
 
 const theme = useThemeStore();
+const router = useRouter();
+
+/**
+ * Flip the Old School toggle. When turning it ON we navigate to the
+ * dashboard so the operator sees the MMC right away — AppShell's
+ * overlay logic suppresses Old School on /appearance and /settings
+ * (so those pages stay reachable for toggling back off), which
+ * would otherwise leave the user staring at this same screen
+ * wondering whether anything happened.
+ */
+async function onToggleOldSchool(): Promise<void> {
+  const willBeOn = !theme.oldSchool;
+  theme.toggleOldSchool();
+  if (willBeOn) await router.push('/');
+}
 
 const modes: { value: ThemeMode; label: string; sub: string }[] = [
   { value: 'dark', label: 'Dark', sub: 'recommended for IT operators' },
@@ -84,6 +100,24 @@ const accentNames = Object.keys(ACCENTS) as AccentName[];
           :aria-label="a"
           @click="theme.setAccent(a)"
         />
+      </div>
+    </div>
+
+    <div class="settings-divider" />
+
+    <div class="settings-row old-school-row">
+      <div class="settings-label">
+        <div class="setting-name">Old School</div>
+        <div class="setting-sub">
+          Replace the main content area with the classic Active Directory Users and Computers
+          experience &mdash; folder tree, list view, Properties dialogs, and all.
+        </div>
+      </div>
+      <div class="settings-control toggle-control">
+        <label class="switch" :class="{ on: theme.oldSchool }">
+          <input type="checkbox" :checked="theme.oldSchool" @change="onToggleOldSchool" />
+          <span class="track"><span class="thumb" /></span>
+        </label>
       </div>
     </div>
   </Card>
@@ -169,5 +203,68 @@ const accentNames = Object.keys(ACCENTS) as AccentName[];
 .accent-swatch.active {
   border-color: var(--text);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--text) 8%, transparent);
+}
+
+.old-school-row {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+}
+
+.setting-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+  max-width: 56ch;
+  line-height: 1.4;
+}
+
+.toggle-control {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.switch {
+  display: inline-block;
+  cursor: pointer;
+  user-select: none;
+}
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.switch .track {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+.switch .thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 18px;
+  height: 18px;
+  background: var(--text);
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.switch.on .track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch.on .thumb {
+  transform: translateX(18px);
+  background: var(--accent-contrast);
 }
 </style>

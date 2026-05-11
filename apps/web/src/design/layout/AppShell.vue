@@ -7,6 +7,7 @@ import Topbar from './Topbar.vue';
 import StepUpDialog from '../feedback/StepUpDialog.vue';
 import EditModeFab from '../primitives/EditModeFab.vue';
 import EditModeStatusPill from '../primitives/EditModeStatusPill.vue';
+import OldSchoolMmc from '../../oldschool/OldSchoolMmc.vue';
 import { useAuthStore } from '../../stores/auth.js';
 import { useResponsive } from '../composables/useResponsive.js';
 import { useThemeStore } from '../stores/useTheme.js';
@@ -16,6 +17,21 @@ const showShell = computed(() => route.meta.layout !== 'bare');
 const auth = useAuthStore();
 const theme = useThemeStore();
 const { isMobile } = useResponsive();
+
+// Old School takes over the entire browser window — sidebar, topbar, and
+// page content all hide behind the MMC overlay. The operator returns to
+// the app by hitting File → Exit / Close / Minimize inside the MMC,
+// which navigates back to /appearance and flips the toggle off.
+// We exempt /appearance and /settings (and the bare layouts handled
+// above) so those pages remain reachable when the toggle is on.
+const oldSchoolActive = computed(() => {
+  if (!theme.oldSchool) return false;
+  const name = route.name;
+  if (name === 'appearance' || name === 'settings' || name === 'login' || name === 'setup') {
+    return false;
+  }
+  return showShell.value;
+});
 
 // At narrow viewports the sidebar collapses to an icon-only rail rather than
 // disappearing. We force-collapse on entering mobile width and restore the
@@ -77,6 +93,11 @@ function onDialogVisibility(open: boolean): void {
     />
     <EditModeFab />
     <EditModeStatusPill />
+
+    <!-- Old School: full-viewport overlay covering sidebar, topbar, and
+         page. Mounted at the shell level so it lives on top of every
+         non-bare route. -->
+    <OldSchoolMmc v-if="oldSchoolActive" />
   </div>
 </template>
 
