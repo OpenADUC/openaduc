@@ -4,9 +4,9 @@
 # OpenADUC installer.
 #
 # Usage:
-#   curl -fsSL https://openaduc.com/install.sh | bash
-#   curl -fsSL https://openaduc.com/install.sh | bash -s -- --version v0.1.0
-#   curl -fsSL https://openaduc.com/install.sh | bash -s -- --yes
+#   curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash -s -- --version v0.1.0
+#   curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash -s -- --yes
 #
 # Or, from a checkout:
 #   ./install.sh

@@ -13,7 +13,7 @@ In short, you need a 64-bit Linux host with Docker Engine 24+ and the Compose v2
 On the host that will run OpenADUC:
 
 ```bash
-curl -fsSL https://openaduc.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash
 ```
 
 The installer:
@@ -70,7 +70,7 @@ After the wizard finishes, OpenADUC schedules its background sync tasks (delta +
 For a one-line install:
 
 ```bash
-curl -fsSL https://openaduc.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash
 # Choose "upgrade" when prompted.
 ```
 

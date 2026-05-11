@@ -77,7 +77,7 @@ Storage growth is driven mostly by the audit log (one row per write) and the dir
 One line on a Linux host with Docker:
 
 ```bash
-curl -fsSL https://openaduc.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/OpenADUC/openaduc/main/install.sh | bash
 ```
 
 The installer prompts for an install directory, asks whether to use the bundled Postgres or an existing one, generates strong secrets, and brings the stack up. Then open the printed URL in a browser to run the first-run setup wizard.
