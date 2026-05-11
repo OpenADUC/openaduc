@@ -11,8 +11,8 @@ import WinIcon from '../primitives/WinIcon.vue';
 import { api } from '../../api/index.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
 
+defineProps<{ windowId: number }>();
 defineEmits<{ (e: 'close'): void }>();
-const visible = ref(true);
 const store = useOldSchool();
 
 const kind = ref<'user' | 'group' | 'computer'>('user');
@@ -91,17 +91,16 @@ function openHit(h: Hit): void {
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     title="Find Users, Contacts, and Groups"
     icon="find"
-    :width="560"
     hide-apply
     ok-label="Find Now"
     cancel-label="Close"
     :can-ok="!!q.trim()"
     @ok="run"
     @cancel="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @close="$emit('close')"
   >
     <div style="padding: 14px 16px">
       <div class="os-form" style="grid-template-columns: 110px 1fr">

@@ -453,22 +453,18 @@
 }
 
 /* === Dialogs ======================================================= */
-.os-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.25);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1500;
-}
+/* Dialogs are modeless — no darkening backdrop. Depth comes from a
+   double-layer drop shadow + a 2px outer rim, the way the real
+   Windows themes painted floating windows. */
 .os-dialog {
   background: var(--os-window-bg);
   border: 1px solid var(--os-window-border-darker);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.32);
-  min-width: 380px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 32px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 0 0 1px rgba(0, 0, 0, 0.12),
+    0 14px 32px -4px rgba(0, 0, 0, 0.45),
+    0 4px 10px -2px rgba(0, 0, 0, 0.3);
+  min-width: 320px;
   display: flex;
   flex-direction: column;
 }
@@ -521,6 +517,7 @@
   background: var(--os-window-bg);
   padding: 0;
   min-height: 0;
+  position: relative;
 }
 .os-dialog-footer {
   display: flex;
@@ -531,8 +528,13 @@
   background: var(--os-window-bg);
 }
 
-/* Tabs (classic Win32 tabbed dialog) */
+/* Tabs (classic Win32 tabbed dialog). Sticks to the top of the
+   dialog body so the tab strip stays visible while content scrolls
+   inside the active tab — matches MMC's pinned tab header behaviour. */
 .os-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: flex-end;
   padding: 4px 8px 0;
@@ -561,18 +563,13 @@
   margin-bottom: -1px;
   font-weight: 500;
 }
-/* The tab body is pinned to a fixed height so the dialog doesn't
-   resize when the operator switches tabs (real MMC always keeps the
-   dialog at the same dimensions and scrolls inside each tab). The
-   surrounding `.os-dialog` uses flex column with `min-height: 0` on
-   the body so this height is the load-bearing constraint. */
+/* Tab body lays out at natural height. Scrolling lives one level up
+   on .os-dialog-body, so the sticky tab strip stays pinned while
+   long content (e.g. the Account tab's checkbox list) scrolls past
+   underneath. */
 .os-tab-body {
   background: var(--os-window-bg);
   padding: 14px 14px 10px;
-  min-width: 480px;
-  height: 420px;
-  overflow-y: auto;
-  overflow-x: hidden;
   box-sizing: border-box;
 }
 
@@ -751,25 +748,20 @@
   margin: 4px 0;
 }
 
-/* The container that paints over the routed view. The MMC window sits
-   on a teal-blue "desktop" with a small gutter all around — matches
-   how the real MMC console looks floating on a Windows workspace. */
+/* The container that paints over the routed view. Full-viewport
+   overlay sitting on the teal MMC "desktop" with a small gutter
+   around the window — matches how the real MMC console looks
+   floating on a Windows workspace. */
 .os-host {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  /* Above sidebar / topbar / StepUpDialog / FAB, below floating
+     dialog windows (which use z-index in the thousands). */
+  z-index: 800;
   display: block;
   background: #245a8f;
   padding: 16px;
   box-sizing: border-box;
-}
-.os-host.embedded {
-  position: relative;
-  inset: auto;
-  width: 100%;
-  height: 100%;
-  z-index: auto;
-  padding: 14px;
 }
 .os-host .os-root {
   box-sizing: border-box;

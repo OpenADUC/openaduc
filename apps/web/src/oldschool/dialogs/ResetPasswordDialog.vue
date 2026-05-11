@@ -12,13 +12,12 @@ import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
 
-const props = defineProps<{ id: string; samAccountName: string }>();
+const props = defineProps<{ windowId: number; id: string; samAccountName: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const auth = useAuthStore();
 const store = useOldSchool();
 const toast = useToast();
-const visible = ref(true);
 
 const newPwd = ref('');
 const confirmPwd = ref('');
@@ -58,7 +57,6 @@ async function submit(): Promise<void> {
         life: 4000,
       });
       store.bumpData();
-      visible.value = false;
       emit('close');
     } catch (e) {
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
@@ -69,16 +67,15 @@ async function submit(): Promise<void> {
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     :title="`Reset Password`"
     icon="properties"
-    :width="440"
     hide-apply
     ok-label="OK"
     :can-ok="canOk"
     @ok="submit"
-    @cancel="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @cancel="emit('close')"
+    @close="emit('close')"
   >
     <div style="padding: 18px 18px 14px 18px; font-size: 12px">
       <div style="margin-bottom: 14px">

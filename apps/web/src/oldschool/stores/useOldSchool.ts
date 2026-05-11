@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Pinia store for the Old School MMC: which container is selected in
 // the tree, which row (if any) is the active selection in the list
-// view, and which dialog (if any) is currently open. All three pieces
-// of state live here so any descendant can read/write without prop
-// drilling and so dialogs can be unmounted by closing them centrally.
+// view, and the open set of free-floating dialog windows. Each window
+// owns its own position / size / z-index — opening another dialog
+// (e.g. an Add-to-Group picker from inside Properties) pushes a new
+// window without closing the one underneath, mirroring how operators
+// like to pull up two users side-by-side in the real console.
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
@@ -17,7 +19,7 @@ export interface SelectedNode {
   label: string;
 }
 
-export type OpenDialog =
+export type DialogSpec =
   | { kind: 'user-properties'; id: string }
   | { kind: 'group-properties'; id: string }
   | { kind: 'computer-properties'; id: string }
@@ -33,14 +35,53 @@ export type OpenDialog =
       onOk: () => void | Promise<void>;
     }
   | { kind: 'about' }
-  | { kind: 'find' }
-  | null;
+  | { kind: 'find' };
+
+/** Backwards-compatible alias for the original union name. */
+export type OpenDialog = DialogSpec | null;
+
+export interface DialogWindow {
+  id: number;
+  dialog: DialogSpec;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  z: number;
+}
 
 export interface SelectedRow {
   kind: 'user' | 'group' | 'computer' | 'gpo';
   id: string;
   /** Friendly label used by status bar / context menu headers. */
   label: string;
+}
+
+/**
+ * Reasonable default dimensions for each dialog kind. Roughly matches
+ * the proportions of the real MMC counterparts: Properties dialogs are
+ * tall enough to render the General/Account tabs without scroll, the
+ * pickers are wider, and Confirm is a tight little prompt.
+ */
+function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: number } {
+  switch (kind) {
+    case 'user-properties':
+    case 'group-properties':
+    case 'computer-properties':
+      return { width: 540, height: 560 };
+    case 'reset-password':
+      return { width: 440, height: 340 };
+    case 'move':
+      return { width: 460, height: 500 };
+    case 'add-to-group':
+      return { width: 520, height: 480 };
+    case 'find':
+      return { width: 580, height: 500 };
+    case 'confirm':
+      return { width: 420, height: 220 };
+    case 'about':
+      return { width: 460, height: 260 };
+  }
 }
 
 export const useOldSchool = defineStore('oldSchool', () => {
@@ -53,14 +94,12 @@ export const useOldSchool = defineStore('oldSchool', () => {
   });
 
   const selectedRows = ref<SelectedRow[]>([]);
-  // Stack of open dialogs — the topmost renders on top of everything
-  // below, matching MMC behavior where picker / confirm dialogs float on
-  // top of an open Properties window. `closeDialog()` pops the top.
-  const dialogStack = ref<Extract<OpenDialog, object>[]>([]);
-  // Confirm dialogs use a separate channel so they float above whatever
-  // primary dialog is open — closing the confirm doesn't pop the
-  // underlying dialog.
-  const confirmDialog = ref<Extract<OpenDialog, { kind: 'confirm' }> | null>(null);
+
+  // Every open dialog renders as a free-floating window. The topmost
+  // (highest z) is the focused one; clicking on any window raises it.
+  const windows = ref<DialogWindow[]>([]);
+  let nextWindowId = 1;
+  let nextZ = 1000;
 
   // Bumped each time a mutation succeeds. Panes watch this to refresh
   // their own data (instead of plumbing event emitters everywhere).
@@ -75,46 +114,100 @@ export const useOldSchool = defineStore('oldSchool', () => {
     selectedRows.value = rows;
   }
 
+  /**
+   * Open a new floating dialog window. Each call adds a new window
+   * even if a dialog of the same kind is already open — that's the
+   * whole point of the multi-window experience. The new window is
+   * placed at a small cascading offset from the existing top window
+   * (or from the viewport's quarter-point when nothing else is
+   * open) so back-to-back opens don't perfectly overlap.
+   */
   function openDialog(d: OpenDialog): void {
     if (!d) return;
-    // Confirm dialogs use the overlay channel so they don't pop the
-    // underlying primary dialog when dismissed.
-    if (d.kind === 'confirm') {
-      confirmDialog.value = d;
-      return;
+    const size = defaultSizeFor(d.kind);
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+
+    // Find the topmost existing window to cascade from.
+    const top = [...windows.value].sort((a, b) => b.z - a.z)[0];
+    let x: number;
+    let y: number;
+    if (top) {
+      x = top.x + 28;
+      y = top.y + 28;
+    } else {
+      x = Math.max(40, Math.floor(vw / 2 - size.width / 2));
+      y = Math.max(40, Math.floor(vh / 2 - size.height / 2) - 40);
     }
-    dialogStack.value = [...dialogStack.value, d];
+    // Clamp so the titlebar stays visible inside the viewport.
+    x = Math.max(8, Math.min(x, vw - 120));
+    y = Math.max(8, Math.min(y, vh - 80));
+
+    const w: DialogWindow = {
+      id: nextWindowId++,
+      dialog: d,
+      x,
+      y,
+      width: size.width,
+      height: size.height,
+      z: ++nextZ,
+    };
+    windows.value = [...windows.value, w];
   }
-  function closeDialog(): void {
-    if (dialogStack.value.length === 0) return;
-    dialogStack.value = dialogStack.value.slice(0, -1);
+
+  function closeWindow(id: number): void {
+    windows.value = windows.value.filter((w) => w.id !== id);
   }
-  function closeConfirm(): void {
-    confirmDialog.value = null;
+
+  function focusWindow(id: number): void {
+    const idx = windows.value.findIndex((w) => w.id === id);
+    if (idx === -1) return;
+    // Only bump z when the window isn't already on top — avoids a
+    // continuous "z creep" on every click-without-move.
+    const max = windows.value.reduce((m, w) => Math.max(m, w.z), 0);
+    if (windows.value[idx]!.z === max) return;
+    const next = windows.value.slice();
+    next[idx] = { ...next[idx]!, z: ++nextZ };
+    windows.value = next;
   }
+
+  function moveWindow(id: number, x: number, y: number): void {
+    const idx = windows.value.findIndex((w) => w.id === id);
+    if (idx === -1) return;
+    const next = windows.value.slice();
+    next[idx] = { ...next[idx]!, x, y };
+    windows.value = next;
+  }
+
+  function resizeWindow(id: number, width: number, height: number): void {
+    const idx = windows.value.findIndex((w) => w.id === id);
+    if (idx === -1) return;
+    const next = windows.value.slice();
+    next[idx] = { ...next[idx]!, width, height };
+    windows.value = next;
+  }
+
   function bumpData(): void {
     dataVersion.value += 1;
   }
 
-  // The topmost open primary dialog, if any. Use this in templates so the
-  // outer container can drive `v-if` without caring how the stack works.
-  const dialog = computed<OpenDialog>(() => {
-    const stack = dialogStack.value;
-    return stack.length > 0 ? stack[stack.length - 1]! : null;
-  });
+  /** True when at least one window is open — used by the keyboard
+   *  shortcut handler in OldSchoolMmc to suppress its own bindings. */
+  const anyDialog = computed(() => windows.value.length > 0);
 
   return {
     selectedNode,
     selectedRows,
-    dialog,
-    dialogStack,
-    confirmDialog,
+    windows,
+    anyDialog,
     dataVersion,
     selectNode,
     setSelection,
     openDialog,
-    closeDialog,
-    closeConfirm,
+    closeWindow,
+    focusWindow,
+    moveWindow,
+    resizeWindow,
     bumpData,
   };
 });

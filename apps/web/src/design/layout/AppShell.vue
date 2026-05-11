@@ -18,10 +18,12 @@ const auth = useAuthStore();
 const theme = useThemeStore();
 const { isMobile } = useResponsive();
 
-// Old School takes over the routed content area only — the sidebar/topbar
-// stay visible so the operator can navigate to /appearance and toggle off.
-// We exempt /appearance and /settings (and the bare layouts handled above)
-// so those pages remain reachable. Everything else gets the classic MMC.
+// Old School takes over the entire browser window — sidebar, topbar, and
+// page content all hide behind the MMC overlay. The operator returns to
+// the app by hitting File → Exit / Close / Minimize inside the MMC,
+// which navigates back to /appearance and flips the toggle off.
+// We exempt /appearance and /settings (and the bare layouts handled
+// above) so those pages remain reachable when the toggle is on.
 const oldSchoolActive = computed(() => {
   if (!theme.oldSchool) return false;
   const name = route.name;
@@ -80,9 +82,8 @@ function onDialogVisibility(open: boolean): void {
     <Sidebar />
     <main class="ds-main">
       <Topbar />
-      <div class="ds-page page" :class="{ 'ds-page-os': oldSchoolActive }">
-        <OldSchoolMmc v-if="oldSchoolActive" embedded />
-        <slot v-else />
+      <div class="ds-page page">
+        <slot />
       </div>
     </main>
     <StepUpDialog
@@ -92,6 +93,11 @@ function onDialogVisibility(open: boolean): void {
     />
     <EditModeFab />
     <EditModeStatusPill />
+
+    <!-- Old School: full-viewport overlay covering sidebar, topbar, and
+         page. Mounted at the shell level so it lives on top of every
+         non-bare route. -->
+    <OldSchoolMmc v-if="oldSchoolActive" />
   </div>
 </template>
 
@@ -124,15 +130,6 @@ function onDialogVisibility(open: boolean): void {
   scrollbar-gutter: stable;
   overflow-x: hidden;
   min-height: 0;
-}
-
-/* Old School fills the routed area edge-to-edge — no page gutters or
-   scrollbar reservation since the MMC manages its own overflow. */
-.ds-page-os {
-  overflow: hidden;
-  scrollbar-gutter: auto;
-  padding: 0;
-  margin: 0;
 }
 
 .ds-bare {

@@ -1,10 +1,10 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { ref } from 'vue';
 import WinDialog from './WinDialog.vue';
 
 const props = withDefaults(
   defineProps<{
+    windowId: number;
     title: string;
     message: string;
     okLabel?: string | undefined;
@@ -16,13 +16,11 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{ (e: 'close'): void }>();
-const visible = ref(true);
 
 async function handleOk(): Promise<void> {
   try {
     await props.onOk();
   } finally {
-    visible.value = false;
     emit('close');
   }
 }
@@ -30,16 +28,16 @@ async function handleOk(): Promise<void> {
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     :title="title"
-    :width="420"
     :ok-label="okLabel"
     :cancel-label="cancelLabel"
     hide-apply
+    :resizable="false"
     :confirm-tone="destructive ? 'destructive' : 'normal'"
     @ok="handleOk"
     @cancel="emit('close')"
-    @update:visible="(v) => !v && emit('close')"
+    @close="emit('close')"
     icon="properties"
   >
     <div style="display: flex; gap: 16px; align-items: flex-start; padding: 20px">

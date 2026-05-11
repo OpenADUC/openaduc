@@ -15,6 +15,7 @@ import { useToast } from 'primevue/usetoast';
 import type { DirectoryOu } from '@openaduc/shared';
 
 const props = defineProps<{
+  windowId: number;
   objectKind: 'user' | 'group' | 'computer';
   id: string;
   label: string;
@@ -24,7 +25,6 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const auth = useAuthStore();
 const store = useOldSchool();
 const toast = useToast();
-const visible = ref(true);
 
 const ous = ref<DirectoryOu[]>([]);
 const expanded = ref<Set<string>>(new Set());
@@ -90,7 +90,6 @@ async function ok(): Promise<void> {
       await api.users.move(props.id, { targetOuDn: selected.value! });
       toast.add({ severity: 'success', summary: `${props.label} moved.`, life: 3000 });
       store.bumpData();
-      visible.value = false;
       emit('close');
     } catch (e) {
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
@@ -101,16 +100,15 @@ async function ok(): Promise<void> {
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     title="Move"
     icon="ou"
-    :width="440"
     hide-apply
     ok-label="OK"
     :can-ok="canOk"
     @ok="ok"
-    @cancel="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @cancel="emit('close')"
+    @close="emit('close')"
   >
     <div style="padding: 14px 16px; font-size: 12px">
       <div style="margin-bottom: 10px">

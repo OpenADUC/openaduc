@@ -17,14 +17,13 @@ import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
 import type { UserDetail, UserUpdateRequest } from '@openaduc/shared';
 
-const props = defineProps<{ id: string }>();
+const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const auth = useAuthStore();
 const store = useOldSchool();
 const toast = useToast();
 
-const visible = ref(true);
 const user = ref<UserDetail | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
@@ -190,10 +189,7 @@ const activeTab = ref<TabId>('general');
 async function save(closeAfter: boolean): Promise<void> {
   if (!user.value || !snapshot.value) return;
   if (!dirty.value) {
-    if (closeAfter) {
-      visible.value = false;
-      emit('close');
-    }
+    if (closeAfter) emit('close');
     return;
   }
   const patch: UserUpdateRequest['patch'] = {};
@@ -226,10 +222,7 @@ async function save(closeAfter: boolean): Promise<void> {
       store.bumpData();
       // Refresh local snapshot from the new state.
       await load();
-      if (closeAfter) {
-        visible.value = false;
-        emit('close');
-      }
+      if (closeAfter) emit('close');
     } catch (e) {
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
     }
@@ -293,16 +286,15 @@ function rawAttr(u: UserDetail, key: string): string {
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     :title="dialogTitle"
     icon="user"
-    :width="540"
     :can-apply="dirty"
     :can-ok="!loading"
     @ok="save(true)"
     @apply="save(false)"
     @cancel="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @close="$emit('close')"
   >
     <div v-if="loading" style="padding: 24px; text-align: center">Loading…</div>
     <div v-else-if="!user" class="os-error" style="padding: 16px">

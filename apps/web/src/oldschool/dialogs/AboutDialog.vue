@@ -1,24 +1,23 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { ref } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 
-defineEmits<{ (e: 'close'): void }>();
-const visible = ref(true);
+defineProps<{ windowId: number }>();
+const emit = defineEmits<{ (e: 'close'): void }>();
 </script>
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     title="About"
     icon="help"
-    :width="440"
     hide-apply
     hide-cancel
+    :resizable="false"
     ok-label="OK"
-    @ok="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @ok="emit('close')"
+    @close="emit('close')"
   >
     <div style="padding: 18px 20px; display: flex; gap: 16px; align-items: flex-start">
       <WinIcon name="aduc" :size="48" />

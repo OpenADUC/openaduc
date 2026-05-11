@@ -8,10 +8,10 @@
        Body            — OuTreePane | ContentsListPane
        Status bar      — selection summary
 
-     Mounted dialogs   — driven by useOldSchool().dialog. The store
-     holds at most one dialog at a time; each dialog renders a
-     WinDialog and a friendly fade is unnecessary because Windows
-     never animated these.
+     Mounted dialogs   — driven by useOldSchool().windows. Each entry
+     is a free-floating WinDialog with its own x/y/width/height/z; the
+     operator can drag, resize, and open multiple side by side (think
+     two user Properties dialogs open at once to diff group lists).
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -35,8 +35,6 @@ import FindDialog from './dialogs/FindDialog.vue';
 const theme = useThemeStore();
 const store = useOldSchool();
 const router = useRouter();
-
-const props = defineProps<{ embedded?: boolean }>();
 
 // --- Menu state -------------------------------------------------------
 type MenuId = 'file' | 'action' | 'view' | 'help' | null;
@@ -63,7 +61,7 @@ function onDocClick(e: MouseEvent): void {
 // We skip when a dialog is open so the dialog's own Escape handling
 // (and form typing) take priority.
 function onKey(e: KeyboardEvent): void {
-  if (store.dialog || store.confirmDialog) return;
+  if (store.anyDialog) return;
   if (e.key === 'F5') {
     e.preventDefault();
     store.bumpData();
@@ -121,19 +119,14 @@ function exitOldSchool(): void {
 </script>
 
 <template>
-  <div class="os-host" :class="{ embedded: props.embedded }">
+  <div class="os-host">
     <div class="os-root" :style="{ ['--os-tree-width' as any]: `${treeWidth}px` }">
       <!-- ============ Title bar ============ -->
       <div class="os-titlebar">
         <WinIcon class="os-titlebar-icon" name="aduc" :size="16" />
         <div class="os-titlebar-title">Active Directory Users and Computers</div>
         <div class="os-titlebar-controls">
-          <button
-            class="os-titlebar-btn"
-            type="button"
-            title="Minimize"
-            @click="exitOldSchool"
-          >
+          <button class="os-titlebar-btn" type="button" title="Minimize" @click="exitOldSchool">
             —
           </button>
           <button class="os-titlebar-btn" type="button" title="Maximize" disabled>▢</button>
@@ -334,57 +327,71 @@ function exitOldSchool(): void {
     <!-- Dialogs (mounted in the same root so Toast renders on top) -->
     <Toast position="top-right" />
 
-    <!-- Render every dialog in the stack so picker-style nested dialogs
-         float above an already-open Properties window. The topmost in
-         the DOM is the active one; everything below stays mounted so
-         its scroll/tab state isn't lost. -->
-    <template v-for="(d, i) in store.dialogStack" :key="`${d.kind}:${i}`">
+    <!-- Every open dialog is a free-floating window in the windows[]
+         list. Each iteration renders its own component; the v-for
+         key is the stable window id so position/scroll state survives
+         re-orderings of the array. -->
+    <template v-for="w in store.windows" :key="w.id">
       <UserPropertiesDialog
-        v-if="d.kind === 'user-properties'"
-        :id="d.id"
-        @close="store.closeDialog()"
+        v-if="w.dialog.kind === 'user-properties'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        @close="store.closeWindow(w.id)"
       />
       <GroupPropertiesDialog
-        v-else-if="d.kind === 'group-properties'"
-        :id="d.id"
-        @close="store.closeDialog()"
+        v-else-if="w.dialog.kind === 'group-properties'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        @close="store.closeWindow(w.id)"
       />
       <ComputerPropertiesDialog
-        v-else-if="d.kind === 'computer-properties'"
-        :id="d.id"
-        @close="store.closeDialog()"
+        v-else-if="w.dialog.kind === 'computer-properties'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        @close="store.closeWindow(w.id)"
       />
       <ResetPasswordDialog
-        v-else-if="d.kind === 'reset-password'"
-        :id="d.id"
-        :sam-account-name="d.samAccountName"
-        @close="store.closeDialog()"
+        v-else-if="w.dialog.kind === 'reset-password'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        :sam-account-name="w.dialog.samAccountName"
+        @close="store.closeWindow(w.id)"
       />
       <MoveDialog
-        v-else-if="d.kind === 'move'"
-        :object-kind="d.objectKind"
-        :id="d.id"
-        :label="d.label"
-        @close="store.closeDialog()"
+        v-else-if="w.dialog.kind === 'move'"
+        :window-id="w.id"
+        :object-kind="w.dialog.objectKind"
+        :id="w.dialog.id"
+        :label="w.dialog.label"
+        @close="store.closeWindow(w.id)"
       />
       <AddToGroupDialog
-        v-else-if="d.kind === 'add-to-group'"
-        :user-id="d.userId"
-        :user-label="d.userLabel"
-        @close="store.closeDialog()"
+        v-else-if="w.dialog.kind === 'add-to-group'"
+        :window-id="w.id"
+        :user-id="w.dialog.userId"
+        :user-label="w.dialog.userLabel"
+        @close="store.closeWindow(w.id)"
       />
-      <FindDialog v-else-if="d.kind === 'find'" @close="store.closeDialog()" />
-      <AboutDialog v-else-if="d.kind === 'about'" @close="store.closeDialog()" />
+      <ConfirmDialog
+        v-else-if="w.dialog.kind === 'confirm'"
+        :window-id="w.id"
+        :title="w.dialog.title"
+        :message="w.dialog.message"
+        :ok-label="w.dialog.okLabel"
+        :destructive="w.dialog.destructive"
+        :on-ok="w.dialog.onOk"
+        @close="store.closeWindow(w.id)"
+      />
+      <FindDialog
+        v-else-if="w.dialog.kind === 'find'"
+        :window-id="w.id"
+        @close="store.closeWindow(w.id)"
+      />
+      <AboutDialog
+        v-else-if="w.dialog.kind === 'about'"
+        :window-id="w.id"
+        @close="store.closeWindow(w.id)"
+      />
     </template>
-
-    <ConfirmDialog
-      v-if="store.confirmDialog"
-      :title="store.confirmDialog.title"
-      :message="store.confirmDialog.message"
-      :ok-label="store.confirmDialog.okLabel"
-      :destructive="store.confirmDialog.destructive"
-      :on-ok="store.confirmDialog.onOk"
-      @close="store.closeConfirm()"
-    />
   </div>
 </template>

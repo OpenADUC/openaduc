@@ -13,11 +13,10 @@ import { ApiError } from '../../api/client.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import type { GroupDetail } from '@openaduc/shared';
 
-const props = defineProps<{ id: string }>();
+const props = defineProps<{ windowId: number; id: string }>();
 defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
 
-const visible = ref(true);
 const group = ref<GroupDetail | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
@@ -58,14 +57,13 @@ const scope = computed(() => (group.value?.groupScope ?? '').toLowerCase());
 
 <template>
   <WinDialog
-    :visible="visible"
+    :window-id="windowId"
     :title="title"
     icon="group"
-    :width="540"
     hide-apply
     @ok="$emit('close')"
     @cancel="$emit('close')"
-    @update:visible="(v) => !v && $emit('close')"
+    @close="$emit('close')"
   >
     <div v-if="loading" style="padding: 24px; text-align: center">Loading…</div>
     <div v-else-if="!group" class="os-error" style="padding: 16px">
