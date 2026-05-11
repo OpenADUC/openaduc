@@ -1,0 +1,32 @@
+@import 'tailwindcss';
+@import 'primeicons/primeicons.css';
+@import '../design/tokens.css';
+@import '../design/theme.css';
+
+/* Tailwind v4: re-declare design tokens as theme colors so utilities
+ * like `bg-surface`, `text-muted`, `border-default` resolve against our
+ * CSS variables. The variables themselves are defined in tokens.css. */
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-4: var(--text-4);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--green);
+  --color-warning: var(--amber);
+  --color-danger: var(--red);
+  --color-info: var(--blue);
+  --color-violet: var(--violet);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}

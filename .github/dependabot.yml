@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    groups:
+      types:
+        patterns: ['@types/*']
+      eslint:
+        patterns: ['eslint*', '@eslint/*', '@typescript-eslint/*']
+      vue:
+        patterns: ['vue', 'vue-*', '@vue/*', '@vitejs/*', 'vite', 'pinia', 'primevue']
+      tailwind:
+        patterns: ['tailwindcss', '@tailwindcss/*']
+      fastify:
+        patterns: ['fastify', '@fastify/*']
+
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+      day: monday
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

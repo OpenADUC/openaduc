@@ -1,0 +1,62 @@
+# OpenADUC — production base.
+#
+# This is what end users get from the one-line installer when they pick
+# "embedded Postgres" mode. Bring it up with:
+#
+#     docker compose up -d
+#
+# Each service uses an image tag with a local-build fallback, so the
+# stack works whether you pull pre-built images or build from source.
+#
+# For local development with hot reload and a Samba AD-DC, also include
+# the dev overlay:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# For external Postgres, use docker-compose.external-db.yml instead of
+# this file (the installer handles that for you).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    image: ${OPENADUC_API_IMAGE:-openaduc/api:latest}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
+    ports:
+      - '3000:3000'
+
+  web:
+    image: ${OPENADUC_WEB_IMAGE:-openaduc/web:latest}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '8080:80'
+
+volumes:
+  postgres-data:

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report something that doesn't work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the sections below — the more concrete the report, the faster we can fix it.
+
+        **Security issue?** Please report privately per [SECURITY.md](../SECURITY.md), not here.
+  - type: input
+    id: version
+    attributes:
+      label: OpenADUC version
+      description: Tag (e.g. `v0.1.0`) or commit SHA. Find it under Settings → About in the UI, or in `package.json`.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install-mode
+    attributes:
+      label: Install mode
+      options:
+        - One-line installer (openaduc.com/install.sh)
+        - Manual docker compose
+        - From source (pnpm dev)
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS + version, Docker version, Postgres mode (bundled / external), directory backend (real AD / Samba dev container), browser if UI bug.
+      placeholder: |
+        - Host: Debian 13
+        - Docker: 27.3.1
+        - Postgres: bundled (16-alpine)
+        - Directory: Windows Server 2022 AD, single forest
+        - Browser: Firefox 134 / Chrome 132
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. Include exact UI clicks or API calls.
+      placeholder: |
+        1. Sign in as an admin
+        2. Open Users, search for "alice"
+        3. Click Reset Password
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include any error message and the request correlation id from the browser console or API logs if you have it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Output of `docker compose logs --tail=200 api`, or the equivalent. Redact anything sensitive (DNs, usernames, IPs) before pasting.
+      render: shell

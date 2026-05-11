@@ -1,0 +1,43 @@
+{
+  "name": "openaduc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenADUC — modern web-based Active Directory administration",
+  "license": "BUSL-1.1",
+  "author": "Jeff Kramp",
+  "homepage": "https://openaduc.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OpenADUC/openaduc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OpenADUC/openaduc/issues"
+  },
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "pnpm -r --parallel --stream dev",
+    "dev:kill": "node scripts/dev-kill.mjs",
+    "dev:reset": "node scripts/dev-kill.mjs && pnpm dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,tsx,vue,js,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,vue,js,json,md,yml,yaml}\"",
+    "typecheck": "pnpm -r typecheck",
+    "migrate:latest": "pnpm --filter @openaduc/api migrate:latest",
+    "migrate:rollback": "pnpm --filter @openaduc/api migrate:rollback",
+    "migrate:make": "pnpm --filter @openaduc/api migrate:make"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}

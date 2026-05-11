@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a feature, improvement, or change in behavior.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a request. The more concrete the use case, the easier it is to evaluate.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation that motivates this request — not the proposed solution. Examples beat abstractions.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like OpenADUC to do? UI sketches, API shapes, or "I don't know — here are some ideas" all welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, other tools that solve this, or different approaches you considered and rejected.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else worth knowing — directory size, team workflow, related features.
