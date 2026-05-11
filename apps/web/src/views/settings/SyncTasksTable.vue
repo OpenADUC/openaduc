@@ -904,7 +904,9 @@ function anchorTimeToDate(value: string): Date | null {
             </td>
             <td class="history-detail">
               <div v-if="r.error" class="history-error">{{ r.error }}</div>
-              <div v-else-if="r.stats" class="history-stats mono">{{ JSON.stringify(r.stats) }}</div>
+              <div v-else-if="r.stats" class="history-stats mono">
+                {{ JSON.stringify(r.stats) }}
+              </div>
               <div v-else class="hint">—</div>
             </td>
           </tr>

@@ -302,18 +302,42 @@ onMounted(async () => {
     grid-template-rows: repeat(3, auto);
     column-gap: 32px;
   }
-  .ad-policy-grid > :nth-child(1) { grid-area: 1 / 1; }
-  .ad-policy-grid > :nth-child(2) { grid-area: 1 / 2; }
-  .ad-policy-grid > :nth-child(3) { grid-area: 2 / 1; }
-  .ad-policy-grid > :nth-child(4) { grid-area: 2 / 2; }
-  .ad-policy-grid > :nth-child(5) { grid-area: 3 / 1; }
-  .ad-policy-grid > :nth-child(6) { grid-area: 3 / 2; }
-  .ad-policy-grid > :nth-child(7) { grid-area: 1 / 3; }
-  .ad-policy-grid > :nth-child(8) { grid-area: 1 / 4; }
-  .ad-policy-grid > :nth-child(9) { grid-area: 2 / 3; }
-  .ad-policy-grid > :nth-child(10) { grid-area: 2 / 4; }
-  .ad-policy-grid > :nth-child(11) { grid-area: 3 / 3; }
-  .ad-policy-grid > :nth-child(12) { grid-area: 3 / 4; }
+  .ad-policy-grid > :nth-child(1) {
+    grid-area: 1 / 1;
+  }
+  .ad-policy-grid > :nth-child(2) {
+    grid-area: 1 / 2;
+  }
+  .ad-policy-grid > :nth-child(3) {
+    grid-area: 2 / 1;
+  }
+  .ad-policy-grid > :nth-child(4) {
+    grid-area: 2 / 2;
+  }
+  .ad-policy-grid > :nth-child(5) {
+    grid-area: 3 / 1;
+  }
+  .ad-policy-grid > :nth-child(6) {
+    grid-area: 3 / 2;
+  }
+  .ad-policy-grid > :nth-child(7) {
+    grid-area: 1 / 3;
+  }
+  .ad-policy-grid > :nth-child(8) {
+    grid-area: 1 / 4;
+  }
+  .ad-policy-grid > :nth-child(9) {
+    grid-area: 2 / 3;
+  }
+  .ad-policy-grid > :nth-child(10) {
+    grid-area: 2 / 4;
+  }
+  .ad-policy-grid > :nth-child(11) {
+    grid-area: 3 / 3;
+  }
+  .ad-policy-grid > :nth-child(12) {
+    grid-area: 3 / 4;
+  }
 }
 
 .ad-policy-grid dt {

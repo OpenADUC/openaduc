@@ -9,7 +9,7 @@ import {
   type EntraFeatureKey,
   type EntraIntegrationInput,
 } from '../services/entraIntegration.js';
-import { GraphClient, GraphPermissionError } from '../services/graphClient.js';
+import { GraphClient } from '../services/graphClient.js';
 import { ENTRA_TASK_KEYS } from '../services/syncTasks/registry.js';
 
 // Per-directory Entra (Microsoft Graph) integration management. Mirrors

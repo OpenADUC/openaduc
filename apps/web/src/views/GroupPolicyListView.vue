@@ -171,7 +171,6 @@ async function load(): Promise<void> {
 }
 
 const total = computed(() => rows.value.length);
-const unlinkedCount = computed(() => rows.value.filter((p) => p.linkCount === 0).length);
 
 function openDetail(row: GroupPolicySummary): void {
   void router.push({ name: 'group-policy-detail', params: { id: row.id } });

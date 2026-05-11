@@ -100,9 +100,10 @@ export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> 
         functionalityVersion: policy.functionality_version,
         rawAttributes: policy.raw_attributes_json as Record<string, unknown>,
         links: links.map(rowToLink),
-        fetchedAt: (policy.synced_at instanceof Date
-          ? policy.synced_at.toISOString()
-          : (policy.synced_at as unknown as string | null)) ?? new Date(0).toISOString(),
+        fetchedAt:
+          (policy.synced_at instanceof Date
+            ? policy.synced_at.toISOString()
+            : (policy.synced_at as unknown as string | null)) ?? new Date(0).toISOString(),
       };
       return { policy: groupPolicyDetailSchema.parse(detail) };
     },

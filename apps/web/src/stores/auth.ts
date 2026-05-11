@@ -91,7 +91,6 @@ export const useAuthStore = defineStore('auth', () => {
       if (err instanceof ApiError && err.status === 401) {
         actor.value = null;
       } else {
-        // eslint-disable-next-line no-console
         console.error('me() failed', err);
       }
     } finally {
@@ -181,10 +180,7 @@ export const useAuthStore = defineStore('auth', () => {
    * immediately, or pop the password dialog and auto-fire after auth. The
    * action is responsible for its own toast/error reporting.
    */
-  function requireEdit(
-    action: () => void | Promise<void>,
-    reason: string | null = null,
-  ): void {
+  function requireEdit(action: () => void | Promise<void>, reason: string | null = null): void {
     if (elevated.value) {
       void Promise.resolve()
         .then(action)

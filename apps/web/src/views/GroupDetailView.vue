@@ -19,7 +19,6 @@ import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
-import { fmtRelative } from '../design/lib/format.js';
 import { useStickyHeader } from './_detail/useStickyHeader';
 
 const props = defineProps<{ id: string }>();

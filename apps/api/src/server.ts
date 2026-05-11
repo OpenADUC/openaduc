@@ -57,7 +57,6 @@ async function main(): Promise<void> {
     // orphan node listening on the port.
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === 'EADDRINUSE') {
-      // eslint-disable-next-line no-console
       console.error(
         `\n  Port ${env.API_PORT} is already in use.\n` +
           `  An earlier API process is probably still alive — run \`pnpm dev:kill\` to free it,\n` +

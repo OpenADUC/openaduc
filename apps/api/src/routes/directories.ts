@@ -468,9 +468,13 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
       if (!isKnownTaskKey(key)) throw NotFound('unknown task');
       const directory = await app.services.directoryConfig.getById(id);
       if (!directory) throw NotFound('directory not found');
-      const limit = z.coerce.number().int().min(1).max(200).default(50).parse(
-        (req.query as { limit?: string | number } | undefined)?.limit ?? 50,
-      );
+      const limit = z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(200)
+        .default(50)
+        .parse((req.query as { limit?: string | number } | undefined)?.limit ?? 50);
       const runs = await app.services.syncTasks.listRecentRuns(id, key as SyncTaskKey, limit);
       return {
         runs: runs.map((r) => ({

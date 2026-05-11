@@ -131,7 +131,9 @@ function formatAttr(v: unknown): string {
             <span
               class="badge"
               :class="policy.computerPolicyEnabled ? 'badge-green' : 'badge-muted'"
-              :title="policy.computerPolicyEnabled ? 'computer side enabled' : 'computer side disabled'"
+              :title="
+                policy.computerPolicyEnabled ? 'computer side enabled' : 'computer side disabled'
+              "
             >
               <i class="pi pi-desktop" /> computer
             </span>

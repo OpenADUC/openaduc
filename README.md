@@ -5,8 +5,8 @@
 <h1 align="center">OpenADUC</h1>
 
 <p align="center">
-  <strong>Modern web-based Active Directory administration.</strong><br />
-  Fast cached reads, live-validated writes, capability-based authorization, step-up auth, and a complete audit trail.
+  <strong>A small self-hosted web app that talks to your domain controllers over LDAPS so you don't have to.</strong><br />
+  Manage users, groups, computers, and OUs from a browser — with a real audit trail behind every change.
 </p>
 
 <p align="center">
@@ -34,13 +34,13 @@ OpenADUC is designed to run on a single small Linux host. The application — an
 
 The numbers below are sized to comfortably cover a directory of up to roughly **10,000 users / groups / computers / OUs** in cache. They are starting points, not measured figures — most small-to-mid IT shops will run with substantial headroom, and very small directories can run on noticeably less (see below).
 
-|        | Minimum                                       | Recommended                                       |
-| ------ | --------------------------------------------- | ------------------------------------------------- |
-| OS     | 64-bit Linux (x86_64 or arm64)                | Debian 13 or Ubuntu 24.04 LTS                     |
-| CPU    | 2 vCPU                                        | 4 vCPU                                            |
-| RAM    | 2 GB                                          | 4 GB                                              |
-| Disk   | 5 GB (external DB) / 10 GB (embedded)         | 10 GB (external DB) / 20 GB+ (embedded)           |
-| Docker | Engine 24+ with the Compose v2 plugin         | Latest stable Docker Engine                       |
+|        | Minimum                               | Recommended                             |
+| ------ | ------------------------------------- | --------------------------------------- |
+| OS     | 64-bit Linux (x86_64 or arm64)        | Debian 13 or Ubuntu 24.04 LTS           |
+| CPU    | 2 vCPU                                | 4 vCPU                                  |
+| RAM    | 2 GB                                  | 4 GB                                    |
+| Disk   | 5 GB (external DB) / 10 GB (embedded) | 10 GB (external DB) / 20 GB+ (embedded) |
+| Docker | Engine 24+ with the Compose v2 plugin | Latest stable Docker Engine             |
 
 - **Disk** is dominated by the embedded Postgres volume (data + WAL + audit history, which grows one row per write over time). With **external** Postgres, the host only stores container images, logs, and the install directory — a couple of GB is plenty.
 - **Very small directories (a few hundred users, e.g. ~100):** 1 vCPU and 1 GB RAM is enough, particularly with external Postgres. The API container uses roughly 200 MB resident, the web container ~20 MB, and an embedded Postgres works happily in 200–300 MB at this scale.

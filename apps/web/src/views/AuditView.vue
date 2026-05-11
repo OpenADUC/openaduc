@@ -117,7 +117,6 @@ async function loadSignInApps(): Promise<void> {
     const r = await api.directories.entra.signInEventApps(directoryId.value);
     signInApps.value = r.apps;
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn('failed to load sign-in apps', err);
   }
 }

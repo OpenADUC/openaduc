@@ -4,7 +4,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Toast from 'primevue/toast';
-import { useToast } from 'primevue/usetoast';
 import {
   api,
   type AuditEventRow,
@@ -23,7 +22,6 @@ import { userStatus } from '../design/lib/format.js';
 import type { UserSummary } from '@openaduc/shared';
 
 const router = useRouter();
-const toast = useToast();
 const auth = useAuthStore();
 
 // "Issues" window — only the most urgent accounts: locked, account/password

@@ -698,7 +698,11 @@ async function onDeleteSubmit(): Promise<void> {
               <section v-if="contents.linkedGroupPolicies.length > 0" class="contents-section">
                 <h2 class="section-h">Group Policies — linked here</h2>
                 <ul class="row-list">
-                  <li v-for="(p, idx) in contents.linkedGroupPolicies" :key="`l-${p.id}-${idx}`" class="row">
+                  <li
+                    v-for="(p, idx) in contents.linkedGroupPolicies"
+                    :key="`l-${p.id}-${idx}`"
+                    class="row"
+                  >
                     <RouterLink :to="`/policies/groups/${p.id}`" class="row-link">
                       <i class="pi pi-shield row-icon" />
                       <span class="row-main">

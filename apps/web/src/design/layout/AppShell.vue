@@ -120,5 +120,4 @@ function onDialogVisibility(open: boolean): void {
   color: var(--text);
   padding: 24px;
 }
-
 </style>

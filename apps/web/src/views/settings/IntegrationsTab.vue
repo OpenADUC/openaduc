@@ -300,7 +300,6 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
   if (integration.lastTestStatus === 'success') return `Tested ${rel}`;
   return `Last test failed ${rel}`;
 }
-
 </script>
 
 <template>

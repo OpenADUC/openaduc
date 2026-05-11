@@ -578,9 +578,7 @@ export const api = {
         opts?: { limit?: number },
       ): Promise<{ runs: SyncTaskRun[] }> {
         const qs = opts?.limit ? `?limit=${opts.limit}` : '';
-        return apiFetch(
-          `/directories/${id}/sync-tasks/${encodeURIComponent(key)}/history${qs}`,
-        );
+        return apiFetch(`/directories/${id}/sync-tasks/${encodeURIComponent(key)}/history${qs}`);
       },
       queue(id: number): Promise<{ inFlight: SyncTaskKey[]; queued: SyncTaskKey[] }> {
         return apiFetch(`/directories/${id}/sync-tasks/queue`);

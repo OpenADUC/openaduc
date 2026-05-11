@@ -12,7 +12,8 @@ withDefaults(
 
 <template>
   <component :is="as" class="ds-wordmark" :class="{ 'is-compact': compact }">
-    <span v-if="!compact" class="ds-wordmark-prefix">Open</span><span class="ds-wordmark-acronym">ADUC</span>
+    <span v-if="!compact" class="ds-wordmark-prefix">Open</span
+    ><span class="ds-wordmark-acronym">ADUC</span>
   </component>
 </template>
 

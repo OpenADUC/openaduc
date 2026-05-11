@@ -378,7 +378,10 @@ export class SyncTaskScheduler {
         taskKey,
         forcedTrigger ? 'forced' : 'cadence',
       );
-      log.info({ runId: started.runId, trigger: forcedTrigger ? 'forced' : 'cadence' }, 'task started');
+      log.info(
+        { runId: started.runId, trigger: forcedTrigger ? 'forced' : 'cadence' },
+        'task started',
+      );
 
       // Read the row again so the runner sees a fresh cursor /
       // lastSuccessfulRunAt — the picker's snapshot may be a tick old.

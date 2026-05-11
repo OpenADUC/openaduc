@@ -19,7 +19,6 @@ import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
-import LiveBadge from '../design/primitives/LiveBadge.vue';
 import Card from '../design/primitives/Card.vue';
 import GroupChip from '../design/primitives/GroupChip.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
@@ -37,14 +36,7 @@ import { useCompactTabs } from './_detail/useCompactTabs';
 // 'overview' is new; 'raw' is admin-gated. 'signins' shows Microsoft Entra
 // sign-in events for this user — only rendered when the directory has an
 // Entra integration configured.
-type TabId =
-  | 'overview'
-  | 'organization'
-  | 'contact'
-  | 'account'
-  | 'groups'
-  | 'signins'
-  | 'raw';
+type TabId = 'overview' | 'organization' | 'contact' | 'account' | 'groups' | 'signins' | 'raw';
 
 // Attributes already rendered with first-class affordances elsewhere on the
 // page (heading, subtitle, status badges, dedicated Security tab, dedicated
@@ -970,17 +962,6 @@ const groupsFiltered = computed(() => {
 const groupsDirect = computed(() => groupsFiltered.value.filter((g) => g.direct));
 const groupsInherited = computed(() => groupsFiltered.value.filter((g) => !g.direct));
 
-// ---- Helpers --------------------------------------------------------------
-
-function expiresHint(expiresAt: string): string {
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  const days = Math.round(ms / (24 * 60 * 60 * 1000));
-  if (days < 0) return `expired ${Math.abs(days)}d ago`;
-  if (days === 0) return 'expires today';
-  if (days <= 14) return `${days}d remaining — rotation due soon`;
-  return `${days}d remaining`;
-}
-
 // ---- Raw / extra attributes ---------------------------------------------
 
 // Sorted list of every populated raw attribute, normalized to AttrRow.
@@ -1206,10 +1187,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
 
 <template>
   <Toast />
-  <div
-    class="page-inner detail-page"
-    :style="{ '--detail-sticky-offset': `${heroHeight}px` }"
-  >
+  <div class="page-inner detail-page" :style="{ '--detail-sticky-offset': `${heroHeight}px` }">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
     <div v-if="user" class="detail-stack">
@@ -1812,7 +1790,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :nested="false"
                 :removable="canManageGroups && groupBusy !== g.id"
                 :to="{ name: 'group-detail', params: { id: g.id } }"
-                @remove="auth.requireEdit(() => requestRemoveGroup(g.id, g.name || g.distinguishedName))"
+                @remove="
+                  auth.requireEdit(() => requestRemoveGroup(g.id, g.name || g.distinguishedName))
+                "
               />
             </div>
           </section>

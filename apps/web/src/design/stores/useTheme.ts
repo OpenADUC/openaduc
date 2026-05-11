@@ -18,24 +18,64 @@ interface AccentTokens {
 // Bright tints for dark mode — picked so the accent reads against near-black
 // surfaces. Used as-is for buttons, focus rings, and the active sidebar bar.
 export const ACCENTS: Record<AccentName, AccentTokens> = {
-  cyan: { color: '#22d3ee', soft: 'rgba(34, 211, 238, 0.12)', text: '#22d3ee', contrast: '#07080a' },
-  blue: { color: '#60a5fa', soft: 'rgba(96, 165, 250, 0.12)', text: '#60a5fa', contrast: '#07080a' },
-  violet: { color: '#a78bfa', soft: 'rgba(167, 139, 250, 0.12)', text: '#a78bfa', contrast: '#07080a' },
-  emerald: { color: '#34d399', soft: 'rgba(52, 211, 153, 0.12)', text: '#34d399', contrast: '#07080a' },
-  amber: { color: '#fbbf24', soft: 'rgba(251, 191, 36, 0.14)', text: '#fbbf24', contrast: '#1a1107' },
-  rose: { color: '#fb7185', soft: 'rgba(251, 113, 133, 0.13)', text: '#fb7185', contrast: '#1a0708' },
+  cyan: {
+    color: '#22d3ee',
+    soft: 'rgba(34, 211, 238, 0.12)',
+    text: '#22d3ee',
+    contrast: '#07080a',
+  },
+  blue: {
+    color: '#60a5fa',
+    soft: 'rgba(96, 165, 250, 0.12)',
+    text: '#60a5fa',
+    contrast: '#07080a',
+  },
+  violet: {
+    color: '#a78bfa',
+    soft: 'rgba(167, 139, 250, 0.12)',
+    text: '#a78bfa',
+    contrast: '#07080a',
+  },
+  emerald: {
+    color: '#34d399',
+    soft: 'rgba(52, 211, 153, 0.12)',
+    text: '#34d399',
+    contrast: '#07080a',
+  },
+  amber: {
+    color: '#fbbf24',
+    soft: 'rgba(251, 191, 36, 0.14)',
+    text: '#fbbf24',
+    contrast: '#1a1107',
+  },
+  rose: {
+    color: '#fb7185',
+    soft: 'rgba(251, 113, 133, 0.13)',
+    text: '#fb7185',
+    contrast: '#1a0708',
+  },
 };
 
 // Darker, more saturated variants for light mode. Bright cyan/violet/etc on
 // pure white renders as pale and washes out — these shades (roughly tailwind
 // 600/700) keep accent text legible and primary buttons readable.
 const ACCENTS_LIGHT: Record<AccentName, AccentTokens> = {
-  cyan:    { color: '#0891b2', soft: 'rgba(8, 145, 178, 0.12)',  text: '#0e7490', contrast: '#ffffff' },
-  blue:    { color: '#1d4ed8', soft: 'rgba(29, 78, 216, 0.10)',  text: '#1e40af', contrast: '#ffffff' },
-  violet:  { color: '#6d28d9', soft: 'rgba(109, 40, 217, 0.10)', text: '#5b21b6', contrast: '#ffffff' },
-  emerald: { color: '#047857', soft: 'rgba(4, 120, 87, 0.10)',   text: '#065f46', contrast: '#ffffff' },
-  amber:   { color: '#b45309', soft: 'rgba(180, 83, 9, 0.10)',   text: '#92400e', contrast: '#ffffff' },
-  rose:    { color: '#be123c', soft: 'rgba(190, 18, 60, 0.10)',  text: '#9f1239', contrast: '#ffffff' },
+  cyan: { color: '#0891b2', soft: 'rgba(8, 145, 178, 0.12)', text: '#0e7490', contrast: '#ffffff' },
+  blue: { color: '#1d4ed8', soft: 'rgba(29, 78, 216, 0.10)', text: '#1e40af', contrast: '#ffffff' },
+  violet: {
+    color: '#6d28d9',
+    soft: 'rgba(109, 40, 217, 0.10)',
+    text: '#5b21b6',
+    contrast: '#ffffff',
+  },
+  emerald: {
+    color: '#047857',
+    soft: 'rgba(4, 120, 87, 0.10)',
+    text: '#065f46',
+    contrast: '#ffffff',
+  },
+  amber: { color: '#b45309', soft: 'rgba(180, 83, 9, 0.10)', text: '#92400e', contrast: '#ffffff' },
+  rose: { color: '#be123c', soft: 'rgba(190, 18, 60, 0.10)', text: '#9f1239', contrast: '#ffffff' },
 };
 
 interface PersistedShape {
