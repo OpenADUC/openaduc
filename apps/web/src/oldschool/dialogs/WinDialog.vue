@@ -210,6 +210,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey, true));
         </button>
       </div>
 
+      <!-- Tab strip slot. Sits between the titlebar and the scroll
+           body so the tab labels never scroll out of view and the
+           dialog frame stays stable as the user clicks across tabs. -->
+      <slot name="tabs" />
+
       <div class="os-dialog-body">
         <slot />
       </div>

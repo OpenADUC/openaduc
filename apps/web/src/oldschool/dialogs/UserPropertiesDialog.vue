@@ -296,509 +296,504 @@ function rawAttr(u: UserDetail, key: string): string {
     @cancel="$emit('close')"
     @close="$emit('close')"
   >
+    <template #tabs>
+      <WinTabs :tabs="tabs" v-model="activeTab" />
+    </template>
+
     <div v-if="loading" style="padding: 24px; text-align: center">Loading…</div>
     <div v-else-if="!user" class="os-error" style="padding: 16px">
       {{ err ?? 'Unable to load user.' }}
     </div>
-    <template v-else>
-      <WinTabs :tabs="tabs" v-model="activeTab" />
-      <div class="os-tab-body">
-        <!-- ====== GENERAL ====== -->
-        <template v-if="activeTab === 'general'">
-          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
-            <WinIcon name="user" :size="36" />
-            <strong>{{ user.displayName ?? user.samAccountName }}</strong>
+    <div v-else class="os-tab-body">
+      <!-- ====== GENERAL ====== -->
+      <template v-if="activeTab === 'general'">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
+          <WinIcon name="user" :size="36" />
+          <strong>{{ user.displayName ?? user.samAccountName }}</strong>
+        </div>
+        <hr
+          style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 0 0 14px"
+        />
+        <div class="os-form">
+          <label class="label" for="givenName">First name:</label>
+          <div style="display: flex; gap: 8px">
+            <input id="givenName" class="os-input" v-model="draft.values.givenName" />
+            <label class="label" style="flex: 0 0 60px; text-align: right; align-self: center"
+              >Initials:</label
+            >
+            <input class="os-input" style="width: 60px" disabled />
           </div>
-          <hr
-            style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 0 0 14px"
+          <label class="label" for="surname">Last name:</label>
+          <input id="surname" class="os-input" v-model="draft.values.surname" />
+          <label class="label" for="displayName">Display name:</label>
+          <input id="displayName" class="os-input" v-model="draft.values.displayName" />
+          <label class="label" for="description">Description:</label>
+          <input id="description" class="os-input" v-model="draft.values.description" />
+          <label class="label" for="office">Office:</label>
+          <input
+            id="office"
+            class="os-input"
+            :value="rawAttr(user, 'physicalDeliveryOfficeName')"
+            disabled
           />
-          <div class="os-form">
-            <label class="label" for="givenName">First name:</label>
-            <div style="display: flex; gap: 8px">
-              <input id="givenName" class="os-input" v-model="draft.values.givenName" />
-              <label class="label" style="flex: 0 0 60px; text-align: right; align-self: center"
-                >Initials:</label
-              >
-              <input class="os-input" style="width: 60px" disabled />
-            </div>
-            <label class="label" for="surname">Last name:</label>
-            <input id="surname" class="os-input" v-model="draft.values.surname" />
-            <label class="label" for="displayName">Display name:</label>
-            <input id="displayName" class="os-input" v-model="draft.values.displayName" />
-            <label class="label" for="description">Description:</label>
-            <input id="description" class="os-input" v-model="draft.values.description" />
-            <label class="label" for="office">Office:</label>
+        </div>
+        <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
+        <div class="os-form">
+          <label class="label" for="phone">Telephone number:</label>
+          <div style="display: flex; gap: 6px">
+            <input id="phone" class="os-input" v-model="draft.values.phone" />
+            <button class="os-btn" disabled style="min-width: 70px">Other…</button>
+          </div>
+          <label class="label" for="email">E-mail:</label>
+          <input id="email" class="os-input" v-model="draft.values.email" />
+          <label class="label" for="webPage">Web page:</label>
+          <div style="display: flex; gap: 6px">
+            <input id="webPage" class="os-input" disabled />
+            <button class="os-btn" disabled style="min-width: 70px">Other…</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ====== ADDRESS ====== -->
+      <template v-else-if="activeTab === 'address'">
+        <div class="os-form">
+          <label class="label" for="street">Street:</label>
+          <textarea
+            id="street"
+            class="os-textarea"
+            rows="3"
+            v-model="draft.values.homePostalAddress"
+          />
+          <label class="label" for="pobox">P.O. Box:</label>
+          <input id="pobox" class="os-input" :value="rawAttr(user, 'postOfficeBox')" disabled />
+          <label class="label" for="city">City:</label>
+          <input id="city" class="os-input" v-model="draft.values.l" />
+          <label class="label" for="state">State/province:</label>
+          <input id="state" class="os-input" v-model="draft.values.st" />
+          <label class="label" for="zip">Zip/Postal Code:</label>
+          <input id="zip" class="os-input" v-model="draft.values.postalCode" />
+          <label class="label" for="country">Country/region:</label>
+          <input id="country" class="os-input" v-model="draft.values.co" placeholder="(name)" />
+        </div>
+      </template>
+
+      <!-- ====== ACCOUNT ====== -->
+      <template v-else-if="activeTab === 'account'">
+        <div class="os-form" style="grid-template-columns: 200px 1fr">
+          <label class="label">User logon name:</label>
+          <div style="display: flex; gap: 4px">
+            <input class="os-input" :value="upnLogonName.local" disabled />
+            <input class="os-input" :value="upnLogonName.domain" disabled style="flex: 0 0 36%" />
+          </div>
+          <label class="label">User logon name (pre-Windows 2000):</label>
+          <input class="os-input" :value="user.samAccountName" disabled />
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 12px">
+          <button class="os-btn" disabled>Logon Hours…</button>
+          <button class="os-btn" disabled>Log On To…</button>
+        </div>
+        <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
+        <label class="os-check" :class="{ disabled: !user.locked }">
+          <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked" />
+          Unlock account. This account is currently
+          {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
+          Controller.
+        </label>
+        <fieldset class="os-groupbox" style="margin-top: 14px">
+          <legend>Account options:</legend>
+          <div style="display: flex; flex-direction: column; gap: 4px">
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> User must change password at next logon</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> User cannot change password</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" :checked="user.passwordNeverExpires" disabled /> Password
+              never expires</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> Store password using reversible encryption</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" :checked="!user.enabled" disabled /> Account is
+              disabled</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> Smart card is required for interactive
+              logon</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> Account is sensitive and cannot be
+              delegated</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> Use only Kerberos DES encryption types for this
+              account</label
+            >
+            <label class="os-check disabled"
+              ><input type="checkbox" disabled /> Do not require Kerberos preauthentication</label
+            >
+          </div>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Account expires</legend>
+          <label class="os-check disabled" style="margin-right: 18px">
+            <input type="radio" :checked="!user.accountExpiresAt" disabled /> Never
+          </label>
+          <label class="os-check disabled">
+            <input type="radio" :checked="!!user.accountExpiresAt" disabled />
+            End of:
             <input
-              id="office"
               class="os-input"
-              :value="rawAttr(user, 'physicalDeliveryOfficeName')"
+              style="width: 160px; margin-left: 6px"
+              :value="
+                user.accountExpiresAt ? new Date(user.accountExpiresAt).toLocaleDateString() : ''
+              "
               disabled
             />
-          </div>
-          <hr
-            style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0"
-          />
-          <div class="os-form">
-            <label class="label" for="phone">Telephone number:</label>
-            <div style="display: flex; gap: 6px">
-              <input id="phone" class="os-input" v-model="draft.values.phone" />
-              <button class="os-btn" disabled style="min-width: 70px">Other…</button>
-            </div>
-            <label class="label" for="email">E-mail:</label>
-            <input id="email" class="os-input" v-model="draft.values.email" />
-            <label class="label" for="webPage">Web page:</label>
-            <div style="display: flex; gap: 6px">
-              <input id="webPage" class="os-input" disabled />
-              <button class="os-btn" disabled style="min-width: 70px">Other…</button>
-            </div>
-          </div>
-        </template>
+          </label>
+        </fieldset>
+      </template>
 
-        <!-- ====== ADDRESS ====== -->
-        <template v-else-if="activeTab === 'address'">
-          <div class="os-form">
-            <label class="label" for="street">Street:</label>
-            <textarea
-              id="street"
-              class="os-textarea"
-              rows="3"
-              v-model="draft.values.homePostalAddress"
+      <!-- ====== PROFILE ====== -->
+      <template v-else-if="activeTab === 'profile'">
+        <fieldset class="os-groupbox">
+          <legend>User profile</legend>
+          <div class="os-form" style="grid-template-columns: 110px 1fr">
+            <label class="label">Profile path:</label>
+            <input class="os-input" :value="rawAttr(user, 'profilePath')" disabled />
+            <label class="label">Logon script:</label>
+            <input class="os-input" :value="rawAttr(user, 'scriptPath')" disabled />
+          </div>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Home folder</legend>
+          <label class="os-check disabled" style="margin-bottom: 6px">
+            <input type="radio" disabled /> Local path:
+            <input
+              class="os-input"
+              style="margin-left: 8px; flex: 1"
+              :value="rawAttr(user, 'homeDirectory')"
+              disabled
             />
-            <label class="label" for="pobox">P.O. Box:</label>
-            <input id="pobox" class="os-input" :value="rawAttr(user, 'postOfficeBox')" disabled />
-            <label class="label" for="city">City:</label>
-            <input id="city" class="os-input" v-model="draft.values.l" />
-            <label class="label" for="state">State/province:</label>
-            <input id="state" class="os-input" v-model="draft.values.st" />
-            <label class="label" for="zip">Zip/Postal Code:</label>
-            <input id="zip" class="os-input" v-model="draft.values.postalCode" />
-            <label class="label" for="country">Country/region:</label>
-            <input id="country" class="os-input" v-model="draft.values.co" placeholder="(name)" />
-          </div>
-        </template>
-
-        <!-- ====== ACCOUNT ====== -->
-        <template v-else-if="activeTab === 'account'">
-          <div class="os-form" style="grid-template-columns: 200px 1fr">
-            <label class="label">User logon name:</label>
-            <div style="display: flex; gap: 4px">
-              <input class="os-input" :value="upnLogonName.local" disabled />
-              <input class="os-input" :value="upnLogonName.domain" disabled style="flex: 0 0 36%" />
-            </div>
-            <label class="label">User logon name (pre-Windows 2000):</label>
-            <input class="os-input" :value="user.samAccountName" disabled />
-          </div>
-          <div style="display: flex; gap: 8px; margin-top: 12px">
-            <button class="os-btn" disabled>Logon Hours…</button>
-            <button class="os-btn" disabled>Log On To…</button>
-          </div>
-          <hr
-            style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0"
-          />
-          <label class="os-check" :class="{ disabled: !user.locked }">
-            <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked" />
-            Unlock account. This account is currently
-            {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
-            Controller.
           </label>
-          <fieldset class="os-groupbox" style="margin-top: 14px">
-            <legend>Account options:</legend>
-            <div style="display: flex; flex-direction: column; gap: 4px">
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> User must change password at next logon</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> User cannot change password</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" :checked="user.passwordNeverExpires" disabled /> Password
-                never expires</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> Store password using reversible
-                encryption</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" :checked="!user.enabled" disabled /> Account is
-                disabled</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> Smart card is required for interactive
-                logon</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> Account is sensitive and cannot be
-                delegated</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> Use only Kerberos DES encryption types for this
-                account</label
-              >
-              <label class="os-check disabled"
-                ><input type="checkbox" disabled /> Do not require Kerberos preauthentication</label
-              >
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Account expires</legend>
-            <label class="os-check disabled" style="margin-right: 18px">
-              <input type="radio" :checked="!user.accountExpiresAt" disabled /> Never
-            </label>
-            <label class="os-check disabled">
-              <input type="radio" :checked="!!user.accountExpiresAt" disabled />
-              End of:
-              <input
-                class="os-input"
-                style="width: 160px; margin-left: 6px"
-                :value="
-                  user.accountExpiresAt ? new Date(user.accountExpiresAt).toLocaleDateString() : ''
-                "
-                disabled
-              />
-            </label>
-          </fieldset>
-        </template>
+          <label class="os-check disabled">
+            <input type="radio" disabled /> Connect:
+            <select class="os-select" style="width: 70px; margin-left: 4px" disabled>
+              <option>Z:</option>
+            </select>
+            To:
+            <input class="os-input" style="margin-left: 4px; flex: 1" disabled />
+          </label>
+        </fieldset>
+      </template>
 
-        <!-- ====== PROFILE ====== -->
-        <template v-else-if="activeTab === 'profile'">
-          <fieldset class="os-groupbox">
-            <legend>User profile</legend>
-            <div class="os-form" style="grid-template-columns: 110px 1fr">
-              <label class="label">Profile path:</label>
-              <input class="os-input" :value="rawAttr(user, 'profilePath')" disabled />
-              <label class="label">Logon script:</label>
-              <input class="os-input" :value="rawAttr(user, 'scriptPath')" disabled />
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Home folder</legend>
-            <label class="os-check disabled" style="margin-bottom: 6px">
-              <input type="radio" disabled /> Local path:
-              <input
-                class="os-input"
-                style="margin-left: 8px; flex: 1"
-                :value="rawAttr(user, 'homeDirectory')"
-                disabled
-              />
-            </label>
-            <label class="os-check disabled">
-              <input type="radio" disabled /> Connect:
-              <select class="os-select" style="width: 70px; margin-left: 4px" disabled>
-                <option>Z:</option>
-              </select>
-              To:
-              <input class="os-input" style="margin-left: 4px; flex: 1" disabled />
-            </label>
-          </fieldset>
-        </template>
-
-        <!-- ====== TELEPHONES ====== -->
-        <template v-else-if="activeTab === 'telephones'">
-          <fieldset class="os-groupbox">
-            <legend>Telephone numbers</legend>
-            <div class="os-form" style="grid-template-columns: 80px 1fr 80px">
-              <label class="label">Home:</label>
-              <input class="os-input" v-model="draft.values.homePhone" />
-              <button class="os-btn" disabled>Other…</button>
-              <label class="label">Pager:</label>
-              <input class="os-input" :value="rawAttr(user, 'pager')" disabled />
-              <button class="os-btn" disabled>Other…</button>
-              <label class="label">Mobile:</label>
-              <input class="os-input" v-model="draft.values.mobile" />
-              <button class="os-btn" disabled>Other…</button>
-              <label class="label">Fax:</label>
-              <input class="os-input" :value="rawAttr(user, 'facsimileTelephoneNumber')" disabled />
-              <button class="os-btn" disabled>Other…</button>
-              <label class="label">IP phone:</label>
-              <input class="os-input" v-model="draft.values.ipPhone" />
-              <button class="os-btn" disabled>Other…</button>
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Notes:</legend>
-            <textarea class="os-textarea" rows="3" :value="rawAttr(user, 'info')" disabled />
-          </fieldset>
-        </template>
-
-        <!-- ====== ORGANIZATION ====== -->
-        <template v-else-if="activeTab === 'organization'">
-          <div class="os-form">
-            <label class="label">Title:</label>
-            <input class="os-input" v-model="draft.values.title" />
-            <label class="label">Department:</label>
-            <input class="os-input" v-model="draft.values.department" />
-            <label class="label">Company:</label>
-            <input class="os-input" v-model="draft.values.company" />
+      <!-- ====== TELEPHONES ====== -->
+      <template v-else-if="activeTab === 'telephones'">
+        <fieldset class="os-groupbox">
+          <legend>Telephone numbers</legend>
+          <div class="os-form" style="grid-template-columns: 80px 1fr 80px">
+            <label class="label">Home:</label>
+            <input class="os-input" v-model="draft.values.homePhone" />
+            <button class="os-btn" disabled>Other…</button>
+            <label class="label">Pager:</label>
+            <input class="os-input" :value="rawAttr(user, 'pager')" disabled />
+            <button class="os-btn" disabled>Other…</button>
+            <label class="label">Mobile:</label>
+            <input class="os-input" v-model="draft.values.mobile" />
+            <button class="os-btn" disabled>Other…</button>
+            <label class="label">Fax:</label>
+            <input class="os-input" :value="rawAttr(user, 'facsimileTelephoneNumber')" disabled />
+            <button class="os-btn" disabled>Other…</button>
+            <label class="label">IP phone:</label>
+            <input class="os-input" v-model="draft.values.ipPhone" />
+            <button class="os-btn" disabled>Other…</button>
           </div>
-          <fieldset class="os-groupbox">
-            <legend>Manager</legend>
-            <div class="os-form" style="grid-template-columns: 60px 1fr; column-gap: 6px">
-              <label class="label">Name:</label>
-              <div style="display: flex; gap: 6px">
-                <input
-                  class="os-input"
-                  :value="user.manager?.displayName ?? user.manager?.distinguishedName ?? ''"
-                  disabled
-                />
-                <button class="os-btn" disabled>Change…</button>
-                <button class="os-btn" disabled>Properties</button>
-                <button class="os-btn" disabled>Clear</button>
-              </div>
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Direct reports:</legend>
-            <div class="os-listbox" style="min-height: 80px; max-height: 140px">
-              <div v-if="user.directReports.length === 0" class="os-listbox-empty">(none)</div>
-              <div
-                v-for="dr in user.directReports"
-                :key="dr.distinguishedName"
-                class="os-listbox-row"
-              >
-                <WinIcon name="user" :size="14" />
-                <span>{{ dr.displayName ?? dr.distinguishedName }}</span>
-              </div>
-            </div>
-          </fieldset>
-        </template>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Notes:</legend>
+          <textarea class="os-textarea" rows="3" :value="rawAttr(user, 'info')" disabled />
+        </fieldset>
+      </template>
 
-        <!-- ====== MEMBER OF ====== -->
-        <template v-else-if="activeTab === 'memberOf'">
-          <div style="margin-bottom: 6px">Member of:</div>
-          <div class="os-listbox" style="min-height: 180px; max-height: 260px">
-            <div v-if="user.groupMemberships.length === 0" class="os-listbox-empty">
-              (no group memberships)
+      <!-- ====== ORGANIZATION ====== -->
+      <template v-else-if="activeTab === 'organization'">
+        <div class="os-form">
+          <label class="label">Title:</label>
+          <input class="os-input" v-model="draft.values.title" />
+          <label class="label">Department:</label>
+          <input class="os-input" v-model="draft.values.department" />
+          <label class="label">Company:</label>
+          <input class="os-input" v-model="draft.values.company" />
+        </div>
+        <fieldset class="os-groupbox">
+          <legend>Manager</legend>
+          <div class="os-form" style="grid-template-columns: 60px 1fr; column-gap: 6px">
+            <label class="label">Name:</label>
+            <div style="display: flex; gap: 6px">
+              <input
+                class="os-input"
+                :value="user.manager?.displayName ?? user.manager?.distinguishedName ?? ''"
+                disabled
+              />
+              <button class="os-btn" disabled>Change…</button>
+              <button class="os-btn" disabled>Properties</button>
+              <button class="os-btn" disabled>Clear</button>
             </div>
+          </div>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Direct reports:</legend>
+          <div class="os-listbox" style="min-height: 80px; max-height: 140px">
+            <div v-if="user.directReports.length === 0" class="os-listbox-empty">(none)</div>
             <div
-              v-for="g in user.groupMemberships"
-              :key="g.id"
+              v-for="dr in user.directReports"
+              :key="dr.distinguishedName"
               class="os-listbox-row"
-              :class="{ selected: memberOfPending === g.id }"
-              @click="memberOfPending = g.id"
             >
-              <WinIcon name="group" :size="14" />
-              <span style="flex: 1">{{ g.name }}</span>
-              <span style="color: var(--os-window-text-muted)" v-if="!g.direct">(via nested)</span>
+              <WinIcon name="user" :size="14" />
+              <span>{{ dr.displayName ?? dr.distinguishedName }}</span>
             </div>
           </div>
-          <div style="display: flex; gap: 6px; margin-top: 8px">
-            <button class="os-btn" type="button" @click="openAddGroup">Add…</button>
-            <button
-              class="os-btn"
-              type="button"
-              :disabled="!memberOfPending"
-              @click="
-                () => {
-                  const g = user!.groupMemberships.find((x) => x.id === memberOfPending);
-                  if (g) removeMembership(g.id, g.name);
-                }
-              "
-            >
-              Remove
-            </button>
-          </div>
-          <fieldset class="os-groupbox" style="margin-top: 14px">
-            <legend>Primary group:</legend>
-            <div class="os-form" style="grid-template-columns: 110px 1fr">
-              <label class="label">Primary group:</label>
-              <input class="os-input" value="Domain Users" disabled />
-            </div>
-            <div style="display: flex; gap: 6px; margin-top: 6px">
-              <button class="os-btn" disabled>Set Primary Group</button>
-            </div>
-            <div class="os-info">
-              There is no need to change Primary group unless you have Macintosh clients or
-              POSIX-compliant applications.
-            </div>
-          </fieldset>
-        </template>
+        </fieldset>
+      </template>
 
-        <!-- ====== DIAL-IN ====== -->
-        <template v-else-if="activeTab === 'dialin'">
-          <fieldset class="os-groupbox">
-            <legend>Network Access Permission</legend>
-            <label class="os-check disabled"><input type="radio" disabled /> Allow access</label
-            ><br />
-            <label class="os-check disabled"><input type="radio" disabled /> Deny access</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> Control access through NPS Network
-              Policy</label
-            >
-          </fieldset>
-          <label class="os-check disabled"
-            ><input type="checkbox" disabled /> Verify Caller-ID:</label
+      <!-- ====== MEMBER OF ====== -->
+      <template v-else-if="activeTab === 'memberOf'">
+        <div style="margin-bottom: 6px">Member of:</div>
+        <div class="os-listbox" style="min-height: 180px; max-height: 260px">
+          <div v-if="user.groupMemberships.length === 0" class="os-listbox-empty">
+            (no group memberships)
+          </div>
+          <div
+            v-for="g in user.groupMemberships"
+            :key="g.id"
+            class="os-listbox-row"
+            :class="{ selected: memberOfPending === g.id }"
+            @click="memberOfPending = g.id"
           >
-          <input class="os-input" disabled style="margin-top: 4px; max-width: 220px" />
-          <fieldset class="os-groupbox">
-            <legend>Callback Options</legend>
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> No Callback</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="radio" disabled /> Set by Caller (Routing and Remote Access Service
-              only)</label
-            ><br />
-            <label class="os-check disabled">
-              <input type="radio" disabled /> Always Callback to:
-              <input class="os-input" disabled style="margin-left: 6px; max-width: 200px" />
-            </label>
-          </fieldset>
-          <label class="os-check disabled">
-            <input type="checkbox" disabled /> Assign Static IP Addresses
-          </label>
-          <label class="os-check disabled" style="display: block; margin-top: 4px">
-            <input type="checkbox" disabled /> Apply Static Routes
-          </label>
-        </template>
-
-        <!-- ====== ENVIRONMENT ====== -->
-        <template v-else-if="activeTab === 'environment'">
-          <p>
-            Use this tab to configure the Remote Desktop Services startup environment. These
-            settings override client-specified settings.
-          </p>
-          <fieldset class="os-groupbox">
-            <legend>Starting program</legend>
-            <label class="os-check disabled">
-              <input type="checkbox" disabled /> Start the following program at logon:
-            </label>
-            <div class="os-form" style="grid-template-columns: 110px 1fr; margin-top: 6px">
-              <label class="label">Program file name:</label>
-              <input class="os-input" disabled />
-              <label class="label">Start in:</label>
-              <input class="os-input" disabled />
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Client devices</legend>
-            <label class="os-check disabled"
-              ><input type="checkbox" checked disabled /> Connect client drives at logon</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="checkbox" checked disabled /> Connect client printers at logon</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="checkbox" checked disabled /> Default to main client printer</label
-            >
-          </fieldset>
-        </template>
-
-        <!-- ====== SESSIONS ====== -->
-        <template v-else-if="activeTab === 'sessions'">
-          <p>Use this tab to set Remote Desktop Services timeout and reconnection settings.</p>
-          <div class="os-form" style="grid-template-columns: 220px 1fr">
-            <label class="label">End a disconnected session:</label>
-            <select class="os-select" disabled>
-              <option>Never</option>
-            </select>
-            <label class="label">Active session limit:</label>
-            <select class="os-select" disabled>
-              <option>Never</option>
-            </select>
-            <label class="label">Idle session limit:</label>
-            <select class="os-select" disabled>
-              <option>Never</option>
-            </select>
+            <WinIcon name="group" :size="14" />
+            <span style="flex: 1">{{ g.name }}</span>
+            <span style="color: var(--os-window-text-muted)" v-if="!g.direct">(via nested)</span>
           </div>
-          <fieldset class="os-groupbox">
-            <legend>When a session limit is reached or connection is broken:</legend>
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> Disconnect from session</label
-            ><br />
-            <label class="os-check disabled"><input type="radio" disabled /> End session</label>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Allow reconnection:</legend>
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> From any client</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="radio" disabled /> From originating client only</label
-            >
-          </fieldset>
-        </template>
-
-        <!-- ====== REMOTE CONTROL ====== -->
-        <template v-else-if="activeTab === 'remoteControl'">
-          <p>
-            Use this tab to configure Remote Desktop Services remote control settings. To remotely
-            control or observe a user's session, the following settings apply.
-          </p>
-          <label class="os-check disabled"
-            ><input type="checkbox" checked disabled /> Enable remote control</label
+        </div>
+        <div style="display: flex; gap: 6px; margin-top: 8px">
+          <button class="os-btn" type="button" @click="openAddGroup">Add…</button>
+          <button
+            class="os-btn"
+            type="button"
+            :disabled="!memberOfPending"
+            @click="
+              () => {
+                const g = user!.groupMemberships.find((x) => x.id === memberOfPending);
+                if (g) removeMembership(g.id, g.name);
+              }
+            "
           >
-          <fieldset class="os-groupbox">
-            <legend>
-              To require the user's permission for remote observation or control of the session,
-              select the following:
-            </legend>
-            <label class="os-check disabled"
-              ><input type="checkbox" checked disabled /> Require user's permission</label
-            >
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Level of control</legend>
-            <p>Specify the level of control you want to have over a user's session:</p>
-            <label class="os-check disabled"
-              ><input type="radio" disabled /> View the user's session</label
-            ><br />
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> Interact with the session</label
-            >
-          </fieldset>
-        </template>
+            Remove
+          </button>
+        </div>
+        <fieldset class="os-groupbox" style="margin-top: 14px">
+          <legend>Primary group:</legend>
+          <div class="os-form" style="grid-template-columns: 110px 1fr">
+            <label class="label">Primary group:</label>
+            <input class="os-input" value="Domain Users" disabled />
+          </div>
+          <div style="display: flex; gap: 6px; margin-top: 6px">
+            <button class="os-btn" disabled>Set Primary Group</button>
+          </div>
+          <div class="os-info">
+            There is no need to change Primary group unless you have Macintosh clients or
+            POSIX-compliant applications.
+          </div>
+        </fieldset>
+      </template>
 
-        <!-- ====== REMOTE DESKTOP SERVICES PROFILE ====== -->
-        <template v-else-if="activeTab === 'rdsProfile'">
-          <p>
-            Use this tab to configure the Remote Desktop Services user profile. Settings in this
-            profile apply to Remote Desktop Services.
-          </p>
-          <fieldset class="os-groupbox">
-            <legend>Remote Desktop Services User Profile</legend>
-            <div class="os-form" style="grid-template-columns: 100px 1fr">
-              <label class="label">Profile Path:</label>
-              <input class="os-input" disabled />
-            </div>
-          </fieldset>
-          <fieldset class="os-groupbox">
-            <legend>Remote Desktop Services Home Folder</legend>
-            <label class="os-check disabled"
-              ><input type="radio" checked disabled /> Local path:
-              <input class="os-input" disabled style="margin-left: 6px; flex: 1" />
-            </label>
-            <br />
-            <label class="os-check disabled">
-              <input type="radio" disabled /> Connect:
-              <select class="os-select" style="width: 70px; margin-left: 4px" disabled>
-                <option>Z:</option>
-              </select>
-              To:
-              <input class="os-input" style="margin-left: 4px; flex: 1" disabled />
-            </label>
-          </fieldset>
+      <!-- ====== DIAL-IN ====== -->
+      <template v-else-if="activeTab === 'dialin'">
+        <fieldset class="os-groupbox">
+          <legend>Network Access Permission</legend>
+          <label class="os-check disabled"><input type="radio" disabled /> Allow access</label
+          ><br />
+          <label class="os-check disabled"><input type="radio" disabled /> Deny access</label><br />
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> Control access through NPS Network
+            Policy</label
+          >
+        </fieldset>
+        <label class="os-check disabled"
+          ><input type="checkbox" disabled /> Verify Caller-ID:</label
+        >
+        <input class="os-input" disabled style="margin-top: 4px; max-width: 220px" />
+        <fieldset class="os-groupbox">
+          <legend>Callback Options</legend>
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> No Callback</label
+          ><br />
+          <label class="os-check disabled"
+            ><input type="radio" disabled /> Set by Caller (Routing and Remote Access Service
+            only)</label
+          ><br />
           <label class="os-check disabled">
-            <input type="checkbox" disabled /> Deny this user permissions to log on to Remote
-            Desktop Session Host server
+            <input type="radio" disabled /> Always Callback to:
+            <input class="os-input" disabled style="margin-left: 6px; max-width: 200px" />
           </label>
-        </template>
+        </fieldset>
+        <label class="os-check disabled">
+          <input type="checkbox" disabled /> Assign Static IP Addresses
+        </label>
+        <label class="os-check disabled" style="display: block; margin-top: 4px">
+          <input type="checkbox" disabled /> Apply Static Routes
+        </label>
+      </template>
 
-        <!-- ====== COM+ ====== -->
-        <template v-else-if="activeTab === 'comPlus'">
-          <p>This user is a member of the following COM+ partition set:</p>
-          <fieldset class="os-groupbox">
-            <legend>Partition Set</legend>
-            <div class="os-form" style="grid-template-columns: 70px 1fr">
-              <label class="label">Name:</label>
-              <div style="display: flex; gap: 4px">
-                <input class="os-input" disabled value="(none)" />
-                <button class="os-btn" disabled>Properties</button>
-              </div>
+      <!-- ====== ENVIRONMENT ====== -->
+      <template v-else-if="activeTab === 'environment'">
+        <p>
+          Use this tab to configure the Remote Desktop Services startup environment. These settings
+          override client-specified settings.
+        </p>
+        <fieldset class="os-groupbox">
+          <legend>Starting program</legend>
+          <label class="os-check disabled">
+            <input type="checkbox" disabled /> Start the following program at logon:
+          </label>
+          <div class="os-form" style="grid-template-columns: 110px 1fr; margin-top: 6px">
+            <label class="label">Program file name:</label>
+            <input class="os-input" disabled />
+            <label class="label">Start in:</label>
+            <input class="os-input" disabled />
+          </div>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Client devices</legend>
+          <label class="os-check disabled"
+            ><input type="checkbox" checked disabled /> Connect client drives at logon</label
+          ><br />
+          <label class="os-check disabled"
+            ><input type="checkbox" checked disabled /> Connect client printers at logon</label
+          ><br />
+          <label class="os-check disabled"
+            ><input type="checkbox" checked disabled /> Default to main client printer</label
+          >
+        </fieldset>
+      </template>
+
+      <!-- ====== SESSIONS ====== -->
+      <template v-else-if="activeTab === 'sessions'">
+        <p>Use this tab to set Remote Desktop Services timeout and reconnection settings.</p>
+        <div class="os-form" style="grid-template-columns: 220px 1fr">
+          <label class="label">End a disconnected session:</label>
+          <select class="os-select" disabled>
+            <option>Never</option>
+          </select>
+          <label class="label">Active session limit:</label>
+          <select class="os-select" disabled>
+            <option>Never</option>
+          </select>
+          <label class="label">Idle session limit:</label>
+          <select class="os-select" disabled>
+            <option>Never</option>
+          </select>
+        </div>
+        <fieldset class="os-groupbox">
+          <legend>When a session limit is reached or connection is broken:</legend>
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> Disconnect from session</label
+          ><br />
+          <label class="os-check disabled"><input type="radio" disabled /> End session</label>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Allow reconnection:</legend>
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> From any client</label
+          ><br />
+          <label class="os-check disabled"
+            ><input type="radio" disabled /> From originating client only</label
+          >
+        </fieldset>
+      </template>
+
+      <!-- ====== REMOTE CONTROL ====== -->
+      <template v-else-if="activeTab === 'remoteControl'">
+        <p>
+          Use this tab to configure Remote Desktop Services remote control settings. To remotely
+          control or observe a user's session, the following settings apply.
+        </p>
+        <label class="os-check disabled"
+          ><input type="checkbox" checked disabled /> Enable remote control</label
+        >
+        <fieldset class="os-groupbox">
+          <legend>
+            To require the user's permission for remote observation or control of the session,
+            select the following:
+          </legend>
+          <label class="os-check disabled"
+            ><input type="checkbox" checked disabled /> Require user's permission</label
+          >
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Level of control</legend>
+          <p>Specify the level of control you want to have over a user's session:</p>
+          <label class="os-check disabled"
+            ><input type="radio" disabled /> View the user's session</label
+          ><br />
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> Interact with the session</label
+          >
+        </fieldset>
+      </template>
+
+      <!-- ====== REMOTE DESKTOP SERVICES PROFILE ====== -->
+      <template v-else-if="activeTab === 'rdsProfile'">
+        <p>
+          Use this tab to configure the Remote Desktop Services user profile. Settings in this
+          profile apply to Remote Desktop Services.
+        </p>
+        <fieldset class="os-groupbox">
+          <legend>Remote Desktop Services User Profile</legend>
+          <div class="os-form" style="grid-template-columns: 100px 1fr">
+            <label class="label">Profile Path:</label>
+            <input class="os-input" disabled />
+          </div>
+        </fieldset>
+        <fieldset class="os-groupbox">
+          <legend>Remote Desktop Services Home Folder</legend>
+          <label class="os-check disabled"
+            ><input type="radio" checked disabled /> Local path:
+            <input class="os-input" disabled style="margin-left: 6px; flex: 1" />
+          </label>
+          <br />
+          <label class="os-check disabled">
+            <input type="radio" disabled /> Connect:
+            <select class="os-select" style="width: 70px; margin-left: 4px" disabled>
+              <option>Z:</option>
+            </select>
+            To:
+            <input class="os-input" style="margin-left: 4px; flex: 1" disabled />
+          </label>
+        </fieldset>
+        <label class="os-check disabled">
+          <input type="checkbox" disabled /> Deny this user permissions to log on to Remote Desktop
+          Session Host server
+        </label>
+      </template>
+
+      <!-- ====== COM+ ====== -->
+      <template v-else-if="activeTab === 'comPlus'">
+        <p>This user is a member of the following COM+ partition set:</p>
+        <fieldset class="os-groupbox">
+          <legend>Partition Set</legend>
+          <div class="os-form" style="grid-template-columns: 70px 1fr">
+            <label class="label">Name:</label>
+            <div style="display: flex; gap: 4px">
+              <input class="os-input" disabled value="(none)" />
+              <button class="os-btn" disabled>Properties</button>
             </div>
-          </fieldset>
-        </template>
-      </div>
-    </template>
+          </div>
+        </fieldset>
+      </template>
+    </div>
   </WinDialog>
 </template>

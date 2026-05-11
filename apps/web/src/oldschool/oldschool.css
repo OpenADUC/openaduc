@@ -511,15 +511,23 @@
 .os-dialog-titlebar .close-btn:hover {
   background: #e81123;
 }
+/* The only scrolling region inside a dialog. Sits between the
+   (fixed) titlebar + tab strip above and the (fixed) footer below.
+   `scrollbar-gutter: stable` reserves the scrollbar's column so
+   content doesn't shift sideways when a taller tab makes the
+   scrollbar appear. */
 .os-dialog-body {
-  flex: 1;
-  overflow: auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: var(--os-window-bg);
   padding: 0;
-  min-height: 0;
   position: relative;
 }
 .os-dialog-footer {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -528,13 +536,13 @@
   background: var(--os-window-bg);
 }
 
-/* Tabs (classic Win32 tabbed dialog). Sticks to the top of the
-   dialog body so the tab strip stays visible while content scrolls
-   inside the active tab — matches MMC's pinned tab header behaviour. */
+/* Tabs (classic Win32 tabbed dialog). Lives in the dialog's `#tabs`
+   slot — above the scrollable body, below the titlebar — so the tab
+   labels stay frozen as the active tab's content scrolls inside the
+   body. `flex-shrink: 0` keeps them at their natural height even
+   when surrounded by flex siblings competing for space. */
 .os-tabs {
-  position: sticky;
-  top: 0;
-  z-index: 5;
+  flex: 0 0 auto;
   display: flex;
   align-items: flex-end;
   padding: 4px 8px 0;
@@ -563,10 +571,9 @@
   margin-bottom: -1px;
   font-weight: 500;
 }
-/* Tab body lays out at natural height. Scrolling lives one level up
-   on .os-dialog-body, so the sticky tab strip stays pinned while
-   long content (e.g. the Account tab's checkbox list) scrolls past
-   underneath. */
+/* Tab body is just the styled content area. Scrolling is handled
+   one level up on .os-dialog-body; this element just provides
+   padding and the white surface inside the dialog. */
 .os-tab-body {
   background: var(--os-window-bg);
   padding: 14px 14px 10px;
