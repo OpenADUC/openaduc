@@ -67,8 +67,10 @@ die() { fail "$*"; exit 1; }
 
 # Run a command; on failure, print the command and exit code, then exit.
 run() {
-  if ! "$@"; then
-    fail "command failed (exit $?): $*"
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    fail "command failed (exit $rc): $*"
     exit 1
   fi
 }
@@ -382,7 +384,11 @@ bring_up() {
   fi
 
   step "Running database migrations"
-  ( cd "$INSTALL_DIR" && run docker compose exec -T api pnpm migrate:latest )
+  # Invoke tsx + knex directly instead of `pnpm migrate:latest` — pnpm's
+  # verify-deps-before-run would try to write to /app/apps/api, which the
+  # non-root runtime user can't do, and would also pull a fresh pnpm via
+  # corepack. tsx and knex are already in node_modules; just use them.
+  ( cd "$INSTALL_DIR" && run docker compose exec -T api node node_modules/tsx/dist/cli.mjs node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:latest )
 }
 
 # ---------------------------------------------------------------------------
