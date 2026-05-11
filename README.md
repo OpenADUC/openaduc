@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="branding/logoWordmark.png" alt="OpenADUC" width="420" />
+  <img src="branding/openaduc-icon-256x256.png" alt="OpenADUC" width="128" height="128" />
 </p>
+
+<h1 align="center">OpenADUC</h1>
 
 <p align="center">
   <strong>Modern web-based Active Directory administration.</strong><br />
