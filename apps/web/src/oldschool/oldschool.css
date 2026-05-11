@@ -540,7 +540,15 @@
    slot — above the scrollable body, below the titlebar — so the tab
    labels stay frozen as the active tab's content scrolls inside the
    body. `flex-shrink: 0` keeps them at their natural height even
-   when surrounded by flex siblings competing for space. */
+   when surrounded by flex siblings competing for space.
+
+   `overflow: hidden` is load-bearing: with `flex-wrap: wrap` we
+   never have horizontal overflow, but browsers were occasionally
+   showing a phantom scrollbar on rows containing the active tab
+   because of sub-pixel rounding from the old negative-margin
+   trick. With overflow hidden the row strictly clips to the
+   strip's box and the active-tab pseudo (below) handles the
+   "merge with the body" effect without touching layout. */
 .os-tabs {
   flex: 0 0 auto;
   display: flex;
@@ -548,13 +556,13 @@
   padding: 4px 8px 0;
   border-bottom: 1px solid var(--os-window-border);
   background: var(--os-window-bg);
-  overflow-x: auto;
+  overflow: hidden;
   flex-wrap: wrap;
 }
 .os-tab {
   position: relative;
-  padding: 4px 10px 3px;
-  margin-right: 2px;
+  padding: 4px 10px;
+  margin: 0 2px 0 0;
   background: var(--os-window-bg-dark);
   border: 1px solid var(--os-window-border);
   border-bottom: 0;
@@ -566,10 +574,21 @@
 }
 .os-tab.active {
   background: var(--os-window-bg);
-  z-index: 1;
-  padding-bottom: 4px;
-  margin-bottom: -1px;
   font-weight: 500;
+  z-index: 1;
+}
+/* Active tab's "merge into body" effect: paint a 1px white strip
+   along its bottom edge that overlaps the .os-tabs border-bottom.
+   No layout impact — purely cosmetic. */
+.os-tab.active::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  height: 1px;
+  background: var(--os-window-bg);
+  z-index: 2;
 }
 /* Tab body is just the styled content area. Scrolling is handled
    one level up on .os-dialog-body; this element just provides

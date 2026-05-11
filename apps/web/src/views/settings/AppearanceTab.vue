@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { useRouter } from 'vue-router';
 import {
   useThemeStore,
   ACCENTS,
@@ -10,6 +11,21 @@ import {
 import Card from '../../design/primitives/Card.vue';
 
 const theme = useThemeStore();
+const router = useRouter();
+
+/**
+ * Flip the Old School toggle. When turning it ON we navigate to the
+ * dashboard so the operator sees the MMC right away — AppShell's
+ * overlay logic suppresses Old School on /appearance and /settings
+ * (so those pages stay reachable for toggling back off), which
+ * would otherwise leave the user staring at this same screen
+ * wondering whether anything happened.
+ */
+async function onToggleOldSchool(): Promise<void> {
+  const willBeOn = !theme.oldSchool;
+  theme.toggleOldSchool();
+  if (willBeOn) await router.push('/');
+}
 
 const modes: { value: ThemeMode; label: string; sub: string }[] = [
   { value: 'dark', label: 'Dark', sub: 'recommended for IT operators' },
@@ -99,7 +115,7 @@ const accentNames = Object.keys(ACCENTS) as AccentName[];
       </div>
       <div class="settings-control toggle-control">
         <label class="switch" :class="{ on: theme.oldSchool }">
-          <input type="checkbox" :checked="theme.oldSchool" @change="theme.toggleOldSchool()" />
+          <input type="checkbox" :checked="theme.oldSchool" @change="onToggleOldSchool" />
           <span class="track"><span class="thumb" /></span>
         </label>
       </div>
