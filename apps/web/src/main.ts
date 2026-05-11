@@ -9,6 +9,7 @@ import { router } from './router/index.js';
 import { adManageTheme } from './design/theme.js';
 import { useThemeStore } from './design/stores/useTheme.js';
 import './styles/main.css';
+import './oldschool/oldschool.css';
 
 const app = createApp(App);
 app.use(createPinia());

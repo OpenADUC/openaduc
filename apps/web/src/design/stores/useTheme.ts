@@ -83,6 +83,10 @@ interface PersistedShape {
   density?: Density;
   accent?: AccentName;
   sidebarCollapsed?: boolean;
+  // Experimental: when true, the main content area renders the classic
+  // Active Directory Users and Computers MMC look-and-feel instead of the
+  // modern views. See apps/web/src/oldschool/.
+  oldSchool?: boolean;
 }
 
 function readPersisted(): PersistedShape {
@@ -111,6 +115,7 @@ export const useThemeStore = defineStore('theme', () => {
   const density = ref<Density>(persisted.density ?? 'balanced');
   const accent = ref<AccentName>(persisted.accent ?? 'cyan');
   const sidebarCollapsed = ref<boolean>(persisted.sidebarCollapsed ?? false);
+  const oldSchool = ref<boolean>(persisted.oldSchool ?? false);
 
   // Resolve tokens for the *active* mode — light gets the darker
   // shades, dark gets the bright ones. Same accent name, two palettes.
@@ -133,6 +138,10 @@ export const useThemeStore = defineStore('theme', () => {
     body.classList.remove('density-compact', 'density-balanced', 'density-comfy');
     body.classList.add(`density-${density.value}`);
 
+    // Old School flag — exposed as a class on <html> so the MMC stylesheet
+    // can scope itself and the surrounding shell can dim its chrome.
+    html.classList.toggle('old-school', oldSchool.value);
+
     // PrimeVue Aura responds to the data-theme attribute / system color-scheme.
     html.setAttribute('data-theme', mode.value);
     html.style.colorScheme = mode.value;
@@ -148,6 +157,7 @@ export const useThemeStore = defineStore('theme', () => {
       density: density.value,
       accent: accent.value,
       sidebarCollapsed: sidebarCollapsed.value,
+      oldSchool: oldSchool.value,
     });
   });
 
@@ -166,17 +176,26 @@ export const useThemeStore = defineStore('theme', () => {
   function toggleSidebar(): void {
     sidebarCollapsed.value = !sidebarCollapsed.value;
   }
+  function setOldSchool(next: boolean): void {
+    oldSchool.value = next;
+  }
+  function toggleOldSchool(): void {
+    oldSchool.value = !oldSchool.value;
+  }
 
   return {
     mode,
     density,
     accent,
     sidebarCollapsed,
+    oldSchool,
     accentTokens,
     setMode,
     toggleMode,
     setDensity,
     setAccent,
     toggleSidebar,
+    setOldSchool,
+    toggleOldSchool,
   };
 });
