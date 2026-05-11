@@ -1,0 +1,341 @@
+/* ----------------------------------------------------------------
+ * AD Manage — design tokens
+ *
+ * All UI colors, surfaces, type sizes, density, and shadows live here
+ * as CSS variables so a single edit retunes the whole app. Tailwind
+ * v4's @theme block (in main.css) re-declares the same names so
+ * utilities like `bg-surface` resolve against these tokens.
+ *
+ * Theme is selected via a class on <html>: theme-dark (default) or
+ * theme-light. Density via density-compact | density-balanced | density-comfy.
+ * ---------------------------------------------------------------- */
+
+:root {
+  /* Accent — driven by useTheme. Defaults are dark-mode shades; the light
+     theme block overrides with darker, more readable variants. */
+  --accent: #22d3ee;
+  --accent-soft: rgba(34, 211, 238, 0.12);
+  --accent-text: #22d3ee;
+  --accent-contrast: #07080a;
+
+  /* Density — overridden by density-* classes */
+  --row-h: 40px;
+  --row-px: 14px;
+  --row-fs: 13px;
+
+  /* Type stack */
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Layout constants */
+  --sb-w: 232px;
+  --sb-w-collapsed: 56px;
+  --topbar-h: 52px;
+
+  /* Breakpoints (documentation only — CSS @media queries hardcode the
+     numeric values because @media doesn't accept var() expressions) */
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+}
+
+/* ---------- DARK (default) ----------
+ *
+ * Surface hierarchy (low → high), cool-blue tinted (Linear/Arc trick —
+ * a faint blue-shift on near-black neutrals reads as "designed" rather
+ * than "default zinc"):
+ *
+ *   bg     #0a0c12   page canvas
+ *   bg-1   #10131a   sidebar / topbar (one notch above canvas)
+ *   surface #15181f   card body (one notch above sidebar)
+ *   surface-2 #1c2029   inputs, secondary buttons, chips
+ *   surface-3 #262a35   inset (kbd, tag bg, group chip icon)
+ *
+ * Cards get a 4% white inset top-highlight in the shadow stack so they
+ * appear to catch light from above (mimics OLED depth). Borders are
+ * boosted ~10% over the previous palette so chrome stays legible at
+ * low monitor brightness. */
+.theme-dark {
+  --bg: #0a0c12;
+  --bg-1: #10131a;
+  --bg-2: #15181f;
+  --surface: #15181f;
+  --surface-2: #1c2029;
+  --surface-3: #262a35;
+  --hover: rgba(255, 255, 255, 0.05);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  --border: #2a2f3c;
+  --border-strong: #3a414f;
+  --border-soft: rgba(255, 255, 255, 0.07);
+  --text: #ededee;
+  --text-2: #b0b3bd;
+  --text-3: #7d808b;
+  --text-4: #5b5e69;
+
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.13);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.14);
+  --red: #f87171;
+  --red-soft: rgba(248, 113, 113, 0.14);
+  --blue: #60a5fa;
+  --blue-soft: rgba(96, 165, 250, 0.13);
+  --violet: #a78bfa;
+  --violet-soft: rgba(167, 139, 250, 0.14);
+
+  --shadow-sm:
+    0 1px 0 rgba(255, 255, 255, 0.045) inset,
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 1px 1px rgba(0, 0, 0, 0.35);
+  --shadow-md:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 8px 24px rgba(0, 0, 0, 0.55),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 24px 60px rgba(0, 0, 0, 0.65),
+    0 4px 12px rgba(0, 0, 0, 0.45);
+
+  /* Page-canvas atmosphere: a cool cyan wash anchored top-left and a
+     warm peach counter-glow bottom-right — cool/warm tension keeps the
+     canvas from reading as monochromatic. Pushed brighter than the
+     previous pass so it actually registers at typical monitor levels. */
+  --bg-atmosphere:
+    radial-gradient(ellipse 70% 60% at 8% 0%, rgba(34, 211, 238, 0.085), transparent 60%),
+    radial-gradient(ellipse 60% 55% at 100% 100%, rgba(251, 146, 96, 0.055), transparent 60%);
+
+  /* Fine grain (1-2px scale) at low opacity. Two purposes: kills banding
+     on gradients, and adds tactility — the difference between "rendered"
+     and "designed" dark UIs. White noise on alpha channel so it composes
+     correctly over the atmospheric gradient below. */
+  --bg-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  1 0 0 0 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/></svg>");
+  --bg-noise-opacity: 0.045;
+
+  color-scheme: dark;
+}
+
+/* ---------- LIGHT ----------
+ *
+ * Rebuilt for visible separation (the previous palette had surface ≡
+ * surface-2 ≡ #ffffff, so cards, inputs, and the bg all read as the same
+ * thing). The new hierarchy uses a slate-tinted canvas so white surfaces
+ * lift cleanly off it, with stronger borders so chrome stays legible.
+ *
+ *   bg     #ebedf2   page canvas (cool slate, clearly < white)
+ *   bg-1   #e0e3ea   sidebar (one notch deeper than canvas)
+ *   surface #ffffff  card body (lifts off the canvas)
+ *   surface-2 #f3f5f9  inputs, chips, secondary buttons (now distinct)
+ *   surface-3 #e7eaf0  inset surfaces (tags, kbd, gchip icon)
+ *
+ * Accent is darkened from the dark-mode bright cyan so it remains
+ * readable on white text-runs (handled in useTheme.ts). */
+.theme-light {
+  --bg: #ebedf2;
+  --bg-1: #e0e3ea;
+  --bg-2: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f3f5f9;
+  --surface-3: #e7eaf0;
+  --hover: rgba(15, 23, 42, 0.045);
+  --hover-strong: rgba(15, 23, 42, 0.085);
+  --border: #d4d8e0;
+  --border-strong: #aeb4c0;
+  --border-soft: rgba(15, 23, 42, 0.06);
+  --text: #0b1220;
+  --text-2: #475569;
+  --text-3: #64748b;
+  --text-4: #94a3b8;
+
+  /* Light-mode accent overrides — picked up by useTheme when mode=light.
+     The block here just sets the cyan default; useTheme writes the
+     selected accent into these same vars. */
+  --accent: #0891b2;
+  --accent-soft: rgba(8, 145, 178, 0.12);
+  --accent-text: #0e7490;
+  --accent-contrast: #ffffff;
+
+  --green: #047857;
+  --green-soft: rgba(4, 120, 87, 0.10);
+  --amber: #b45309;
+  --amber-soft: rgba(180, 83, 9, 0.10);
+  --red: #b91c1c;
+  --red-soft: rgba(185, 28, 28, 0.10);
+  --blue: #1d4ed8;
+  --blue-soft: rgba(29, 78, 216, 0.10);
+  --violet: #6d28d9;
+  --violet-soft: rgba(109, 40, 217, 0.10);
+
+  --shadow-sm:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-md:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 8px 24px rgba(15, 23, 42, 0.08),
+    0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-lg:
+    0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 24px 60px rgba(15, 23, 42, 0.14),
+    0 4px 12px rgba(15, 23, 42, 0.08);
+
+  /* Page-canvas atmosphere: a soft cyan wash top-left and a warm peach
+     counter-glow bottom-right give the canvas a hint of dimension — it
+     no longer reads as a single flat gray panel behind everything. */
+  --bg-atmosphere:
+    radial-gradient(ellipse 70% 60% at 8% 0%, rgba(8, 145, 178, 0.10), transparent 55%),
+    radial-gradient(ellipse 60% 55% at 100% 100%, rgba(244, 114, 60, 0.07), transparent 55%);
+
+  /* Black noise on alpha channel — same idea as the dark variant but
+     inverted so dark grain shows on the light canvas. Kills banding on
+     the radial wash and adds a faint tactile feel. */
+  --bg-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -1 0 0 0 1'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/></svg>");
+  --bg-noise-opacity: 0.035;
+
+  color-scheme: light;
+}
+
+/* ---------- Density ---------- */
+.density-compact {
+  --row-h: 32px;
+  --row-px: 12px;
+  --row-fs: 12.5px;
+}
+
+.density-balanced {
+  --row-h: 40px;
+  --row-px: 14px;
+  --row-fs: 13px;
+}
+
+.density-comfy {
+  --row-h: 52px;
+  --row-px: 18px;
+  --row-fs: 13.5px;
+}
+
+/* ---------- Base resets ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  background: var(--bg);
+  background-image: var(--bg-atmosphere);
+  background-attachment: fixed;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  position: relative;
+}
+
+/* Fixed grain layer — tiles the SVG noise across the viewport at
+ * low opacity. Sits below all content (z-index: 0; chrome is z-index 5+
+ * and the page is positioned via flex, so they paint above without
+ * needing an explicit stacking-context bump). pointer-events: none
+ * keeps clicks from being intercepted. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: var(--bg-noise);
+  background-size: 240px 240px;
+  background-repeat: repeat;
+  opacity: var(--bg-noise-opacity);
+  pointer-events: none;
+  z-index: 0;
+}
+
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+button:focus {
+  outline: none;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* ---------- Custom scrollbars ---------- */
+.scroll-area::-webkit-scrollbar,
+.page::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb,
+.page::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+}
+
+.scroll-area::-webkit-scrollbar-track,
+.page::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- Helper classes used across primitives ---------- */
+.mono {
+  font-family: var(--font-mono);
+}
+
+.dn {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
+
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0;
+}

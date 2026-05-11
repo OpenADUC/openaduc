@@ -1,0 +1,59 @@
+# OpenADUC — dev overlay.
+#
+# Combine with the base file:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Adds source mounts (so api/web hot-reload on save) and exposes the
+# Postgres port for direct psql access. The samba-ad-dc service is
+# commented out; uncomment if you want a throwaway local AD to develop
+# against (see docs/development.md).
+
+services:
+  postgres:
+    ports:
+      - '5432:5432'
+
+  api:
+    command: ['pnpm', 'dev']
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./packages/shared:/app/packages/shared
+      - /app/node_modules
+      - /app/apps/api/node_modules
+
+  web:
+    command: ['pnpm', 'dev', '--host', '0.0.0.0']
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./apps/web:/app/apps/web
+      - ./packages/shared:/app/packages/shared
+      - /app/node_modules
+      - /app/apps/web/node_modules
+
+  # Local Samba AD-DC for development. NOT hardened, NOT for production.
+  # Pinning a known-working domain image is fiddly (image, env vars, TLS
+  # bootstrap, hostname resolution all matter). Uncomment and adjust to
+  # your preferred image once you have one working in your environment.
+  #
+  # samba-ad-dc:
+  #   image: nowsci/samba-domain:latest
+  #   hostname: dc1
+  #   environment:
+  #     DOMAIN: EXAMPLE.COM
+  #     DOMAINPASS: 'ChangeMe!Strong1'
+  #     INSECURELDAP: 'false'
+  #   ports:
+  #     - '389:389'
+  #     - '636:636'
+  #   cap_add:
+  #     - NET_ADMIN
+  #     - SYS_NICE
+  #   volumes:
+  #     - samba-data:/var/lib/samba
+  #     - samba-config:/etc/samba/external
+
+# volumes:
+#   samba-data:
+#   samba-config:

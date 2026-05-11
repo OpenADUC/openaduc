@@ -1,0 +1,37 @@
+# OpenADUC — external Postgres template.
+#
+# This file is what the installer copies to docker-compose.yml when the
+# operator chooses "I have an existing Postgres" during install. It
+# differs from the embedded template in one way: there is no postgres
+# service. The api container reads DATABASE_URL from .env, which the
+# installer writes to point at your external Postgres host.
+#
+# If you're maintaining this manually, set DATABASE_URL in .env, e.g.:
+#
+#     DATABASE_URL=postgres://openaduc:strongpw@db.internal.example.com:5432/openaduc
+#
+# The database must exist (create it with: CREATE DATABASE openaduc) and
+# the user must have permission to create tables. Migrations run on api
+# container startup.
+
+services:
+  api:
+    image: ${OPENADUC_API_IMAGE:-openaduc/api:latest}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '3000:3000'
+
+  web:
+    image: ${OPENADUC_WEB_IMAGE:-openaduc/web:latest}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '8080:80'

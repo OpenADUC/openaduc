@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: BUSL-1.1
+// Postgres jsonb cannot store the U+0000 NUL character — INSERTs fail with
+// `unsupported Unicode escape sequence`. Standard JSON permits it, so plain
+// JSON.stringify of values pulled from LDAP (which occasionally surface NULs
+// in binary-ish string attributes) breaks the sync pipeline.
+//
+// This helper produces a JSON string safe to feed into a jsonb column by
+// stripping NUL chars from every string value, recursively. We don't replace
+// with a placeholder — the data is opaque cache state, and removing the byte
+// keeps DN/UPN matching untouched.
+
+export function stringifyForJsonb(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    typeof v === 'string' && v.includes('\u0000') ? v.replaceAll('\u0000', '') : v,
+  );
+}

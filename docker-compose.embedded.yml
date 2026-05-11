@@ -1,0 +1,55 @@
+# OpenADUC — embedded Postgres template.
+#
+# This file is what the installer copies to docker-compose.yml when the
+# operator chooses "use the bundled Postgres" during install. It is
+# byte-identical to the production base (docker-compose.yml in this repo)
+# and exists as a separate file so the installer can copy it without
+# making decisions.
+#
+# If you're reading this in your own install directory, the canonical
+# stack definition is here.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    image: ${OPENADUC_API_IMAGE:-openaduc/api:latest}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
+    ports:
+      - '3000:3000'
+
+  web:
+    image: ${OPENADUC_WEB_IMAGE:-openaduc/web:latest}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - '8080:80'
+
+volumes:
+  postgres-data:
