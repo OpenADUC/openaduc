@@ -15,6 +15,7 @@
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import Toast from 'primevue/toast';
 import { useThemeStore } from '../design/stores/useTheme.js';
 import { useOldSchool } from './stores/useOldSchool.js';
@@ -33,6 +34,7 @@ import FindDialog from './dialogs/FindDialog.vue';
 
 const theme = useThemeStore();
 const store = useOldSchool();
+const router = useRouter();
 
 const props = defineProps<{ embedded?: boolean }>();
 
@@ -107,8 +109,14 @@ const statusLeft = computed(() => {
 });
 const statusRight = computed(() => store.selectedNode.dn ?? '');
 
+// Exit / close / minimize all take the operator back to the
+// Appearance page (where they turned this on) and flip the toggle
+// off. Matches the user's mental model: closing the MMC window
+// returns to the modern app settings — there's nothing else for
+// these buttons to do.
 function exitOldSchool(): void {
   theme.setOldSchool(false);
+  void router.push({ name: 'appearance' });
 }
 </script>
 
@@ -120,7 +128,14 @@ function exitOldSchool(): void {
         <WinIcon class="os-titlebar-icon" name="aduc" :size="16" />
         <div class="os-titlebar-title">Active Directory Users and Computers</div>
         <div class="os-titlebar-controls">
-          <button class="os-titlebar-btn" type="button" title="Minimize" disabled>—</button>
+          <button
+            class="os-titlebar-btn"
+            type="button"
+            title="Minimize"
+            @click="exitOldSchool"
+          >
+            —
+          </button>
           <button class="os-titlebar-btn" type="button" title="Maximize" disabled>▢</button>
           <button
             class="os-titlebar-btn close"

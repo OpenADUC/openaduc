@@ -561,10 +561,19 @@
   margin-bottom: -1px;
   font-weight: 500;
 }
+/* The tab body is pinned to a fixed height so the dialog doesn't
+   resize when the operator switches tabs (real MMC always keeps the
+   dialog at the same dimensions and scrolls inside each tab). The
+   surrounding `.os-dialog` uses flex column with `min-height: 0` on
+   the body so this height is the load-bearing constraint. */
 .os-tab-body {
   background: var(--os-window-bg);
   padding: 14px 14px 10px;
   min-width: 480px;
+  height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 /* Form layout used in Properties dialogs */
@@ -742,14 +751,17 @@
   margin: 4px 0;
 }
 
-/* The container that paints over the routed view. */
+/* The container that paints over the routed view. The MMC window sits
+   on a teal-blue "desktop" with a small gutter all around — matches
+   how the real MMC console looks floating on a Windows workspace. */
 .os-host {
   position: fixed;
   inset: 0;
   z-index: 50;
-  display: flex;
+  display: block;
   background: #245a8f;
-  /* nostalgic teal-blue MMC desktop tint behind the window */
+  padding: 16px;
+  box-sizing: border-box;
 }
 .os-host.embedded {
   position: relative;
@@ -757,10 +769,10 @@
   width: 100%;
   height: 100%;
   z-index: auto;
+  padding: 14px;
 }
-
-/* When we're embedded inside AppShell.ds-page, fill it edge-to-edge. */
-.os-host.embedded .os-root {
-  border: 0;
-  box-shadow: none;
+.os-host .os-root {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
 }
