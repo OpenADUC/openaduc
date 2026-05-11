@@ -6,13 +6,21 @@
 # Usage:
 #   curl -fsSL https://openaduc.com/install.sh | bash
 #   curl -fsSL https://openaduc.com/install.sh | bash -s -- --version v0.1.0
+#   curl -fsSL https://openaduc.com/install.sh | bash -s -- --yes
 #
 # Or, from a checkout:
 #   ./install.sh
+#   ./install.sh --yes              # autopilot: accept all defaults, embedded DB
 #
 # Idempotent: re-running on an existing install prompts for upgrade /
 # reconfigure / abort. Never overwrites an existing .env without
 # explicit confirmation.
+#
+# Autopilot mode (--yes / -y / --autopilot):
+#   Skips all prompts and uses defaults — install dir $OPENADUC_INSTALL_DIR
+#   (default /opt/openaduc), embedded Postgres, public origin derived from
+#   hostname, no admin email hint. On an existing install, defaults to
+#   "upgrade". Suitable for unattended provisioning.
 
 set -euo pipefail
 
@@ -24,6 +32,7 @@ REPO_OWNER="${OPENADUC_REPO_OWNER:-OpenADUC}"
 REPO_NAME="${OPENADUC_REPO_NAME:-openaduc}"
 DEFAULT_VERSION="${OPENADUC_VERSION:-latest}"
 DEFAULT_INSTALL_DIR="${OPENADUC_INSTALL_DIR:-/opt/openaduc}"
+AUTOPILOT="${OPENADUC_AUTOPILOT:-0}"
 
 # When piped from curl, stdin is the script itself; read prompts must come
 # from the controlling terminal explicitly.
@@ -66,6 +75,11 @@ run() {
 
 ask() {
   local var="$1" question="$2" default="${3:-}" answer
+  if [ "$AUTOPILOT" = "1" ]; then
+    printf -v "$var" '%s' "$default"
+    printf "    %s = %s (autopilot)\n" "$question" "${default:-<empty>}"
+    return
+  fi
   if [ -n "$default" ]; then
     prompt "$question [$default]:"
   else
@@ -77,6 +91,9 @@ ask() {
 
 ask_secret() {
   local var="$1" question="$2" answer
+  if [ "$AUTOPILOT" = "1" ]; then
+    die "autopilot cannot supply a secret for: $question"
+  fi
   prompt "$question:"
   stty -echo < "$TTY" 2>/dev/null || true
   IFS= read -r answer < "$TTY" || true
@@ -88,6 +105,11 @@ ask_secret() {
 ask_choice() {
   local var="$1" question="$2"; shift 2
   local choices=("$@") i=1 answer=""
+  if [ "$AUTOPILOT" = "1" ]; then
+    printf -v "$var" '%s' "${choices[0]}"
+    printf "    %s = %s (autopilot)\n" "$question" "${choices[0]}"
+    return
+  fi
   printf "%s?%s %s\n" "$C_BOLD" "$C_RESET" "$question"
   for c in "${choices[@]}"; do
     printf "    %d) %s\n" "$i" "$c"
@@ -370,8 +392,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --version)         DEFAULT_VERSION="$2"; shift 2 ;;
     --install-dir)     DEFAULT_INSTALL_DIR="$2"; shift 2 ;;
+    -y|--yes|--autopilot) AUTOPILOT=1; shift ;;
     -h|--help)
-      sed -n '2,15p' "$0" | sed 's/^# \?//'
+      sed -n '2,23p' "$0" | sed 's/^# \?//'
       exit 0
       ;;
     *) die "unknown argument: $1" ;;
