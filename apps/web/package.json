@@ -14,7 +14,7 @@
   "dependencies": {
     "@openaduc/shared": "workspace:*",
     "@primevue/themes": "^4.2.5",
-    "@vueuse/core": "^12.4.0",
+    "@vueuse/core": "^14.3.0",
     "cronstrue": "^3.14.0",
     "pinia": "^2.3.0",
     "primeicons": "^7.0.0",
