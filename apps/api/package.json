@@ -20,7 +20,7 @@
   "dependencies": {
     "@openaduc/shared": "workspace:*",
     "@fastify/cookie": "^11.0.2",
-    "@fastify/cors": "^10.0.2",
+    "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.1",
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/sensible": "^6.0.3",
