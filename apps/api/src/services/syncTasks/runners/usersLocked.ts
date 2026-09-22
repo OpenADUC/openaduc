@@ -38,7 +38,7 @@ export async function runUsersLocked(ctx: RunnerContext): Promise<RunnerResult> 
 
   // Anyone we previously had marked locked who isn't in this result is
   // no longer locked. Clear the flag in a single statement.
-  let cleared = 0;
+  let cleared: number;
   if (seenGuids.size === 0) {
     const res = await ctx.db
       .updateTable('user_cache_records')

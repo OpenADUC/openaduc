@@ -8,11 +8,15 @@ updates:
       time: '06:00'
       timezone: Etc/UTC
     open-pull-requests-limit: 10
+    # Match the Node 22 runtime in .nvmrc and the Docker images.
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       types:
         patterns: ['@types/*']
       eslint:
-        patterns: ['eslint*', '@eslint/*', '@typescript-eslint/*']
+        patterns: ['eslint*', '@eslint/*', '@typescript-eslint/*', 'typescript-eslint']
       vue:
         patterns: ['vue', 'vue-*', '@vue/*', '@vitejs/*', 'vite', 'pinia', 'primevue']
       tailwind:

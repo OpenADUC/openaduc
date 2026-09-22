@@ -423,10 +423,8 @@ export function normalizeDeletedUser(entry: Entry): DirectoryDeletedUser {
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
   }
-  // AD stores `isDeleted` and `isRecycled` as the literal strings
-  // "TRUE"/"FALSE". Treat presence-as-TRUE generously since some servers
-  // omit the value entirely once deletion is complete.
-  const isDeletedRaw = asString(entry.isDeleted);
+  // The search filter already requires (isDeleted=TRUE). AD stores
+  // `isRecycled` as the literal strings "TRUE"/"FALSE".
   const isRecycledRaw = asString(entry.isRecycled);
   const recycled = isRecycledRaw !== null && isRecycledRaw.toUpperCase() === 'TRUE';
 
@@ -443,10 +441,6 @@ export function normalizeDeletedUser(entry: Entry): DirectoryDeletedUser {
     recycled,
     rawAttributes: raw,
   };
-  // isDeletedRaw is read for completeness — every entry returned with the
-  // ShowDeleted control should have it; we don't gate on the value because
-  // the search filter already requires (isDeleted=TRUE).
-  void isDeletedRaw;
 }
 
 export function normalizeComputer(entry: Entry): DirectoryComputer {
