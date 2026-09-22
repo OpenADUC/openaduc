@@ -324,7 +324,7 @@ export class SyncTaskScheduler {
     let cursor: string | null | undefined;
     let stats: Record<string, unknown> | null | undefined;
     let triggers: SyncTaskKey[] = [];
-    let outcome: RunOnceResult = { ok: false, error: 'task did not start' };
+    let outcome: RunOnceResult;
     // Declared outside the try so the catch block can close the history
     // row even when the runner throws after markStarted has succeeded.
     let started: { runId: number; startedAt: Date } | null = null;

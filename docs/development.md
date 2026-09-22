@@ -4,7 +4,7 @@ This guide is for working on OpenADUC itself — running the stack from source, 
 
 ## Prerequisites
 
-- **Node.js 22** (`.nvmrc` pins the exact patch version — `nvm use` will pick it up).
+- **Node.js 22.13 or newer in the Node 22 release line** (`.nvmrc` selects Node 22; `nvm install && nvm use` installs and selects its latest patch). ESLint 10 requires at least 22.13.
 - **pnpm 10** (`corepack enable && corepack prepare pnpm@10 --activate` is the easy path).
 - **Docker** with Compose v2 — used for Postgres and (optionally) a local Samba AD-DC container.
 - **A directory to talk to.** Either a real test AD (preferred), or the bundled dev Samba container (see below). Pointing dev at a production DC is a bad idea.
@@ -98,6 +98,11 @@ scripts/       dev-kill, snapshot/restore
 ```
 
 ## Pull requests
+
+Dependabot groups related dependency updates in `.github/dependabot.yml`. Keep
+`@types/node` on the same major version as `.nvmrc` and the Docker images; its
+automatic major updates are ignored until the runtime is upgraded. The ESLint
+group includes `typescript-eslint` so the parser and lint rules update together.
 
 1. Branch from `main` (`git checkout -b feat/short-description`).
 2. Make your change. Keep commits reviewable; rebase to clean up before opening the PR.

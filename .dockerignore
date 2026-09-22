@@ -3,6 +3,7 @@ node_modules
 **/dist
 **/build
 **/coverage
+**/*.tsbuildinfo
 .git
 .github
 .vscode
