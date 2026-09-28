@@ -24,7 +24,7 @@
     "@fastify/helmet": "^13.1.0",
     "@fastify/rate-limit": "^11.1.0",
     "@fastify/sensible": "^6.0.3",
-    "cron-parser": "^5.5.0",
+    "cron-parser": "^5.10.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.10.0",
     "fastify-plugin": "^5.0.1",
