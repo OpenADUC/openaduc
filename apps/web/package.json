@@ -16,22 +16,22 @@
     "@primevue/themes": "^4.2.5",
     "@vueuse/core": "^14.3.0",
     "cronstrue": "^3.14.0",
-    "pinia": "^4.0.2",
+    "pinia": "^4.1.0",
     "primeicons": "^7.0.0",
-    "primevue": "^5.0.0",
-    "vue": "^3.5.40",
-    "vue-router": "^5.2.0",
+    "primevue": "^5.0.2",
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.0",
-    "@vitejs/plugin-vue": "^6.0.8",
+    "@vitejs/plugin-vue": "^6.0.10",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.7.3",
-    "vite": "^8.1.5",
+    "vite": "^8.3.4",
     "vitest": "^4.1.6",
-    "vue-tsc": "^3.3.7"
+    "vue-tsc": "^3.3.13"
   }
 }
