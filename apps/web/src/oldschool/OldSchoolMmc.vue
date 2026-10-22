@@ -27,6 +27,7 @@ import GroupPropertiesDialog from './dialogs/GroupPropertiesDialog.vue';
 import ComputerPropertiesDialog from './dialogs/ComputerPropertiesDialog.vue';
 import ResetPasswordDialog from './dialogs/ResetPasswordDialog.vue';
 import MoveDialog from './dialogs/MoveDialog.vue';
+import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
 import AddToGroupDialog from './dialogs/AddToGroupDialog.vue';
 import ConfirmDialog from './dialogs/ConfirmDialog.vue';
 import AboutDialog from './dialogs/AboutDialog.vue';
@@ -355,6 +356,13 @@ function exitOldSchool(): void {
         :window-id="w.id"
         :id="w.dialog.id"
         :sam-account-name="w.dialog.samAccountName"
+        @close="store.closeWindow(w.id)"
+      />
+      <DeleteUserDialog
+        v-else-if="w.dialog.kind === 'delete-user'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        :label="w.dialog.label"
         @close="store.closeWindow(w.id)"
       />
       <MoveDialog

@@ -13,6 +13,7 @@ export const CAPABILITIES = [
   'write:user.enableDisable',
   'write:user.attributes',
   'write:user.move',
+  'write:user.delete',
   'write:user.restore',
   'write:group.membership',
   'write:ou.create',

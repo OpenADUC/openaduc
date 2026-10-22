@@ -38,3 +38,16 @@ export class ShowRecycledControl extends Control {
 export function deletedObjectControls(): Control[] {
   return [new ShowDeletedControl(), new ShowRecycledControl()];
 }
+
+// LDAP_SERVER_TREE_DELETE_OID (1.2.840.113556.1.4.805): MS-ADTS
+// §3.1.1.3.4.1.15. Deletes the object together with everything under it.
+// Users only have children when something parked objects there, most often
+// Exchange ActiveSync device containers; a plain delete of such a user fails
+// with notAllowedOnNonLeaf. Needs the Delete Subtree right.
+const TREE_DELETE_OID = '1.2.840.113556.1.4.805';
+
+export class TreeDeleteControl extends Control {
+  constructor() {
+    super(TREE_DELETE_OID, { critical: true });
+  }
+}

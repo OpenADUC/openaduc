@@ -34,6 +34,8 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },
   'user.move': { title: 'Moved to OU', iconClass: 'pi pi-folder', tone: 'tone-blue' },
+  'user.delete': { title: 'Account deleted', iconClass: 'pi pi-trash', tone: 'tone-red' },
+  'user.restore': { title: 'Account restored', iconClass: 'pi pi-replay', tone: 'tone-green' },
 };
 
 const items = computed<FeedItem[]>(() =>

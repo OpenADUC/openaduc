@@ -24,6 +24,7 @@ export type DialogSpec =
   | { kind: 'group-properties'; id: string }
   | { kind: 'computer-properties'; id: string }
   | { kind: 'reset-password'; id: string; samAccountName: string }
+  | { kind: 'delete-user'; id: string; label: string }
   | { kind: 'move'; objectKind: 'user' | 'group' | 'computer'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | {
@@ -71,6 +72,8 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
       return { width: 540, height: 560 };
     case 'reset-password':
       return { width: 440, height: 340 };
+    case 'delete-user':
+      return { width: 460, height: 270 };
     case 'move':
       return { width: 460, height: 500 };
     case 'add-to-group':

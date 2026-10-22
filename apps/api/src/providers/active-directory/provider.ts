@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { Attribute, Change, EqualityFilter, type Client, type Entry, type Filter } from 'ldapts';
+import {
+  Attribute,
+  Change,
+  ConstraintViolationError,
+  AlreadyExistsError,
+  EqualityFilter,
+  InsufficientAccessError,
+  NotAllowedOnNonLeafError,
+  UnwillingToPerformError,
+  type Client,
+  type Entry,
+  type Filter,
+} from 'ldapts';
 import type {
   AuthResult,
   AuthenticateInput,
@@ -32,7 +44,8 @@ import type {
 } from '../types.js';
 import { StepUpBindFailedError } from '../types.js';
 import { type ClientConfig, withFailover } from './client.js';
-import { ShowDeletedControl, deletedObjectControls } from './controls.js';
+import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
+import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
 import {
   BINARY_ATTRS,
   COMPUTER_ATTRS,
@@ -956,6 +969,57 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           reason: isAuthz ? 'permission_denied' : 'directory_error',
           errorMessage: message,
         };
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  /**
+   * Delete a disabled user. The guard runs against the entry read on the
+   * operator's own bind, immediately before the delete, so it holds even
+   * if the caller's view of the account is stale.
+   *
+   * A plain delete is tried first because Delete is the right helpdesk
+   * roles are usually delegated; only a user with child objects needs the
+   * tree delete and its Delete Subtree right.
+   */
+  async deleteUser(
+    userId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { treeDelete?: boolean }> {
+    return withFailover(this.clientConfig, async (client) => {
+      try {
+        await client.bind(ctx.actorUsername, ctx.actorPassword);
+      } catch {
+        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
+      }
+      try {
+        const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
+        const user = normalizeUser(target);
+        const before = deletionSnapshot(user);
+        const blocked = userDeleteBlockReason(user);
+        if (blocked) {
+          return {
+            ok: false,
+            reason: 'policy_violation',
+            errorMessage: describeDeleteBlock(blocked),
+            before,
+          };
+        }
+
+        let treeDelete = false;
+        try {
+          await client.del(user.distinguishedName);
+        } catch (err) {
+          if (!(err instanceof NotAllowedOnNonLeafError)) throw err;
+          treeDelete = true;
+          await client.del(user.distinguishedName, new TreeDeleteControl());
+        }
+        return { ok: true, before, after: { deleted: true, treeDelete }, treeDelete };
+      } catch (err) {
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -2077,4 +2141,39 @@ function rawAuditArray(v: unknown): string[] {
   return arr
     .map((x) => (typeof x === 'string' ? x : x === null || x === undefined ? '' : String(x)))
     .filter((s) => s.length > 0);
+}
+
+/**
+ * What a deleted account looked like. On domains without the Recycle Bin
+ * the tombstone loses most of this, so the audit row is the only record of
+ * the account's groups and attributes.
+ */
+function deletionSnapshot(user: DirectoryUser): Record<string, unknown> {
+  return {
+    ...snapshotForAudit(user),
+    distinguishedName: user.distinguishedName,
+    samAccountName: user.samAccountName,
+    userPrincipalName: user.userPrincipalName,
+    sid: user.sid,
+    enabled: user.enabled,
+    memberOf: user.memberOfDns,
+  };
+}
+
+/**
+ * Map an LDAP write failure to a MutationResult reason by result code
+ * rather than by message text, which varies across DC versions.
+ */
+function classifyWriteError(err: unknown): MutationResult {
+  const errorMessage = err instanceof Error ? err.message : 'write failed';
+  if (err instanceof InsufficientAccessError) {
+    return { ok: false, reason: 'permission_denied', errorMessage };
+  }
+  if (err instanceof AlreadyExistsError || err instanceof ConstraintViolationError) {
+    return { ok: false, reason: 'conflict', errorMessage };
+  }
+  if (err instanceof UnwillingToPerformError || err instanceof NotAllowedOnNonLeafError) {
+    return { ok: false, reason: 'policy_violation', errorMessage };
+  }
+  return { ok: false, reason: 'directory_error', errorMessage };
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { recycleBinStatusSchema } from './deletedUser.js';
 
 // `z.coerce.boolean()` calls JS `Boolean(v)` which returns true for any
 // non-empty string — so `?enabled=false` would coerce to `true` and silently
@@ -319,6 +320,59 @@ export const userUpdateRequestSchema = z.object({
     .refine((p) => Object.keys(p).length > 0, { message: 'patch must contain at least one field' }),
 });
 export type UserUpdateRequest = z.infer<typeof userUpdateRequestSchema>;
+
+// ---- Delete ------------------------------------------------------------
+//
+// Only disabled accounts can be deleted, and never AD's own accounts. The
+// server re-checks both against the live entry immediately before the
+// delete, so a stale list in the browser can't delete someone who was
+// re-enabled in the meantime.
+
+export const userDeleteRequestSchema = z
+  .object({
+    // Must match the account's current sAMAccountName (case-insensitive).
+    // Makes every delete name its target explicitly, so a wrong id in the
+    // URL fails instead of deleting the wrong person.
+    confirmSamAccountName: z.string().min(1).max(256),
+  })
+  .strict();
+export type UserDeleteRequest = z.infer<typeof userDeleteRequestSchema>;
+
+export const userDeleteBlockReasonSchema = z.enum([
+  // Still enabled — disable first.
+  'enabled',
+  // isCriticalSystemObject=TRUE (Guest, krbtgt, DefaultAccount, ...).
+  'critical_system_object',
+  // Well-known RID below 1000 — the accounts AD creates for itself.
+  'builtin_account',
+  // Not in the cache (deleted elsewhere, or the id is wrong).
+  'not_found',
+]);
+export type UserDeleteBlockReason = z.infer<typeof userDeleteBlockReasonSchema>;
+
+export const userDeletePreflightRequestSchema = z
+  .object({ ids: z.array(z.guid()).min(1).max(1000) })
+  .strict();
+export type UserDeletePreflightRequest = z.infer<typeof userDeletePreflightRequestSchema>;
+
+export const userDeletePreflightResponseSchema = z.object({
+  // Null when the operator's bind can't read the Optional Features
+  // container; the UI then says restore may not be possible.
+  recycleBin: recycleBinStatusSchema.nullable(),
+  users: z.array(
+    z.object({
+      id: z.string(),
+      samAccountName: z.string().nullable(),
+      displayName: z.string().nullable(),
+      distinguishedName: z.string().nullable(),
+      enabled: z.boolean().nullable(),
+      // adminCount=1. Deletable, but the dialog flags it.
+      privileged: z.boolean(),
+      blockedReason: userDeleteBlockReasonSchema.nullable(),
+    }),
+  ),
+});
+export type UserDeletePreflightResponse = z.infer<typeof userDeletePreflightResponseSchema>;
 
 // ---- Directory policy --------------------------------------------------
 //

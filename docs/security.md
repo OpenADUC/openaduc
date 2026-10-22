@@ -32,6 +32,10 @@ Authorization is capability-based, not role-based at the call site. Routes decla
 
 The capability set is intentionally fine-grained (`read:user`, `write:user.resetPassword`, `write:user.unlock`, `write:user.attributes`, `write:group.membership`, `configure:directory`, `view:audit`, `view:raw_attributes`, etc.) so that giving someone "the ability to unlock accounts" doesn't also give them "the ability to reset passwords."
 
+Deleting users carries extra guard rails because it's hard to undo:
+
+- **Delete** (`write:user.delete`, admin role only) works on disabled accounts only, and never on accounts AD marks `isCriticalSystemObject` or creates for itself (RID below 1000: Guest, krbtgt, DefaultAccount, …). The API re-checks both against the live entry immediately before deleting, and each request must repeat the account's sAMAccountName, so a stale list or a wrong id can't delete the wrong person. The audit row keeps the account's attributes and group memberships, which is the only record left on domains without the AD Recycle Bin.
+
 A failed capability check returns 403 and writes an `authz.deny` row to the audit log with the required capability, the actor, and the request correlation id.
 
 ## Step-up authentication

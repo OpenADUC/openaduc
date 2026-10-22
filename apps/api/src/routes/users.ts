@@ -5,16 +5,21 @@ import {
   groupMembershipChangeSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
+  userDeletePreflightRequestSchema,
+  userDeleteRequestSchema,
   userMoveRequestSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
   userUpdateRequestSchema,
+  type RecycleBinStatus,
+  type UserDeletePreflightResponse,
   type UserDetail,
   type UserSearchResponse,
 } from '@openaduc/shared';
 import { z } from 'zod';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import type { DirectoryProvider } from '../providers/types.js';
+import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
+import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
+import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
@@ -1010,6 +1015,170 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // Refresh cache so the new distinguished_name lands in user_cache_records.
       await app.services.userLiveRefresh.refresh(provider, id);
       return { ok: true, before: result.before, after: result.after };
+    },
+  });
+
+  // ---- POST /api/users/delete-preflight --------------------------------
+  // What the delete dialog shows before the operator confirms: which of the
+  // selected accounts can be deleted, why the rest can't, and whether the
+  // Recycle Bin will let them be restored. Reads the cache; the delete
+  // itself re-checks the live entry.
+  app.post('/api/users/delete-preflight', {
+    preHandler: [app.requireCapability('write:user.delete'), app.requireStepUp],
+    handler: async (req): Promise<UserDeletePreflightResponse> => {
+      const body = userDeletePreflightRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const rows = await app.db
+        .selectFrom('user_cache_records')
+        .where('provider_id', '=', provider.id)
+        .where('deleted_at', 'is', null)
+        .where('object_guid', 'in', body.ids)
+        .select([
+          'object_guid',
+          'sam_account_name',
+          'display_name',
+          'distinguished_name',
+          'enabled',
+          'sid',
+          'raw_attributes_json',
+        ])
+        .execute();
+      const byId = new Map(rows.map((r) => [r.object_guid, r]));
+
+      // Recycle Bin state needs the operator's bind (Optional Features is
+      // usually unreadable to a minimal service account). Not knowing it
+      // shouldn't block a delete, so anything but a dead step-up session
+      // degrades to null.
+      let recycleBin: RecycleBinStatus | null = null;
+      try {
+        recycleBin = await provider.getRecycleBinStatus(ctx(actor, req));
+      } catch (err) {
+        if (err instanceof StepUpBindFailedError) {
+          throw StepUpRequired(
+            'the directory rejected your editing session — please re-authenticate',
+          );
+        }
+        req.log.warn({ err }, 'recycle bin status unavailable for delete preflight');
+      }
+
+      return {
+        recycleBin,
+        users: body.ids.map((id) => {
+          const row = byId.get(id);
+          if (!row) {
+            return {
+              id,
+              samAccountName: null,
+              displayName: null,
+              distinguishedName: null,
+              enabled: null,
+              privileged: false,
+              blockedReason: 'not_found' as const,
+            };
+          }
+          const raw = row.raw_attributes_json ?? {};
+          return {
+            id,
+            samAccountName: row.sam_account_name,
+            displayName: row.display_name,
+            distinguishedName: row.distinguished_name,
+            enabled: row.enabled,
+            privileged: rawScalarValue(raw['adminCount']) === '1',
+            blockedReason: userDeleteBlockReason({
+              enabled: row.enabled,
+              sid: row.sid,
+              rawAttributes: raw,
+            }),
+          };
+        }),
+      };
+    },
+  });
+
+  // ---- DELETE /api/users/:id -------------------------------------------
+  // Disabled accounts only. Body: { confirmSamAccountName }.
+  app.delete('/api/users/:id', {
+    preHandler: [app.requireCapability('write:user.delete'), app.requireStepUp],
+    handler: async (req) => {
+      const { id } = idParamSchema.parse(req.params);
+      const body = userDeleteRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
+      if (!beforeRefresh) throw NotFound('user not found');
+      const live = beforeRefresh.user;
+      if (
+        !live.samAccountName ||
+        live.samAccountName.toLowerCase() !== body.confirmSamAccountName.trim().toLowerCase()
+      ) {
+        throw app.httpErrors.badRequest('confirmation does not match the account’s logon name');
+      }
+      // Refuse before writing an audit row: nothing was attempted. The
+      // provider repeats this check on its own read right before the delete.
+      const blocked = userDeleteBlockReason(live);
+      if (blocked) throw app.httpErrors.conflict(`cannot delete: ${describeDeleteBlock(blocked)}`);
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'user.delete',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'user',
+          targetId: live.objectGuid,
+          targetDn: live.distinguishedName,
+          metadata: { samAccountName: live.samAccountName },
+        },
+        async () => {
+          const r = await provider.deleteUser({ kind: 'objectGuid', value: id }, ctx(actor, req));
+          return {
+            ok: r.ok,
+            before: r.before ?? null,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+            errorMessage: r.errorMessage ?? null,
+            treeDelete: r.treeDelete ?? false,
+          };
+        },
+      );
+
+      if (!result.ok) {
+        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+        if (result.errorCode === 'permission_denied') {
+          throw app.httpErrors.forbidden(
+            `directory refused the delete — you may lack the Delete right, or the account is protected from accidental deletion${detail}`,
+          );
+        }
+        if (result.errorCode === 'policy_violation') {
+          throw app.httpErrors.conflict(`cannot delete${detail}`);
+        }
+        if (result.errorCode === 'not_found') throw NotFound('user not found');
+        throw app.httpErrors.badGateway(`delete failed${detail}`);
+      }
+
+      // Drop the account from list views now rather than at the next full
+      // sync. A restore upserts the row, which clears deleted_at again.
+      await app.db.transaction().execute(async (trx) => {
+        await trx
+          .updateTable('user_cache_records')
+          .set({ deleted_at: new Date().toISOString() })
+          .where('provider_id', '=', provider.id)
+          .where('object_guid', '=', live.objectGuid)
+          .execute();
+        await trx
+          .deleteFrom('user_group_memberships')
+          .where('provider_id', '=', provider.id)
+          .where('user_object_guid', '=', live.objectGuid)
+          .execute();
+      });
+
+      return { ok: true, treeDelete: result.treeDelete };
     },
   });
 }

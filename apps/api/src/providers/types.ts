@@ -281,7 +281,7 @@ export interface MutationResult {
   ok: boolean;
   before?: Record<string, unknown>;
   after?: Record<string, unknown>;
-  reason?: 'not_found' | 'permission_denied' | 'policy_violation' | 'directory_error';
+  reason?: 'not_found' | 'permission_denied' | 'policy_violation' | 'conflict' | 'directory_error';
   errorMessage?: string;
 }
 
@@ -422,6 +422,14 @@ export interface DirectoryProvider {
     targetOuDn: string,
     ctx: WriteContext,
   ): Promise<MutationResult>;
+  // Delete a disabled user. Re-checks against the live entry that the
+  // account is disabled and isn't one of AD's own accounts, and returns
+  // `policy_violation` if not. Falls back to a tree delete when the user
+  // has child objects (Exchange ActiveSync devices, for one).
+  deleteUser(
+    userId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { treeDelete?: boolean }>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.
