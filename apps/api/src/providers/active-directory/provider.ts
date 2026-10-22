@@ -48,6 +48,7 @@ import { DirectoryUnavailableError, StepUpBindFailedError } from '../types.js';
 import {
   type ClientConfig,
   describeConnectionError,
+  certificateProblemMessage,
   isDirectoryUnreachable,
   withFailover,
 } from './client.js';
@@ -284,7 +285,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       return {
         ok: false,
         reason: 'directory_error',
-        errorMessage: `cannot reach directory: ${describeConnectionError(err)}`,
+        errorMessage:
+          certificateProblemMessage(err) ??
+          `cannot reach directory: ${describeConnectionError(err)}`,
       };
     }
   }
@@ -1946,7 +1949,7 @@ function classifyBindError(err: unknown): AuthResult {
     return {
       ok: false,
       reason: 'directory_error',
-      errorMessage: `cannot reach directory: ${message}`,
+      errorMessage: certificateProblemMessage(err) ?? `cannot reach directory: ${message}`,
     };
   }
 

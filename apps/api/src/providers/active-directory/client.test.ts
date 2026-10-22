@@ -6,7 +6,7 @@ import {
   UnavailableError,
 } from 'ldapts';
 import { describe, expect, it } from 'vitest';
-import { isDirectoryUnreachable, transportFor } from './client.js';
+import { certificateProblemMessage, isDirectoryUnreachable, transportFor } from './client.js';
 
 const sysErr = (code: string) => Object.assign(new Error(`connect ${code} 10.0.0.1:636`), { code });
 
@@ -66,5 +66,36 @@ describe('transportFor', () => {
     // Directories saved before URLs were validated: ldap://dc:636 under
     // LDAPS has always connected with TLS, and must keep doing so.
     expect(transportFor('ldap://dc1:636', 'ldaps')).toBe('tls');
+  });
+});
+
+describe('certificateProblemMessage', () => {
+  const tlsErr = (code: string) => Object.assign(new Error(code), { code });
+
+  it('tells an untrusted certificate apart from a wrong name or an expired one', () => {
+    expect(certificateProblemMessage(tlsErr('SELF_SIGNED_CERT_IN_CHAIN'))).toMatch(
+      /AD_TLS_CA_PATH/,
+    );
+    const wrongName = certificateProblemMessage(tlsErr('ERR_TLS_CERT_ALTNAME_INVALID'));
+    expect(wrongName).toMatch(/doesn't name the host/);
+    expect(wrongName).not.toMatch(/AD_TLS_CA_PATH/);
+    const expired = certificateProblemMessage(tlsErr('CERT_HAS_EXPIRED'));
+    expect(expired).toMatch(/expired/);
+    expect(expired).not.toMatch(/AD_TLS_CA_PATH/);
+  });
+
+  it('finds the certificate failure of one DC among several', () => {
+    const allDown = new AggregateError([
+      tlsErr('UNABLE_TO_VERIFY_LEAF_SIGNATURE'),
+      Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    ]);
+    expect(certificateProblemMessage(new Error('wrapped', { cause: allDown }))).toMatch(
+      /isn't trusted/,
+    );
+  });
+
+  it('is null for failures that have nothing to do with certificates', () => {
+    expect(certificateProblemMessage(tlsErr('ECONNREFUSED'))).toBeNull();
+    expect(certificateProblemMessage(new Error('Connection timeout'))).toBeNull();
   });
 });

@@ -23,6 +23,55 @@ export function transportFor(url: string, mode: LdapTlsMode): 'tls' | 'starttls'
   return mode === 'starttls' && ldapUrlScheme(url) === 'ldap' ? 'starttls' : 'tls';
 }
 
+// Node's codes for a server certificate this process doesn't trust.
+// What to do about each kind of certificate failure Node reports.
+const UNTRUSTED_FIX =
+  'Give OpenADUC the CA that issued it (AD_TLS_CA_PATH, see docs/configuration.md), ' +
+  "or for a lab directory turn off 'Reject untrusted certs' knowing the connection can then be intercepted.";
+const CERTIFICATE_PROBLEMS: Record<string, string> = {
+  SELF_SIGNED_CERT_IN_CHAIN: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  DEPTH_ZERO_SELF_SIGNED_CERT: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_GET_ISSUER_CERT: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  CERT_UNTRUSTED: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  ERR_TLS_CERT_ALTNAME_INVALID:
+    "the domain controller's certificate doesn't name the host in the LDAP URL. " +
+    'Use the name the certificate was issued for (usually the DC’s fully qualified name), or reissue the certificate with that name.',
+  CERT_HAS_EXPIRED:
+    "the domain controller's certificate has expired. Renew it on the DC (AD CS usually does this automatically; check autoenrollment).",
+  CERT_NOT_YET_VALID:
+    "the domain controller's certificate isn't valid yet. Check the clock on the DC and on this server.",
+};
+
+/** Every error inside `err`: itself, its cause, and an AggregateError's members. */
+function errorsWithin(err: unknown): unknown[] {
+  const found: unknown[] = [];
+  const walk = (e: unknown, depth: number) => {
+    if (e === undefined || e === null || depth > 4) return;
+    found.push(e);
+    if (e instanceof AggregateError) for (const inner of e.errors) walk(inner, depth + 1);
+    if (e instanceof Error) walk(e.cause, depth + 1);
+  };
+  walk(err, 0);
+  return found;
+}
+
+/**
+ * When a TLS failure anywhere in `err` (including any one DC of several) is
+ * about the DC's certificate, say what's wrong with it and how to fix it;
+ * otherwise null.
+ */
+export function certificateProblemMessage(err: unknown): string | null {
+  for (const e of errorsWithin(err)) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string' && CERTIFICATE_PROBLEMS[code]) {
+      return `${CERTIFICATE_PROBLEMS[code]} (${code})`;
+    }
+  }
+  return null;
+}
+
 /**
  * Build a fresh ldapts Client. Connections are created per-operation rather
  * than pooled — we explicitly want short-lived binds so credentials never live
@@ -124,6 +173,9 @@ export async function withFailover<T>(
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   let lastError: unknown;
+  // Every server's failure, so the error explains all of them (one DC's bad
+  // certificate shouldn't hide behind the next DC being down).
+  const failures: { url: string; err: unknown }[] = [];
   for (const url of config.ldapUrls) {
     const client = createClient(config, url);
     try {
@@ -133,6 +185,7 @@ export async function withFailover<T>(
       return await fn(client);
     } catch (err) {
       lastError = err;
+      failures.push({ url, err });
       // Best-effort tear-down before trying the next URL.
       try {
         await client.unbind();
@@ -142,7 +195,10 @@ export async function withFailover<T>(
     }
   }
   if (isDirectoryUnreachable(lastError)) {
-    throw new DirectoryUnavailableError(describeConnectionError(lastError), lastError);
+    throw new DirectoryUnavailableError(
+      failures.map((f) => `${f.url}: ${describeConnectionError(f.err)}`).join('; '),
+      failures.length === 1 ? lastError : new AggregateError(failures.map((f) => f.err)),
+    );
   }
   throw lastError instanceof Error
     ? lastError

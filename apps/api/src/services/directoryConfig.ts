@@ -28,6 +28,12 @@ export interface DirectoryProviderSummary {
    */
   transportProblem: string | null;
   /**
+   * The DC's certificate isn't verified (per-directory setting, or the
+   * AD_TLS_REJECT_UNAUTHORIZED default), so the connection can be
+   * intercepted. Flagged to admins.
+   */
+  certificateCheckOff: boolean;
+  /**
    * Per-directory TLS hardening setting. False = accept self-signed certs
    * (lab / on-prem dev DCs). The env var is the global default; this
    * column overrides it per directory so a single instance can mix
@@ -93,9 +99,8 @@ export function buildEphemeralProvider(
 export class DirectoryConfigService {
   constructor(
     private readonly db: Kysely<DB>,
-    // env is unused now that bind credentials aren't stored, but kept on the
-    // service for future per-directory env defaults (timeouts, etc.).
-    _env: Env,
+    // Global defaults a directory's own settings fall back to.
+    private readonly env: Env,
   ) {}
 
   /** True iff at least one configured directory_providers row exists. */
@@ -136,7 +141,7 @@ export class DirectoryConfigService {
       .selectAll()
       .where('id', '=', id)
       .executeTakeFirst();
-    return row ? rowToSummary(row) : null;
+    return row ? rowToSummary(row, this.env) : null;
   }
 
   /**
@@ -168,7 +173,7 @@ export class DirectoryConfigService {
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    return rowToSummary(row);
+    return rowToSummary(row, this.env);
   }
 
   /**
@@ -238,7 +243,7 @@ export class DirectoryConfigService {
       .returningAll()
       .executeTakeFirstOrThrow();
 
-    return rowToSummary(updated);
+    return rowToSummary(updated, this.env);
   }
 
   async listAll(): Promise<DirectoryProviderSummary[]> {
@@ -248,7 +253,7 @@ export class DirectoryConfigService {
       .orderBy('configured', 'desc')
       .orderBy('id', 'asc')
       .execute();
-    return rows.map(rowToSummary);
+    return rows.map((r) => rowToSummary(r, this.env));
   }
 }
 
@@ -258,22 +263,25 @@ function parseTlsRejectUnauthorized(config: unknown): boolean | null {
   return typeof v === 'boolean' ? v : null;
 }
 
-function rowToSummary(row: {
-  id: number | string;
-  name: string;
-  display_name: string | null;
-  type: string;
-  domain_name: string;
-  base_dn: string;
-  ldap_urls: string[];
-  tls_mode: string;
-  config_json: unknown;
-  configured: boolean;
-  sync_bind_upn?: string | null;
-  sync_bind_secret_encrypted?: string | null;
-  created_at: Date | string;
-  updated_at: Date | string;
-}): DirectoryProviderSummary {
+function rowToSummary(
+  row: {
+    id: number | string;
+    name: string;
+    display_name: string | null;
+    type: string;
+    domain_name: string;
+    base_dn: string;
+    ldap_urls: string[];
+    tls_mode: string;
+    config_json: unknown;
+    configured: boolean;
+    sync_bind_upn?: string | null;
+    sync_bind_secret_encrypted?: string | null;
+    created_at: Date | string;
+    updated_at: Date | string;
+  },
+  env: Pick<Env, 'AD_TLS_REJECT_UNAUTHORIZED'>,
+): DirectoryProviderSummary {
   return {
     id: Number(row.id),
     name: row.name,
@@ -285,6 +293,8 @@ function rowToSummary(row: {
     tlsMode: parseTlsMode(row.tls_mode),
     transportProblem: ldapTransportProblem(row.ldap_urls, parseTlsMode(row.tls_mode)),
     tlsRejectUnauthorized: parseTlsRejectUnauthorized(row.config_json),
+    certificateCheckOff:
+      (parseTlsRejectUnauthorized(row.config_json) ?? env.AD_TLS_REJECT_UNAUTHORIZED) === false,
     configured: row.configured,
     syncBindUpn: row.sync_bind_upn ?? null,
     hasSyncBindPassword: !!row.sync_bind_secret_encrypted,

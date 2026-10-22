@@ -79,6 +79,8 @@ export interface DirectorySummary {
   tlsMode: LdapTlsMode;
   /** Why the URLs don't fit the TLS mode (saved before that was checked), or null. */
   transportProblem: string | null;
+  /** The DC's certificate isn't verified, so the connection can be intercepted. */
+  certificateCheckOff: boolean;
   tlsRejectUnauthorized: boolean | null;
   configured: boolean;
   // Sync service-account credentials — nullable when sync hasn't been
