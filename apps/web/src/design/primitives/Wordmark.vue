@@ -35,7 +35,7 @@ withDefaults(
 
 .ds-wordmark-acronym {
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-text);
   letter-spacing: -0.01em;
 }
 </style>

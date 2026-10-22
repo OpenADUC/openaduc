@@ -24,6 +24,14 @@ app.use(PrimeVue, {
       cssLayer: false,
     },
   },
+  pt: {
+    // Password marks its input as a popup trigger for the strength meter
+    // even with the meter off (:feedback="false" everywhere here); a plain
+    // password field mustn't claim aria-expanded / aria-haspopup.
+    password: {
+      pcInputText: { root: { 'aria-expanded': null, 'aria-haspopup': null } },
+    },
+  },
 });
 app.use(ToastService);
 app.directive('tooltip', Tooltip);

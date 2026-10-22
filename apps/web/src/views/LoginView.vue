@@ -123,7 +123,7 @@ async function onSubmit(): Promise<void> {
           <div class="login-row">
             <label for="password" class="fld-label">Password</label>
             <Password
-              id="password"
+              input-id="password"
               v-model="password"
               :feedback="false"
               toggle-mask

@@ -83,6 +83,7 @@ function onCancel(): void {
          password field focused and ready for typing. -->
     <Password
       v-model="password"
+      :input-props="{ 'aria-label': 'Your AD password' }"
       :feedback="false"
       toggle-mask
       input-class="w-full"

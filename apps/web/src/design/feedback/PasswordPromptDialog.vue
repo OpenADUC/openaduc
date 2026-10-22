@@ -54,6 +54,7 @@ function onCancel(): void {
     </p>
     <Password
       v-model="password"
+      :input-props="{ 'aria-label': 'Your AD password' }"
       :feedback="false"
       toggle-mask
       input-class="w-full"

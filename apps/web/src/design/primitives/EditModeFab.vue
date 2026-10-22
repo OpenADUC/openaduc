@@ -187,7 +187,7 @@ async function onClick(): Promise<void> {
 .edit-fab.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--bg);
+  color: var(--accent-contrast);
 }
 
 .edit-fab.on:hover:not(:disabled) {

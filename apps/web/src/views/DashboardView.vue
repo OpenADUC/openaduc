@@ -304,8 +304,9 @@ onMounted(load);
         title="No audit events yet"
         message="Activity will appear here as operators sign in and act."
       />
-      <ul v-else class="feed">
-        <li
+      <!-- Rows are buttons, so this is a plain container rather than a list. -->
+      <div v-else class="feed">
+        <div
           v-for="ev in recentEvents"
           :key="ev.id"
           class="feed-row clickable"
@@ -334,8 +335,8 @@ onMounted(load);
             </span>
           </div>
           <span class="feed-time mono">{{ fmtRelative(ev.timestamp) }}</span>
-        </li>
-      </ul>
+        </div>
+      </div>
     </Card>
 
     <AuditEventDialog v-model:visible="detailOpen" :event="detailEvent" />
