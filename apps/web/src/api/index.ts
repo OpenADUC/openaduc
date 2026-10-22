@@ -239,7 +239,9 @@ export interface SetupExistingDirectory {
 
 export interface SetupStatus {
   configured: boolean;
+  onboardingComplete: boolean;
   hasServiceAccount: boolean;
+  /** Only for the admin finishing setup; null for everyone else. */
   onboardingCompletedAt: string | null;
   existingDirectory: SetupExistingDirectory | null;
 }
