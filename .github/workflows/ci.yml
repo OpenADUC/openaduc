@@ -43,6 +43,23 @@ jobs:
       - name: Build
         run: pnpm build
 
+  integration:
+    name: Route integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Builds the dev Samba DC image, starts it and a disposable Postgres.
+      - run: pnpm test:integration
+      - name: Stop the dev DC
+        if: always()
+        run: pnpm dc:down
+
   format:
     name: Prettier
     runs-on: ubuntu-latest
