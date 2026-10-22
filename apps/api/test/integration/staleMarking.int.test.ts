@@ -35,6 +35,17 @@ describe('stale-marking after a full crawl of a large directory', () => {
       markOusStale(api.app.db, id, new Set([...seen].map((g) => `ou=${g},dc=x`))),
     ).resolves.not.toThrow();
 
+    const { clearLockedExcept } = await import('../../src/services/userCache.js');
+    await api.app.db
+      .updateTable('user_cache_records')
+      .set({ locked: true })
+      .where('sam_account_name', '=', 'alice.anders')
+      .execute();
+    // alice's GUID isn't in `seen`, so she's no longer locked.
+    expect(await clearLockedExcept(api.app.db, id, seen, new Date().toISOString())).toBeGreaterThan(
+      0,
+    );
+
     // None of the cached objects were in `seen`, so all are now stale.
     const fresh = await api.app.db
       .selectFrom('user_cache_records')

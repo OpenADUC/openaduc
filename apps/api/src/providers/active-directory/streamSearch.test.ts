@@ -34,6 +34,7 @@ describe('syncUsers', () => {
       name: 'test',
       baseDn: 'DC=x',
       ldapUrls: ['ldaps://dc'],
+      tlsMode: 'ldaps',
       tlsRejectUnauthorized: true,
       operationTimeoutMs: 1000,
       serviceAccountUpn: 'svc@x',

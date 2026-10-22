@@ -122,3 +122,24 @@ export async function markUsersStale(
   if (seen.size > 0) query = query.where(uuidNotIn('object_guid', seen));
   await query.execute();
 }
+
+/**
+ * Clear the locked flag on every cached user of the directory that's
+ * marked locked but isn't in `stillLocked` (an admin unlocked them
+ * elsewhere, or the lockout ran out). Returns how many were cleared.
+ */
+export async function clearLockedExcept(
+  db: Kysely<DB>,
+  providerId: number,
+  stillLocked: ReadonlySet<string>,
+  now: string,
+): Promise<number> {
+  let query = db
+    .updateTable('user_cache_records')
+    .set({ locked: false, live_refreshed_at: now })
+    .where('provider_id', '=', providerId)
+    .where('locked', '=', true);
+  if (stillLocked.size > 0) query = query.where(uuidNotIn('object_guid', stillLocked));
+  const res = await query.executeTakeFirst();
+  return Number(res.numUpdatedRows ?? 0n);
+}
