@@ -102,6 +102,7 @@ describe('with the first domain controller down', () => {
 
       expect(res.statusCode).toBe(502);
       expect(res.json<{ error: { code: string } }>().error.code).toBe('directory_unavailable');
+      expect(res.body).not.toMatch(/localhost|127\.0\.0\.1|10637|ECONNREFUSED/);
       const denied = await api.app.db
         .selectFrom('audit_events')
         .select('id')

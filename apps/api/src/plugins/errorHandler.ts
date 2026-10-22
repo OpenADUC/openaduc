@@ -41,9 +41,15 @@ export default fp(async (app) => {
       });
     }
     if (err instanceof DirectoryUnavailableError) {
+      // Which hosts and ports failed, and how, goes to the log only: the
+      // response is the same for every caller, as for sign-in.
       req.log.error({ err }, err.message);
       return reply.status(502).send({
-        error: { code: 'directory_unavailable', message: err.message },
+        error: {
+          code: 'directory_unavailable',
+          message:
+            'The directory is unavailable right now. Try again shortly or contact your administrator.',
+        },
       });
     }
     if (err instanceof AppError) {
