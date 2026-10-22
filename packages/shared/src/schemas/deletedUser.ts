@@ -69,7 +69,8 @@ export type DeletedUserSearchResponse = z.infer<typeof deletedUserSearchResponse
 // preserved. For Recycle-Bin-enabled domains this can include department,
 // title, etc.; for tombstones it'll be very sparse.
 export const deletedUserDetailSchema = deletedUserSummarySchema.extend({
-  rawAttributes: z.record(z.string(), z.unknown()),
+  // Null for callers without view:raw_attributes.
+  rawAttributes: z.record(z.string(), z.unknown()).nullable(),
 });
 export type DeletedUserDetail = z.infer<typeof deletedUserDetailSchema>;
 

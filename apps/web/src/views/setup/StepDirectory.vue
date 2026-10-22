@@ -6,9 +6,12 @@ import InputText from 'primevue/inputtext';
 import InputNumber from 'primevue/inputnumber';
 import Password from 'primevue/password';
 import Message from 'primevue/message';
+import { type LdapTlsMode, ldapTransportProblem } from '@openaduc/shared';
 import { api, type DirectoryAdminBody, type SetupExistingDirectory } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
+import LdapTlsModeField from '../../design/primitives/LdapTlsModeField.vue';
+import { defaultLdapPort, ldapUrlFor } from '../../design/lib/ldap.js';
 
 interface Props {
   existing: SetupExistingDirectory | null;
@@ -28,27 +31,22 @@ function dcsFromUrls(urls: string[]): DcEntry[] {
   }));
 }
 
-function inferTlsFromUrls(urls: string[]): { useTls: boolean; port: number } {
-  const first = urls[0] ?? '';
-  const useTls = /^ldaps:/i.test(first) || !/^ldap:/i.test(first);
-  const portMatch = first.match(/:(\d+)$/);
-  const port = portMatch ? Number(portMatch[1]) : useTls ? 636 : 389;
-  return { useTls, port };
-}
-
 const initial = props.existing;
-const inferred = initial ? inferTlsFromUrls(initial.ldapUrls) : { useTls: true, port: 636 };
+const initialMode: LdapTlsMode = initial?.tlsMode ?? 'ldaps';
+const initialPort = Number(
+  /:(\d+)$/.exec(initial?.ldapUrls[0] ?? '')?.[1] ?? defaultLdapPort(initialMode),
+);
 
 const form = reactive({
   domain: initial?.domain ?? '',
   baseDn: initial?.baseDn ?? '',
   baseDnTouched: !!initial,
-  useTls: inferred.useTls,
-  port: inferred.port,
-  // Default OFF: most first-time setups happen against lab DCs with
-  // self-signed certs. Operators can flip it back on once their CA
-  // chain is trusted.
-  rejectUntrusted: initial?.tlsRejectUnauthorized ?? false,
+  tlsMode: initialMode,
+  port: initialPort,
+  // Default ON: without it anyone on the network path can impersonate the
+  // DC and collect every password sent to it. If the DC's certificate
+  // isn't trusted yet, setup says so and how to fix it.
+  rejectUntrusted: initial?.tlsRejectUnauthorized ?? true,
   dcs: initial ? dcsFromUrls(initial.ldapUrls) : ([{ host: '' }] as DcEntry[]),
 });
 
@@ -76,28 +74,19 @@ watch(
 );
 
 watch(
-  () => form.useTls,
-  (useTls) => {
-    if (form.port === 389 || form.port === 636) {
-      form.port = useTls ? 636 : 389;
-    }
+  () => form.tlsMode,
+  (mode) => {
+    if (form.port === 389 || form.port === 636) form.port = defaultLdapPort(mode);
   },
 );
-
-function ldapUrlFromHost(hostRaw: string): string {
-  const host = hostRaw.trim();
-  if (!host) return '';
-  if (/^ldaps?:\/\//i.test(host)) return host;
-  return `${form.useTls ? 'ldaps' : 'ldap'}://${host}:${form.port}`;
-}
 
 function buildBody(): Omit<DirectoryAdminBody, 'adminUsername' | 'adminPassword'> {
   return {
     name: form.domain.trim() || 'default',
     domain: form.domain.trim(),
     baseDn: form.baseDn.trim(),
-    ldapUrls: form.dcs.map((d) => ldapUrlFromHost(d.host)).filter(Boolean),
-    tlsMode: form.useTls ? 'ldaps' : 'plain',
+    ldapUrls: form.dcs.map((d) => ldapUrlFor(d.host, form.tlsMode, form.port)).filter(Boolean),
+    tlsMode: form.tlsMode,
     tlsRejectUnauthorized: form.rejectUntrusted,
   };
 }
@@ -107,6 +96,8 @@ function validate(): string | null {
   if (!built.domain) return 'Domain is required';
   if (!built.baseDn) return 'Base DN is required';
   if (built.ldapUrls.length === 0) return 'At least one domain controller is required';
+  const transportProblem = ldapTransportProblem(built.ldapUrls, built.tlsMode);
+  if (transportProblem) return transportProblem;
   if (!adminUsername.value.trim()) return 'Admin username is required';
   if (!adminPassword.value) return 'Admin password is required';
   return null;
@@ -210,15 +201,12 @@ function removeDc(idx: number): void {
       <div class="advanced-toggle">
         <button type="button" class="link" @click="showAdvanced = !showAdvanced">
           <i :class="showAdvanced ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
-          {{ showAdvanced ? 'Hide' : 'Show' }} TLS options
+          {{ showAdvanced ? 'Hide' : 'Show' }} connection security
         </button>
       </div>
 
       <div v-if="showAdvanced" class="advanced">
-        <label class="check">
-          <input v-model="form.useTls" type="checkbox" :disabled="submitting" />
-          <span>Use TLS (LDAPS)</span>
-        </label>
+        <LdapTlsModeField v-model="form.tlsMode" :disabled="submitting" />
         <label class="field inline">
           <span class="lbl">Port</span>
           <InputNumber
@@ -421,7 +409,7 @@ function removeDc(idx: number): void {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  align-items: center;
+  align-items: flex-start;
   padding: 10px 12px;
   background: #f5f5f7;
   border: 1px solid #e7e7ea;

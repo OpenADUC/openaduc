@@ -3,6 +3,7 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryGroupPolicy, DirectoryGroupPolicyLink } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { uuidNotIn } from '../lib/sqlSets.js';
 
 /**
  * Upsert a Group Policy Object into the cache. Conflict target is
@@ -90,7 +91,7 @@ export async function markGroupPoliciesStale(
     .set({ stale_at: now })
     .where('provider_id', '=', providerId)
     .where('stale_at', 'is', null)
-    .where('object_guid', 'not in', Array.from(seenGuids))
+    .where(uuidNotIn('object_guid', seenGuids))
     .execute();
 }
 
