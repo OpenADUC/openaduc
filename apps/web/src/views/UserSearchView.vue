@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { useBulkActions } from '../design/composables/useBulkActions.js';
+import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
 import { computed, onMounted, ref, watch } from 'vue';
@@ -17,7 +19,6 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
-import { ApiError } from '../api/client.js';
 import { csvRow, type UserSummary } from '@openaduc/shared';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
@@ -384,68 +385,24 @@ function exportCsv(): void {
 }
 
 // ---- Bulk actions ---------------------------------------------------------
-type BulkAction = 'disable' | 'enable' | 'unlock';
-const pendingBulkAction = ref<BulkAction | null>(null);
-const bulkRunning = ref(false);
-const bulkProgress = ref<{
-  done: number;
-  total: number;
-  failures: { id: string; error: string }[];
-}>({
-  done: 0,
-  total: 0,
-  failures: [],
-});
 const canBulkDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
 const canBulkUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 
-async function startBulk(action: BulkAction): Promise<void> {
-  if (selectedIds.value.size === 0) return;
-  pendingBulkAction.value = action;
-  const ids = Array.from(selectedIds.value);
-  bulkRunning.value = true;
-  bulkProgress.value = { done: 0, total: ids.length, failures: [] };
-  try {
-    for (const id of ids) {
-      try {
-        if (action === 'disable') await api.users.disable(id);
-        else if (action === 'enable') await api.users.enable(id);
-        else if (action === 'unlock') await api.users.unlock(id);
-      } catch (err) {
-        bulkProgress.value.failures.push({
-          id,
-          error: err instanceof ApiError ? err.message : String(err),
-        });
-      } finally {
-        bulkProgress.value = { ...bulkProgress.value, done: bulkProgress.value.done + 1 };
-      }
-    }
-    const succeeded = bulkProgress.value.total - bulkProgress.value.failures.length;
-    if (bulkProgress.value.failures.length === 0) {
-      const verb = action === 'disable' ? 'Disabled' : action === 'enable' ? 'Enabled' : 'Unlocked';
-      toast.add({
-        severity: 'success',
-        summary: `${verb} ${succeeded} ${succeeded === 1 ? 'account' : 'accounts'}`,
-        life: 4000,
-      });
-    } else {
-      toast.add({
-        severity: 'warn',
-        summary: `${succeeded} succeeded, ${bulkProgress.value.failures.length} failed`,
-        detail: bulkProgress.value.failures
-          .slice(0, 3)
-          .map((f) => f.error)
-          .join('; '),
-        life: 8000,
-      });
-    }
-    clearSelection();
-    await load();
-  } finally {
-    bulkRunning.value = false;
-    pendingBulkAction.value = null;
-  }
-}
+const {
+  pendingBulkAction,
+  bulkRunning,
+  bulkProgress,
+  bulkErrors,
+  confirmDisableOpen,
+  requestBulk,
+  startBulk,
+} = useBulkActions({
+  selectedIds,
+  run: { disable: api.users.disable, enable: api.users.enable, unlock: api.users.unlock },
+  toast,
+  reload: load,
+});
+const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
 
 // Delete runs in its own dialog (preflight, typed confirmation, progress)
 // rather than through startBulk. Only disabled accounts can be deleted, so
@@ -652,6 +609,10 @@ onMounted(() => {
             <div class="user-cell-stack">
               <div class="user-name">{{ data.displayName ?? data.samAccountName }}</div>
               <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
+              <div v-if="bulkErrors.has(data.id)" class="user-bulk-error" role="alert">
+                <i class="pi pi-exclamation-circle" aria-hidden="true" />
+                {{ bulkErrors.get(data.id) }}
+              </div>
             </div>
           </div>
         </template>
@@ -724,7 +685,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'disable'"
             :disabled="bulkRunning"
-            @click="auth.requireEdit(() => startBulk('disable'))"
+            @click="auth.requireEdit(() => requestBulk('disable'))"
           />
           <Button
             v-if="canBulkDisable"
@@ -762,6 +723,33 @@ onMounted(() => {
         <span v-if="bulkBusyMessage" class="bulkbar-progress mono">{{ bulkBusyMessage }}</span>
       </div>
     </transition>
+
+    <Dialog
+      v-model:visible="confirmDisableOpen"
+      modal
+      :header="
+        selectedIds.size === 1 ? 'Disable 1 account?' : `Disable ${selectedIds.size} accounts?`
+      "
+      :style="{ width: '28rem' }"
+    >
+      <p class="confirm-text">
+        They won't be able to sign in until an operator enables them again.
+      </p>
+      <ul v-if="selectedRows.length <= 10" class="confirm-list">
+        <li v-for="r in selectedRows" :key="r.id">{{ r.displayName ?? r.samAccountName }}</li>
+      </ul>
+      <template #footer>
+        <Button label="Cancel" severity="secondary" text @click="confirmDisableOpen = false" />
+        <Button
+          :label="
+            selectedIds.size === 1 ? 'Disable account' : `Disable ${selectedIds.size} accounts`
+          "
+          icon="pi pi-ban"
+          severity="danger"
+          @click="startBulk('disable')"
+        />
+      </template>
+    </Dialog>
 
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
@@ -1080,5 +1068,21 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   width: 100%;
+}
+.user-bulk-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--red, #dc2626);
+}
+.confirm-text {
+  margin: 0 0 8px;
+}
+.confirm-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
 }
 </style>
