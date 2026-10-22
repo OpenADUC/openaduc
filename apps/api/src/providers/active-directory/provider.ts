@@ -40,11 +40,13 @@ import type {
   RestoreUserInput,
   SyncInput,
   UserAttributePatch,
+  UserRenameInput,
   WriteContext,
 } from '../types.js';
 import { StepUpBindFailedError } from '../types.js';
 import { type ClientConfig, withFailover } from './client.js';
 import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
+import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
 import {
   BINARY_ATTRS,
@@ -77,6 +79,7 @@ import {
   escapeLdapFilter,
   isLocked,
   objectGuidFromString,
+  objectGuidToString,
   UAC,
 } from './utils.js';
 
@@ -976,6 +979,102 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
+   * Rename a person. The RDN change goes first because it's the one most
+   * likely to be refused (a same-named object in the OU, a missing rename
+   * right) and the easiest to undo: if the attribute write that follows
+   * fails, the RDN is renamed back so the account isn't left half-renamed.
+   *
+   * New logon names, address and RDN are checked against the directory
+   * first so a clash comes back as `conflict` naming the other object,
+   * rather than as AD's opaque constraint error.
+   */
+  async renameUser(
+    userId: DirectoryObjectIdentifier,
+    input: UserRenameInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return withFailover(this.clientConfig, async (client) => {
+      try {
+        await client.bind(ctx.actorUsername, ctx.actorPassword);
+      } catch {
+        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
+      }
+      try {
+        const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
+        const user = normalizeUser(target);
+        const before = renameSnapshot(user);
+        const plan = planUserRename(
+          {
+            givenName: user.givenName,
+            surname: user.surname,
+            displayName: user.displayName,
+            cn: asString(target.cn),
+            samAccountName: user.samAccountName,
+            userPrincipalName: user.userPrincipalName,
+            email: user.email,
+            proxyAddresses: asStringArray(target.proxyAddresses),
+          },
+          input,
+        );
+        if (Object.keys(plan.attributes).length === 0 && plan.newCn === null) {
+          return { ok: true, before, after: before };
+        }
+
+        const conflict = await this.findRenameConflict(client, user, plan);
+        if (conflict) return { ok: false, reason: 'conflict', errorMessage: conflict, before };
+
+        let dn = user.distinguishedName;
+        const oldRdn = leafRdn(dn);
+        if (plan.newCn !== null) {
+          const newRdn = `CN=${escapeRdnValueRfc(plan.newCn)}`;
+          // A bare RDN (no unescaped comma) keeps the parent: ldapts only
+          // sets newSuperior when the new DN contains one.
+          await client.modifyDN(dn, newRdn);
+          dn = `${newRdn},${parentDn(dn)}`;
+        }
+
+        const changes = Object.entries(plan.attributes).map(([type, values]) =>
+          values.length === 0
+            ? new Change({ operation: 'delete', modification: new Attribute({ type, values: [] }) })
+            : new Change({ operation: 'replace', modification: new Attribute({ type, values }) }),
+        );
+        if (changes.length > 0) {
+          try {
+            await client.modify(dn, changes);
+          } catch (err) {
+            if (plan.newCn !== null) {
+              const rolledBack = await client
+                .modifyDN(dn, oldRdn)
+                .then(() => true)
+                .catch(() => false);
+              const message = err instanceof Error ? err.message : 'modify failed';
+              return {
+                ...classifyWriteError(err),
+                errorMessage: rolledBack
+                  ? `${message} (the name change was rolled back)`
+                  : `${message} (the object was renamed to ${dn} but its attributes were not updated, and renaming it back failed)`,
+              };
+            }
+            throw err;
+          }
+        }
+
+        const afterEntry = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
+        return {
+          ok: true,
+          before,
+          after: afterEntry ? renameSnapshot(normalizeUser(afterEntry)) : {},
+        };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  /**
    * Delete a disabled user. The guard runs against the entry read on the
    * operator's own bind, immediately before the delete, so it holds even
    * if the caller's view of the account is stale.
@@ -1024,6 +1123,79 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.unbind().catch(() => undefined);
       }
     });
+  }
+
+  /**
+   * Look for another object already holding a value the rename would take.
+   * Searches the whole domain naming context, not just the configured base
+   * DN, because sAMAccountName and UPN must be unique domain-wide. Returns
+   * a message naming the clash, or null.
+   */
+  private async findRenameConflict(
+    client: Client,
+    user: DirectoryUser,
+    plan: ReturnType<typeof planUserRename>,
+  ): Promise<string | null> {
+    const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
+    const checks: { label: string; base: string; scope: 'sub' | 'one'; filter: string }[] = [];
+    if (plan.newSamAccountName) {
+      checks.push({
+        label: `logon name "${plan.newSamAccountName}"`,
+        base: domainRoot,
+        scope: 'sub',
+        filter: `(sAMAccountName=${escapeLdapFilter(plan.newSamAccountName)})`,
+      });
+    }
+    if (plan.newUserPrincipalName) {
+      checks.push({
+        label: `UPN "${plan.newUserPrincipalName}"`,
+        base: domainRoot,
+        scope: 'sub',
+        filter: `(userPrincipalName=${escapeLdapFilter(plan.newUserPrincipalName)})`,
+      });
+    }
+    if (plan.newEmail) {
+      const v = escapeLdapFilter(plan.newEmail);
+      checks.push({
+        label: `email address "${plan.newEmail}"`,
+        base: domainRoot,
+        scope: 'sub',
+        filter: `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
+      });
+    }
+    if (plan.newCn) {
+      checks.push({
+        label: `name "${plan.newCn}" in this OU`,
+        base: parentDn(user.distinguishedName) ?? domainRoot,
+        scope: 'one',
+        filter: `(cn=${escapeLdapFilter(plan.newCn)})`,
+      });
+    }
+
+    for (const check of checks) {
+      const { searchEntries } = await client.search(check.base, {
+        scope: check.scope,
+        filter: check.filter,
+        attributes: ['objectGUID', 'distinguishedName'],
+        explicitBufferAttributes: BINARY_ATTRS,
+      });
+      const other = searchEntries.find((e) => {
+        const guid = e.objectGUID;
+        return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === user.objectGuid);
+      });
+      if (other) return `the ${check.label} is already used by ${other.dn}`;
+    }
+    return null;
+  }
+
+  private async resolveDefaultNamingContext(client: Client): Promise<string | null> {
+    const { searchEntries } = await client.search('', {
+      scope: 'base',
+      filter: '(objectClass=*)',
+      attributes: ['defaultNamingContext'],
+    });
+    const dse = searchEntries[0];
+    return dse ? asString((dse as Record<string, unknown>).defaultNamingContext) : null;
   }
 
   /**
@@ -2141,6 +2313,22 @@ function rawAuditArray(v: unknown): string[] {
   return arr
     .map((x) => (typeof x === 'string' ? x : x === null || x === undefined ? '' : String(x)))
     .filter((s) => s.length > 0);
+}
+
+/** The identity attributes a rename can touch, for the audit trail. */
+function renameSnapshot(user: DirectoryUser): Record<string, unknown> {
+  const raw = user.rawAttributes;
+  return {
+    distinguishedName: user.distinguishedName,
+    cn: rawAuditScalar(raw['cn']),
+    givenName: user.givenName,
+    surname: user.surname,
+    displayName: user.displayName,
+    samAccountName: user.samAccountName,
+    userPrincipalName: user.userPrincipalName,
+    email: user.email,
+    proxyAddresses: rawAuditArray(raw['proxyAddresses']),
+  };
 }
 
 /**

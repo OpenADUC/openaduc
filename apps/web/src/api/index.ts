@@ -38,6 +38,7 @@ import type {
   UserDeleteRequest,
   UserDetail,
   UserMoveRequest,
+  UserRenameRequest,
   UserSearchQuery,
   UserSearchResponse,
   UserUpdateRequest,
@@ -439,6 +440,15 @@ export const api = {
       body: UserMoveRequest,
     ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/move`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    rename(
+      id: string,
+      body: UserRenameRequest,
+    ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/rename`, {
         method: 'POST',
         body: JSON.stringify(body),
       });

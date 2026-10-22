@@ -8,6 +8,7 @@ import {
   userDeletePreflightRequestSchema,
   userDeleteRequestSchema,
   userMoveRequestSchema,
+  userRenameRequestSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
   userUpdateRequestSchema,
@@ -1013,6 +1014,69 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Refresh cache so the new distinguished_name lands in user_cache_records.
+      await app.services.userLiveRefresh.refresh(provider, id);
+      return { ok: true, before: result.before, after: result.after };
+    },
+  });
+
+  // ---- POST /api/users/:id/rename --------------------------------------
+  // Name parts, RDN, logon names and primary email in one operation. Body
+  // carries only the fields that change; see userRenameRequestSchema.
+  app.post('/api/users/:id/rename', {
+    preHandler: [app.requireCapability('write:user.rename'), app.requireStepUp],
+    handler: async (req) => {
+      const { id } = idParamSchema.parse(req.params);
+      const body = userRenameRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
+      if (!beforeRefresh) throw NotFound('user not found');
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'user.rename',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'user',
+          targetId: beforeRefresh.user.objectGuid,
+          targetDn: beforeRefresh.user.distinguishedName,
+          metadata: {
+            fields: Object.keys(body).filter((k) => k !== 'keepOldEmailAsAlias'),
+            keepOldEmailAsAlias: body.keepOldEmailAsAlias,
+          },
+        },
+        async () => {
+          const r = await provider.renameUser(
+            { kind: 'objectGuid', value: id },
+            body,
+            ctx(actor, req),
+          );
+          return {
+            ok: r.ok,
+            before: r.before ?? null,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+            errorMessage: r.errorMessage ?? null,
+          };
+        },
+      );
+
+      if (!result.ok) {
+        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+        if (result.errorCode === 'conflict') {
+          throw app.httpErrors.conflict(result.errorMessage ?? 'name already in use');
+        }
+        if (result.errorCode === 'permission_denied') {
+          throw app.httpErrors.forbidden(`directory rejected the rename${detail}`);
+        }
+        if (result.errorCode === 'not_found') throw NotFound('user not found');
+        throw app.httpErrors.badGateway(`rename failed${detail}`);
+      }
+
       await app.services.userLiveRefresh.refresh(provider, id);
       return { ok: true, before: result.before, after: result.after };
     },

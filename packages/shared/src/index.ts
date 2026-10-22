@@ -9,3 +9,4 @@ export * from './schemas/computer.js';
 export * from './schemas/ou.js';
 export * from './schemas/signin.js';
 export * from './schemas/mfa.js';
+export * from './rename.js';

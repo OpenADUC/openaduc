@@ -34,6 +34,7 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },
   'user.move': { title: 'Moved to OU', iconClass: 'pi pi-folder', tone: 'tone-blue' },
+  'user.rename': { title: 'Renamed', iconClass: 'pi pi-id-card', tone: 'tone-blue' },
   'user.delete': { title: 'Account deleted', iconClass: 'pi pi-trash', tone: 'tone-red' },
   'user.restore': { title: 'Account restored', iconClass: 'pi pi-replay', tone: 'tone-green' },
 };
@@ -61,7 +62,7 @@ const items = computed<FeedItem[]>(() =>
 
 function detailFor(e: AuditEventRow): string {
   const md = (e.metadata ?? {}) as Record<string, unknown>;
-  if (e.action === 'user.update' && md.fields) {
+  if ((e.action === 'user.update' || e.action === 'user.rename') && md.fields) {
     return `Fields: ${Array.isArray(md.fields) ? md.fields.join(', ') : String(md.fields)}`;
   }
   if (e.action === 'user.group.add' || e.action === 'user.group.remove') {

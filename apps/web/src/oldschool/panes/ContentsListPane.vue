@@ -277,10 +277,12 @@ function userItems(r: Row): CtxItem[] {
             ),
         }
       : { label: 'Delete', disabled: true },
-    {
-      label: 'Rename',
-      disabled: true,
-    },
+    auth.hasCapability('write:user.rename')
+      ? {
+          label: 'Rename',
+          onSelect: () => store.openDialog({ kind: 'rename-user', id: r.id }),
+        }
+      : { label: 'Rename', disabled: true },
     { kind: 'separator' },
     {
       label: 'Properties',

@@ -422,6 +422,15 @@ export interface DirectoryProvider {
     targetOuDn: string,
     ctx: WriteContext,
   ): Promise<MutationResult>;
+  // Rename a person: name parts, the RDN (cn, via modifyDN in place),
+  // sAMAccountName, userPrincipalName and primary email. Checks the new
+  // logon names, address and RDN are free before writing; returns
+  // `conflict` naming the clash otherwise.
+  renameUser(
+    userId: DirectoryObjectIdentifier,
+    input: UserRenameInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
   // Delete a disabled user. Re-checks against the live entry that the
   // account is disabled and isn't one of AD's own accounts, and returns
   // `policy_violation` if not. Falls back to a tree delete when the user
@@ -488,6 +497,18 @@ export interface DirectoryProvider {
     objectGuid: string,
     ctx: WriteContext,
   ): Promise<DirectoryDeletedComputer | null>;
+}
+
+export interface UserRenameInput {
+  // undefined skips a field; null clears it (givenName, surname, email).
+  givenName?: string | null | undefined;
+  surname?: string | null | undefined;
+  displayName?: string | undefined;
+  cn?: string | undefined;
+  samAccountName?: string | undefined;
+  userPrincipalName?: string | undefined;
+  email?: string | null | undefined;
+  keepOldEmailAsAlias: boolean;
 }
 
 export interface OuAttributePatch {

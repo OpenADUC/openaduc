@@ -27,6 +27,7 @@ import GroupPropertiesDialog from './dialogs/GroupPropertiesDialog.vue';
 import ComputerPropertiesDialog from './dialogs/ComputerPropertiesDialog.vue';
 import ResetPasswordDialog from './dialogs/ResetPasswordDialog.vue';
 import MoveDialog from './dialogs/MoveDialog.vue';
+import RenameUserDialog from './dialogs/RenameUserDialog.vue';
 import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
 import AddToGroupDialog from './dialogs/AddToGroupDialog.vue';
 import ConfirmDialog from './dialogs/ConfirmDialog.vue';
@@ -356,6 +357,12 @@ function exitOldSchool(): void {
         :window-id="w.id"
         :id="w.dialog.id"
         :sam-account-name="w.dialog.samAccountName"
+        @close="store.closeWindow(w.id)"
+      />
+      <RenameUserDialog
+        v-else-if="w.dialog.kind === 'rename-user'"
+        :window-id="w.id"
+        :id="w.dialog.id"
         @close="store.closeWindow(w.id)"
       />
       <DeleteUserDialog

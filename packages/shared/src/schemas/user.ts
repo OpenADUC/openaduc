@@ -321,6 +321,58 @@ export const userUpdateRequestSchema = z.object({
 });
 export type UserUpdateRequest = z.infer<typeof userUpdateRequestSchema>;
 
+// ---- Rename ------------------------------------------------------------
+//
+// A rename touches the identity attributes the general attribute PATCH
+// deliberately leaves out: the RDN (cn, which AD mirrors into `name`),
+// sAMAccountName, userPrincipalName, and the primary SMTP address. They get
+// their own endpoint and capability because they change how the person
+// signs in and where mail is delivered, and because cn needs a modifyDN
+// rather than a modify.
+
+// AD's rules for the pre-Windows 2000 logon name: at most 20 characters,
+// none of " / \ [ ] : ; | = , + * ? < > @, not only dots and spaces, and no
+// trailing dot.
+const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
+export const samAccountNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(20)
+  .refine((v) => !SAM_FORBIDDEN.test(v), {
+    message: 'cannot contain " / \\ [ ] : ; | = , + * ? < > @',
+  })
+  .refine((v) => !/^[. ]+$/.test(v), { message: 'cannot be only dots and spaces' })
+  .refine((v) => !v.endsWith('.'), { message: 'cannot end with a dot' });
+
+export const userPrincipalNameSchema = z
+  .string()
+  .trim()
+  .max(256)
+  .regex(/^[^\s@]+@[^\s@]+$/, { message: 'must look like name@suffix' });
+
+export const userRenameRequestSchema = z
+  .object({
+    givenName: z.string().trim().max(64).nullable().optional(),
+    surname: z.string().trim().max(64).nullable().optional(),
+    displayName: z.string().trim().min(1).max(256).optional(),
+    // The RDN value. AD caps cn at 64 characters.
+    cn: z.string().trim().min(1).max(64).optional(),
+    samAccountName: samAccountNameSchema.optional(),
+    userPrincipalName: userPrincipalNameSchema.optional(),
+    email: z.string().trim().email().max(256).nullable().optional(),
+    // Only consulted when `email` changes on an account that already has
+    // proxyAddresses: the new address becomes the primary SMTP and the old
+    // primary is demoted to an alias (true) or dropped (false). Accounts
+    // without proxyAddresses only get `mail` updated.
+    keepOldEmailAsAlias: z.boolean().default(true),
+  })
+  .strict()
+  .refine((r) => Object.keys(r).some((k) => k !== 'keepOldEmailAsAlias'), {
+    message: 'rename must change at least one field',
+  });
+export type UserRenameRequest = z.input<typeof userRenameRequestSchema>;
+
 // ---- Delete ------------------------------------------------------------
 //
 // Only disabled accounts can be deleted, and never AD's own accounts. The
