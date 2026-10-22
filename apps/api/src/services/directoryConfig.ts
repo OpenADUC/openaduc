@@ -99,8 +99,7 @@ export function buildEphemeralProvider(
 export class DirectoryConfigService {
   constructor(
     private readonly db: Kysely<DB>,
-    // env is unused now that bind credentials aren't stored, but kept on the
-    // service for future per-directory env defaults (timeouts, etc.).
+    // Global defaults a directory's own settings fall back to.
     private readonly env: Env,
   ) {}
 
