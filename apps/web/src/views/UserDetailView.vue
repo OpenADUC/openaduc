@@ -322,9 +322,9 @@ const canManageGroups = computed(() => auth.hasCapability('write:group.membershi
 const canMove = computed(() => auth.hasCapability('write:user.move'));
 const canRename = computed(() => auth.hasCapability('write:user.rename'));
 const canDelete = computed(() => auth.hasCapability('write:user.delete'));
-// Raw LDAP tab is admin-only — gated by view:raw_attributes (admin role
-// gets all caps, operator/auditor explicitly do not).
-const canViewRaw = computed(() => auth.hasCapability('view:raw_attributes'));
+// The Raw LDAP tab shows only when the API sent the attributes, which it
+// does for view:raw_attributes holders (admins).
+const canViewRaw = computed(() => !!user.value?.rawAttributes);
 
 // Per-user activity feed. Auto-loaded on user load to populate the
 // Overview "Recent activity" card. Fetches a small page (10) since the

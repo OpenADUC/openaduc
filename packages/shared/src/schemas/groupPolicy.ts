@@ -54,7 +54,8 @@ export const groupPolicyDetailSchema = groupPolicySummarySchema.extend({
   functionalityVersion: z.number().int().nullable(),
   // Every populated LDAP attribute on the GPC entry. Same audit shape as the
   // user/group/computer Raw view.
-  rawAttributes: z.record(z.string(), z.unknown()),
+  // Null for callers without view:raw_attributes.
+  rawAttributes: z.record(z.string(), z.unknown()).nullable(),
   // Every gPLink association referencing this GPO, in source order. The
   // scopeDn lets the operator follow the link back to the OU/domain.
   links: z.array(groupPolicyLinkSchema),

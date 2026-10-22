@@ -3,7 +3,7 @@ import fp from 'fastify-plugin';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Capability } from '@openaduc/shared';
 import type { AdminSession, ElevatedSession } from '../services/sessions.js';
-import { Forbidden, StepUpRequired, Unauthorized } from './errorHandler.js';
+import { Forbidden, SessionRequired, StepUpRequired } from './errorHandler.js';
 
 export const SESSION_COOKIE_NAME = 'openaduc_sid';
 
@@ -67,14 +67,14 @@ export default fp(async (app) => {
   // ---- Route guards ------------------------------------------------------
 
   app.decorate('requireAuth', async (req: FastifyRequest, _reply: FastifyReply) => {
-    if (!req.actor) throw Unauthorized('authentication required');
+    if (!req.actor) throw SessionRequired();
   });
 
   app.decorate(
     'requireCapability',
     (capability: Capability) =>
       async (req: FastifyRequest, _reply: FastifyReply): Promise<void> => {
-        if (!req.actor) throw Unauthorized('authentication required');
+        if (!req.actor) throw SessionRequired();
         if (!app.services.authorization.has(req.actor.session.capabilities, capability)) {
           // Audit the denial — Phase 5 wires this through the request middleware,
           // but for now record directly so denials never silently disappear.
@@ -99,7 +99,7 @@ export default fp(async (app) => {
   );
 
   app.decorate('requireStepUp', async (req: FastifyRequest, _reply: FastifyReply) => {
-    if (!req.actor) throw Unauthorized('authentication required');
+    if (!req.actor) throw SessionRequired();
     if (!req.actor.elevated) throw StepUpRequired();
     // The DB row says elevated, but our process restarted (or another
     // instance handled the step-up) and we don't have the bind password
