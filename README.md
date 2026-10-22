@@ -147,7 +147,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 - **Database**: PostgreSQL 16, [Kysely](https://kysely.dev/) (queries), [Knex](https://knexjs.org/) (migrations)
 - **Background work**: in-process scheduler with per-directory sync tasks (delta + periodic full sync)
 - **Frontend**: Vue 3, Vite, [PrimeVue](https://primevue.org/), Tailwind v4, Pinia
-- **Tooling**: pnpm workspaces, ESLint, Prettier, Vitest, Playwright
+- **Tooling**: pnpm workspaces, ESLint, Prettier, Vitest
 
 ## Status
 

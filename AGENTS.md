@@ -2,6 +2,10 @@ OpenADUC: a self-hosted web replacement for Active Directory Users and Computers
 
 Stage: live
 
+## Local directory and API
+
+`pnpm dc:up` starts a seeded Samba AD DC for development and tests (`ldaps://localhost:10636`, base DN `DC=openaduc,DC=test`); `dev/samba-dc/README.md` lists fixture accounts, passwords and how to map roles. Use it instead of building your own DC. The API's health endpoints are `/health/live`, `/health/ready` and `/health/directory`.
+
 ## Agent skills
 
 ### Issue tracker
