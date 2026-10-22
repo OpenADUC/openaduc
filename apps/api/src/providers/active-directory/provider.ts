@@ -43,10 +43,9 @@ import type {
   UserRenameInput,
   WriteContext,
 } from '../types.js';
-import { StepUpBindFailedError } from '../types.js';
+import { DirectoryUnavailableError, StepUpBindFailedError } from '../types.js';
 import {
   type ClientConfig,
-  DirectoryUnavailableError,
   describeConnectionError,
   isDirectoryUnreachable,
   withFailover,

@@ -3,7 +3,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { meResponseSchema, stepUpRequestSchema, type Capability } from '@openaduc/shared';
 import { loadEnv } from '../config/env.js';
-import { AppError, BadRequest, Unauthorized } from '../plugins/errorHandler.js';
+import {
+  AppError,
+  BadRequest,
+  DIRECTORY_UNAVAILABLE_MESSAGE,
+  Unauthorized,
+} from '../plugins/errorHandler.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
 
@@ -52,8 +57,7 @@ const DirectoryUnavailable = () =>
   new AppError({
     statusCode: 502,
     code: 'directory_unavailable',
-    message:
-      'The directory is unavailable right now. Try again shortly or contact your administrator.',
+    message: DIRECTORY_UNAVAILABLE_MESSAGE,
   });
 
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {

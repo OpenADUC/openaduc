@@ -90,7 +90,7 @@ describe('with the first domain controller down', () => {
         .execute();
     });
 
-    it('a write fails as directory unavailable, with no permission-denied audit row', async () => {
+    it('a write fails as directory unavailable, and is audited as that, not as permission denied', async () => {
       const id = (
         await api.app.db
           .selectFrom('user_cache_records')
@@ -109,6 +109,19 @@ describe('with the first domain controller down', () => {
         .where('error_code', '=', 'permission_denied')
         .execute();
       expect(denied).toEqual([]);
+      const unavailable = await api.app.db
+        .selectFrom('audit_events')
+        .select(['action', 'result', 'actor_display_name', 'metadata_json'])
+        .where('error_code', '=', 'directory_unavailable')
+        .execute();
+      expect(unavailable).toEqual([
+        {
+          action: 'directory.unavailable',
+          result: 'failure',
+          actor_display_name: 'OpenADUC Operator',
+          metadata_json: expect.objectContaining({ route: '/api/users/:id/unlock' }),
+        },
+      ]);
     });
 
     it('the operator bind itself reports directory_error, not permission_denied', async () => {
