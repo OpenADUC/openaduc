@@ -78,7 +78,7 @@ const pillLeft = computed(() => {
   border-radius: 14px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-contrast);
   font-family: var(--font-sans);
   font-size: 12.5px;
   font-weight: 500;
@@ -105,7 +105,7 @@ const pillLeft = computed(() => {
 
 .status-pill .countdown {
   font-size: 11.5px;
-  color: color-mix(in oklab, currentColor 75%, transparent);
+  color: color-mix(in oklab, currentColor 90%, transparent);
   font-variant-numeric: tabular-nums;
   padding-left: 4px;
   border-left: 1px solid color-mix(in oklab, currentColor 35%, transparent);

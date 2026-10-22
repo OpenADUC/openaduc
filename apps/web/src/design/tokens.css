@@ -24,7 +24,9 @@
   --row-fs: 13px;
 
   /* Type stack */
-  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans:
+    'Geist', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
   --font-mono: 'JetBrains Mono', 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Layout constants */
@@ -69,7 +71,8 @@
   --border-soft: rgba(255, 255, 255, 0.07);
   --text: #ededee;
   --text-2: #b0b3bd;
-  --text-3: #7d808b;
+  /* 4.5:1 or better on every dark surface, hovered rows included. */
+  --text-3: #959aa5;
   --text-4: #5b5e69;
 
   --green: #34d399;
@@ -84,16 +87,13 @@
   --violet-soft: rgba(167, 139, 250, 0.14);
 
   --shadow-sm:
-    0 1px 0 rgba(255, 255, 255, 0.045) inset,
-    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.045) inset, 0 1px 2px rgba(0, 0, 0, 0.5),
     0 1px 1px rgba(0, 0, 0, 0.35);
   --shadow-md:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 8px 24px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 8px 24px rgba(0, 0, 0, 0.55),
     0 2px 6px rgba(0, 0, 0, 0.4);
   --shadow-lg:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset,
-    0 24px 60px rgba(0, 0, 0, 0.65),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 24px 60px rgba(0, 0, 0, 0.65),
     0 4px 12px rgba(0, 0, 0, 0.45);
 
   /* Page-canvas atmosphere: a cool cyan wash anchored top-left and a
@@ -143,46 +143,44 @@
   --border-soft: rgba(15, 23, 42, 0.06);
   --text: #0b1220;
   --text-2: #475569;
-  --text-3: #64748b;
+  /* 4.8:1 or better on every light surface, the sidebar included. */
+  --text-3: #556274;
   --text-4: #94a3b8;
 
   /* Light-mode accent overrides — picked up by useTheme when mode=light.
      The block here just sets the cyan default; useTheme writes the
      selected accent into these same vars. */
-  --accent: #0891b2;
-  --accent-soft: rgba(8, 145, 178, 0.12);
-  --accent-text: #0e7490;
+  --accent: #0e7490;
+  --accent-soft: rgba(14, 116, 144, 0.12);
+  --accent-text: #0b6b85;
   --accent-contrast: #ffffff;
 
   --green: #047857;
-  --green-soft: rgba(4, 120, 87, 0.10);
-  --amber: #b45309;
-  --amber-soft: rgba(180, 83, 9, 0.10);
+  --green-soft: rgba(4, 120, 87, 0.1);
+  --amber: #9a4a0b;
+  --amber-soft: rgba(154, 74, 11, 0.1);
   --red: #b91c1c;
-  --red-soft: rgba(185, 28, 28, 0.10);
+  --red-soft: rgba(185, 28, 28, 0.1);
   --blue: #1d4ed8;
-  --blue-soft: rgba(29, 78, 216, 0.10);
+  --blue-soft: rgba(29, 78, 216, 0.1);
   --violet: #6d28d9;
-  --violet-soft: rgba(109, 40, 217, 0.10);
+  --violet-soft: rgba(109, 40, 217, 0.1);
 
   --shadow-sm:
-    0 1px 0 rgba(255, 255, 255, 0.6) inset,
-    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 1px 2px rgba(15, 23, 42, 0.06),
     0 1px 3px rgba(15, 23, 42, 0.04);
   --shadow-md:
-    0 1px 0 rgba(255, 255, 255, 0.6) inset,
-    0 8px 24px rgba(15, 23, 42, 0.08),
+    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px rgba(15, 23, 42, 0.08),
     0 2px 6px rgba(15, 23, 42, 0.05);
   --shadow-lg:
-    0 1px 0 rgba(255, 255, 255, 0.6) inset,
-    0 24px 60px rgba(15, 23, 42, 0.14),
+    0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 24px 60px rgba(15, 23, 42, 0.14),
     0 4px 12px rgba(15, 23, 42, 0.08);
 
   /* Page-canvas atmosphere: a soft cyan wash top-left and a warm peach
      counter-glow bottom-right give the canvas a hint of dimension — it
      no longer reads as a single flat gray panel behind everything. */
   --bg-atmosphere:
-    radial-gradient(ellipse 70% 60% at 8% 0%, rgba(8, 145, 178, 0.10), transparent 55%),
+    radial-gradient(ellipse 70% 60% at 8% 0%, rgba(8, 145, 178, 0.1), transparent 55%),
     radial-gradient(ellipse 60% 55% at 100% 100%, rgba(244, 114, 60, 0.07), transparent 55%);
 
   /* Black noise on alpha channel — same idea as the dark variant but

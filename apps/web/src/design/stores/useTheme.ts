@@ -60,7 +60,13 @@ export const ACCENTS: Record<AccentName, AccentTokens> = {
 // pure white renders as pale and washes out — these shades (roughly tailwind
 // 600/700) keep accent text legible and primary buttons readable.
 const ACCENTS_LIGHT: Record<AccentName, AccentTokens> = {
-  cyan: { color: '#0891b2', soft: 'rgba(8, 145, 178, 0.12)', text: '#0e7490', contrast: '#ffffff' },
+  // cyan-700: white text on cyan-600 is only 3.7:1.
+  cyan: {
+    color: '#0e7490',
+    soft: 'rgba(14, 116, 144, 0.12)',
+    text: '#0b6b85',
+    contrast: '#ffffff',
+  },
   blue: { color: '#1d4ed8', soft: 'rgba(29, 78, 216, 0.10)', text: '#1e40af', contrast: '#ffffff' },
   violet: {
     color: '#6d28d9',

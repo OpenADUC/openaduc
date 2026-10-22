@@ -1330,24 +1330,26 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
         :ref="setTabsNav"
         class="ds-tabs ds-tabs-with-actions"
         :class="{ compact: tabsCompact, 'hero-compact': heroCompact }"
-        role="tablist"
       >
-        <button
-          v-for="t in tabs.filter((t) => t.visible)"
-          :key="t.id"
-          type="button"
-          role="tab"
-          class="ds-tab"
-          :class="{ active: activeTab === t.id, 'icon-only': t.iconOnly }"
-          :aria-selected="activeTab === t.id"
-          :title="tabsCompact || t.iconOnly ? t.label : undefined"
-          :aria-label="t.label"
-          @click="activeTab = t.id"
-        >
-          <i :class="['pi', t.icon]" aria-hidden="true" />
-          <span class="ds-tab-label">{{ t.label }}</span>
-          <span v-if="t.count !== undefined" class="ds-tab-count mono">{{ t.count }}</span>
-        </button>
+        <!-- Only the tabs are in the tablist; refresh and Actions sit beside it. -->
+        <div class="ds-tablist" role="tablist" aria-label="User sections">
+          <button
+            v-for="t in tabs.filter((t) => t.visible)"
+            :key="t.id"
+            type="button"
+            role="tab"
+            class="ds-tab"
+            :class="{ active: activeTab === t.id, 'icon-only': t.iconOnly }"
+            :aria-selected="activeTab === t.id"
+            :title="tabsCompact || t.iconOnly ? t.label : undefined"
+            :aria-label="t.label"
+            @click="activeTab = t.id"
+          >
+            <i :class="['pi', t.icon]" aria-hidden="true" />
+            <span class="ds-tab-label">{{ t.label }}</span>
+            <span v-if="t.count !== undefined" class="ds-tab-count mono">{{ t.count }}</span>
+          </button>
+        </div>
         <div class="ds-tabs-spacer" />
         <Button
           icon="pi pi-refresh"
@@ -2138,9 +2140,10 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       </p>
       <div class="reset-form">
         <div class="form-row">
-          <label class="fld-label">New password</label>
+          <label for="reset-new-password" class="fld-label">New password</label>
           <Password
             v-model="resetDraft.newPassword"
+            input-id="reset-new-password"
             :feedback="false"
             toggle-mask
             input-class="w-full"
@@ -2543,6 +2546,11 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
     grid-template-columns: 1fr;
     justify-items: start;
   }
+}
+
+/* The tablist wrapper doesn't take part in the tab bar's flex layout. */
+.ds-tablist {
+  display: contents;
 }
 
 /* Tab bar actions — Actions menu and refresh icon scoot to the right. */

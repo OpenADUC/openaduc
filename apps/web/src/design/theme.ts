@@ -107,4 +107,16 @@ export const adManageTheme = definePreset(Aura, {
       },
     },
   },
+  components: {
+    button: {
+      colorScheme: {
+        // Aura's secondary text and outlined buttons use surface.500, 4.1:1
+        // on the light page background; match tokens.css --text-3 (4.8:1+).
+        light: {
+          outlined: { secondary: { color: '#556274' } },
+          text: { secondary: { color: '#556274' } },
+        },
+      },
+    },
+  },
 });

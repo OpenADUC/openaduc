@@ -612,9 +612,10 @@ onMounted(load);
           </p>
         </div>
         <div class="form-row">
-          <label class="fld-label">Admin password</label>
+          <label for="dir-add-admin-password" class="fld-label">Admin password</label>
           <Password
             v-model="addForm.adminPassword"
+            input-id="dir-add-admin-password"
             :feedback="false"
             toggle-mask
             input-class="w-full"
@@ -721,9 +722,10 @@ onMounted(load);
           <InputText v-model="editForm.syncBindUsername" class="w-full" placeholder="sync-svc" />
         </div>
         <div class="form-row">
-          <label class="fld-label">Service account password</label>
+          <label for="dir-edit-sync-password" class="fld-label">Service account password</label>
           <Password
             v-model="editForm.syncBindPassword"
+            input-id="dir-edit-sync-password"
             :feedback="false"
             toggle-mask
             input-class="w-full"
