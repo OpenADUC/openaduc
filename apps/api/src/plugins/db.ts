@@ -29,7 +29,9 @@ export default fp(async (app) => {
   app.decorate('db', db);
 
   app.addHook('onClose', async () => {
+    // Kysely ends the pool itself once its driver has initialised, and pg
+    // throws on a second end(). Only end it here if no query ever ran.
     await db.destroy();
-    await pool.end();
+    if (!pool.ended) await pool.end();
   });
 });
