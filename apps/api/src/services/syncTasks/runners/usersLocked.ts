@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { RunnerContext, RunnerResult } from '../types.js';
+import { clearLockedExcept } from '../../userCache.js';
 
 /**
  * High-frequency lockout poller. Runs every 5 min by default.
@@ -37,26 +38,8 @@ export async function runUsersLocked(ctx: RunnerContext): Promise<RunnerResult> 
   }
 
   // Anyone we previously had marked locked who isn't in this result is
-  // no longer locked. Clear the flag in a single statement.
-  let cleared: number;
-  if (seenGuids.size === 0) {
-    const res = await ctx.db
-      .updateTable('user_cache_records')
-      .set({ locked: false, live_refreshed_at: now })
-      .where('provider_id', '=', ctx.providerId)
-      .where('locked', '=', true)
-      .executeTakeFirst();
-    cleared = Number(res.numUpdatedRows ?? 0n);
-  } else {
-    const res = await ctx.db
-      .updateTable('user_cache_records')
-      .set({ locked: false, live_refreshed_at: now })
-      .where('provider_id', '=', ctx.providerId)
-      .where('locked', '=', true)
-      .where('object_guid', 'not in', Array.from(seenGuids))
-      .executeTakeFirst();
-    cleared = Number(res.numUpdatedRows ?? 0n);
-  }
+  // no longer locked.
+  const cleared = await clearLockedExcept(ctx.db, ctx.providerId, seenGuids, now);
 
   return {
     stats: { lockedCount: lockedUsers.length, clearedCount: cleared },

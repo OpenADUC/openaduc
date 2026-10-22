@@ -4,6 +4,7 @@ import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { uuidNotIn } from '../lib/sqlSets.js';
 
 // Helpers for upserting normalized DirectoryUser records into user_cache_records.
 // Used by both the live-refresh service (single record) and the sync worker
@@ -101,4 +102,44 @@ export async function upsertUser(
     .executeTakeFirstOrThrow();
 
   return { id: row.id, syncedAt: new Date(row.synced_at as unknown as string) };
+}
+
+/**
+ * Mark cached users the last full crawl didn't see as stale (shown with a
+ * staleness badge; deletion is the tombstone sync's job).
+ */
+export async function markUsersStale(
+  db: Kysely<DB>,
+  providerId: number,
+  seen: Set<string>,
+): Promise<void> {
+  const now = new Date().toISOString();
+  let query = db
+    .updateTable('user_cache_records')
+    .set({ stale_at: now })
+    .where('provider_id', '=', providerId)
+    .where('stale_at', 'is', null);
+  if (seen.size > 0) query = query.where(uuidNotIn('object_guid', seen));
+  await query.execute();
+}
+
+/**
+ * Clear the locked flag on every cached user of the directory that's
+ * marked locked but isn't in `stillLocked` (an admin unlocked them
+ * elsewhere, or the lockout ran out). Returns how many were cleared.
+ */
+export async function clearLockedExcept(
+  db: Kysely<DB>,
+  providerId: number,
+  stillLocked: ReadonlySet<string>,
+  now: string,
+): Promise<number> {
+  let query = db
+    .updateTable('user_cache_records')
+    .set({ locked: false, live_refreshed_at: now })
+    .where('provider_id', '=', providerId)
+    .where('locked', '=', true);
+  if (stillLocked.size > 0) query = query.where(uuidNotIn('object_guid', stillLocked));
+  const res = await query.executeTakeFirst();
+  return Number(res.numUpdatedRows ?? 0n);
 }

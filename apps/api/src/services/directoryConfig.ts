@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { LDAP_TLS_MODES, type LdapTlsMode, ldapTransportProblem } from '@openaduc/shared';
 import type { Kysely } from 'kysely';
 import type { Env } from '../config/env.js';
 import type { DB } from '../db/types.js';
@@ -19,7 +20,19 @@ export interface DirectoryProviderSummary {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: string;
+  tlsMode: LdapTlsMode;
+  /**
+   * Why the URLs don't fit the TLS mode (e.g. ldap:// under LDAPS), or null.
+   * Saves are validated, so this flags rows from before that check. Such a
+   * directory still connects with TLS (see transportFor) but should be fixed.
+   */
+  transportProblem: string | null;
+  /**
+   * The DC's certificate isn't verified (per-directory setting, or the
+   * AD_TLS_REJECT_UNAUTHORIZED default), so the connection can be
+   * intercepted. Flagged to admins.
+   */
+  certificateCheckOff: boolean;
   /**
    * Per-directory TLS hardening setting. False = accept self-signed certs
    * (lab / on-prem dev DCs). The env var is the global default; this
@@ -43,7 +56,7 @@ export interface DirectoryProviderInput {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: 'ldaps' | 'starttls' | 'plain';
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized?: boolean;
   operationTimeoutMs?: number;
   /** Background-sync service-account UPN. Optional. */
@@ -73,6 +86,7 @@ export function buildEphemeralProvider(
     name: input.name,
     baseDn: input.baseDn,
     ldapUrls: input.ldapUrls,
+    tlsMode: input.tlsMode,
     tlsRejectUnauthorized: input.tlsRejectUnauthorized ?? fallbacks.tlsRejectUnauthorized,
     tlsCaPath: fallbacks.tlsCaPath,
     operationTimeoutMs: input.operationTimeoutMs ?? fallbacks.operationTimeoutMs,
@@ -85,9 +99,8 @@ export function buildEphemeralProvider(
 export class DirectoryConfigService {
   constructor(
     private readonly db: Kysely<DB>,
-    // env is unused now that bind credentials aren't stored, but kept on the
-    // service for future per-directory env defaults (timeouts, etc.).
-    _env: Env,
+    // Global defaults a directory's own settings fall back to.
+    private readonly env: Env,
   ) {}
 
   /** True iff at least one configured directory_providers row exists. */
@@ -128,7 +141,7 @@ export class DirectoryConfigService {
       .selectAll()
       .where('id', '=', id)
       .executeTakeFirst();
-    return row ? rowToSummary(row) : null;
+    return row ? rowToSummary(row, this.env) : null;
   }
 
   /**
@@ -160,7 +173,7 @@ export class DirectoryConfigService {
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    return rowToSummary(row);
+    return rowToSummary(row, this.env);
   }
 
   /**
@@ -230,7 +243,7 @@ export class DirectoryConfigService {
       .returningAll()
       .executeTakeFirstOrThrow();
 
-    return rowToSummary(updated);
+    return rowToSummary(updated, this.env);
   }
 
   async listAll(): Promise<DirectoryProviderSummary[]> {
@@ -240,7 +253,7 @@ export class DirectoryConfigService {
       .orderBy('configured', 'desc')
       .orderBy('id', 'asc')
       .execute();
-    return rows.map(rowToSummary);
+    return rows.map((r) => rowToSummary(r, this.env));
   }
 }
 
@@ -250,22 +263,25 @@ function parseTlsRejectUnauthorized(config: unknown): boolean | null {
   return typeof v === 'boolean' ? v : null;
 }
 
-function rowToSummary(row: {
-  id: number | string;
-  name: string;
-  display_name: string | null;
-  type: string;
-  domain_name: string;
-  base_dn: string;
-  ldap_urls: string[];
-  tls_mode: string;
-  config_json: unknown;
-  configured: boolean;
-  sync_bind_upn?: string | null;
-  sync_bind_secret_encrypted?: string | null;
-  created_at: Date | string;
-  updated_at: Date | string;
-}): DirectoryProviderSummary {
+function rowToSummary(
+  row: {
+    id: number | string;
+    name: string;
+    display_name: string | null;
+    type: string;
+    domain_name: string;
+    base_dn: string;
+    ldap_urls: string[];
+    tls_mode: string;
+    config_json: unknown;
+    configured: boolean;
+    sync_bind_upn?: string | null;
+    sync_bind_secret_encrypted?: string | null;
+    created_at: Date | string;
+    updated_at: Date | string;
+  },
+  env: Pick<Env, 'AD_TLS_REJECT_UNAUTHORIZED'>,
+): DirectoryProviderSummary {
   return {
     id: Number(row.id),
     name: row.name,
@@ -274,12 +290,21 @@ function rowToSummary(row: {
     domain: row.domain_name,
     baseDn: row.base_dn,
     ldapUrls: row.ldap_urls,
-    tlsMode: row.tls_mode,
+    tlsMode: parseTlsMode(row.tls_mode),
+    transportProblem: ldapTransportProblem(row.ldap_urls, parseTlsMode(row.tls_mode)),
     tlsRejectUnauthorized: parseTlsRejectUnauthorized(row.config_json),
+    certificateCheckOff:
+      (parseTlsRejectUnauthorized(row.config_json) ?? env.AD_TLS_REJECT_UNAUTHORIZED) === false,
     configured: row.configured,
     syncBindUpn: row.sync_bind_upn ?? null,
     hasSyncBindPassword: !!row.sync_bind_secret_encrypted,
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
+}
+
+// Unknown stored values are treated as LDAPS, the strictest mode: an
+// ldap:// URL then refuses to connect rather than binding in cleartext.
+function parseTlsMode(value: string): LdapTlsMode {
+  return (LDAP_TLS_MODES as readonly string[]).includes(value) ? (value as LdapTlsMode) : 'ldaps';
 }
