@@ -11,9 +11,11 @@ This document is a high-level summary. Implementation details are in [`apps/api/
 
 ## Authentication
 
-Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash, no local password store outside the recovery account.
+Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash and no local password store.
 
-The recovery account, created during the first-run wizard, exists so an operator can recover access if the AD link is broken (DC outage, expired service account, mis-configured group). It uses Argon2id-hashed credentials and is intended as a break-glass route only.
+Every failed sign-in gets the same answer, whatever AD said (unknown user, wrong password, locked, disabled, expired, or no OpenADUC role), and directory outages don't reveal hosts or error text. The specific reason is recorded in the audit log. Step-up failures follow the same rule.
+
+There is no local break-glass account yet: if every domain controller is unreachable, or no one is left in a role group, nobody can sign in until that's fixed in AD.
 
 ## Sessions
 

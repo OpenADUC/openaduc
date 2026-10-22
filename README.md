@@ -104,7 +104,7 @@ This is defence in depth, not SSO replacement: the proxy enforces MFA at the net
 
 ### What OpenADUC does and does not provide
 
-- **AD-password authentication only — no application-layer MFA today.** Every sign-in performs a live LDAPS bind against your DCs; there is no in-app password store outside the local break-glass recovery account. If you cannot rely on network controls to keep untrusted users out, gate the app with MFA at a proxy.
+- **AD-password authentication only — no application-layer MFA today.** Every sign-in performs a live LDAPS bind against your DCs; there is no in-app password store and no local break-glass account. If you cannot rely on network controls to keep untrusted users out, gate the app with MFA at a proxy.
 - **Step-up re-auth on every write.** Mutating calls require re-entering the AD password; the elevated session is short-lived (default 60 min) and password material lives only in process memory.
 - **Append-only audit log.** Database triggers reject `UPDATE`, `DELETE`, and `TRUNCATE` on `audit_events`; even a compromised app cannot silently rewrite history.
 - **Encrypted secrets at rest.** Service-account passwords, Entra client secrets, and Teams webhooks are AES-256-GCM encrypted with `ENCRYPTION_KEY`. Back this key up alongside your database backups — losing it makes those rows unrecoverable.
@@ -116,7 +116,6 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 
 - Restrict the AD security group that grants `admin` to a small set of accounts that already use MFA at the AD/Entra layer.
 - Delegate the service account's write permissions to **only the OUs OpenADUC manages**, not domain-wide.
-- Use a strong, unique passphrase for the local recovery account and store it offline.
 - Back up `.env` (which holds `ENCRYPTION_KEY` and `SESSION_COOKIE_SECRET`) alongside your database backups.
 - Forward `audit_events` to a SIEM if you need long-term, off-host retention.
 
@@ -140,7 +139,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 | **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                 |
 | **Password policy** | View domain default and fine-grained policies                                                                                                              |
 | **Audit**           | Every write is logged with actor, target, before/after, and step-up status                                                                                 |
-| **Setup wizard**    | First-run flow: directory connection, recovery account, role bootstrap                                                                                     |
+| **Setup wizard**    | First-run flow: directory connection, service account, policy, initial sync                                                                                |
 
 ## Stack
 
