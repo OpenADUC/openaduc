@@ -36,6 +36,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # The images run the same Node 22 LTS as .nvmrc and CI. Node majors
+    # (including non-LTS ones like 25) move by hand, all three together.
+    ignore:
+      - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /
