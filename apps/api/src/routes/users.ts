@@ -22,6 +22,7 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { listFreshness } from '../services/listFreshness.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -482,6 +483,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       })();
 
       const result: UserSearchResponse = {
+        freshness: await listFreshness(app.db, provider.id, 'users'),
         rows: rows.map((r) => ({
           id: r.object_guid,
           samAccountName: r.sam_account_name ?? '',

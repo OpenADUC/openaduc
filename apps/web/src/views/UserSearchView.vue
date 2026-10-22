@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import type { ListFreshness } from '@openaduc/shared';
+import SyncFreshness from '../design/primitives/SyncFreshness.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
@@ -51,6 +53,7 @@ interface FilterEntry<T> {
 const rows = ref<UserRow[]>([]);
 const filteredRows = ref<UserRow[]>([]);
 const total = ref(0);
+const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const drawerOpen = ref(false);
@@ -150,6 +153,7 @@ async function load(): Promise<void> {
     rows.value = resp.rows.map(decorate);
     filteredRows.value = rows.value;
     total.value = resp.total;
+    freshness.value = resp.freshness;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load users';
   } finally {
@@ -531,6 +535,7 @@ onMounted(() => {
   <div class="page-inner page-fill users-page">
     <PageHeader :title="`Users (${total.toLocaleString()})`">
       <template #actions>
+        <SyncFreshness :freshness="freshness" />
         <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"

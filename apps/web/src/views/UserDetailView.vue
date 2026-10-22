@@ -512,7 +512,12 @@ async function refreshFromAd(): Promise<void> {
   refreshing.value = true;
   try {
     await load();
-    toast.add({ severity: 'success', summary: 'Refreshed from directory', life: 2500 });
+    // load() reports failures through `error` rather than throwing.
+    if (error.value) {
+      toast.add({ severity: 'error', summary: 'Refresh failed', detail: error.value, life: 5000 });
+    } else {
+      toast.add({ severity: 'success', summary: 'Refreshed from directory', life: 2500 });
+    }
   } finally {
     refreshing.value = false;
   }

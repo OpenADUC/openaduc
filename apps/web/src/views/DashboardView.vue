@@ -87,7 +87,11 @@ const syncStatusLabel = computed(() => {
   return 'All tasks healthy';
 });
 
+// Set when the issues list couldn't load: show that, never "Nothing on fire".
+const issuesError = ref<string | null>(null);
+
 async function loadIssues(): Promise<void> {
+  issuesError.value = null;
   try {
     const issues = await api.users.search({
       page: 1,
@@ -100,8 +104,10 @@ async function loadIssues(): Promise<void> {
     });
     issueUsers.value = issues.rows;
     issueTotal.value = issues.total;
-  } catch {
-    /* best-effort — list just stays empty */
+  } catch (err) {
+    issueUsers.value = [];
+    issueTotal.value = 0;
+    issuesError.value = err instanceof Error ? err.message : 'Failed to load';
   }
 }
 
@@ -224,13 +230,25 @@ onMounted(load);
     <Card
       title="Accounts needing attention"
       :sub="
-        issueTotal > 0
-          ? `${issueTotal} total · locked, account expired, or password expiring within 24h`
-          : 'all clear'
+        issuesError
+          ? 'unavailable'
+          : issueTotal > 0
+            ? `${issueTotal} total · locked, account expired, or password expiring within 24h`
+            : 'all clear'
       "
     >
       <EmptyState
-        v-if="!loading && issueUsers.length === 0"
+        v-if="issuesError"
+        icon="pi pi-exclamation-triangle"
+        title="Couldn't load accounts needing attention"
+        :message="issuesError"
+      >
+        <template #actions>
+          <Button label="Retry" icon="pi pi-refresh" size="small" @click="loadIssues" />
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="!loading && issueUsers.length === 0"
         icon="pi pi-check-circle"
         title="Nothing on fire"
         message="No active accounts are locked, expired, or expiring in the next 24 hours."

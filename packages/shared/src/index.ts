@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 export * from './capabilities.js';
 export * from './schemas/auth.js';
+export * from './schemas/freshness.js';
 export * from './schemas/user.js';
 export * from './schemas/deletedUser.js';
 export * from './schemas/group.js';
