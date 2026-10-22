@@ -249,7 +249,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const querySchema = z.object({
-        userId: z.string().uuid().optional(),
+        userId: z.guid().optional(),
         appId: z.string().min(1).max(128).optional(),
         status: z.enum(['success', 'failure', 'all']).optional(),
         fromIso: z.string().datetime({ offset: true }).optional(),

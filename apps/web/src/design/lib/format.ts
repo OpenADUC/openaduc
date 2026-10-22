@@ -75,12 +75,7 @@ export function avatarGradientFor(seed: string | null | undefined): string {
 }
 
 export type UserStatusKind =
-  | 'active'
-  | 'disabled'
-  | 'locked'
-  | 'pwd-expired'
-  | 'pwd-expiring'
-  | 'expired';
+  'active' | 'disabled' | 'locked' | 'pwd-expired' | 'pwd-expiring' | 'expired';
 
 export interface UserStatusInput {
   enabled?: boolean | null;

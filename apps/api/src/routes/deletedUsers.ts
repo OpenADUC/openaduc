@@ -37,7 +37,7 @@ import { StepUpBindFailedError, type WriteContext } from '../providers/types.js'
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 
-const guidParamSchema = z.object({ guid: z.string().uuid() });
+const guidParamSchema = z.object({ guid: z.guid() });
 
 /**
  * Build the operator WriteContext from the authenticated request. The

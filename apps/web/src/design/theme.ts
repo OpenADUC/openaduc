@@ -4,8 +4,8 @@
 // them at runtime so theme/density/accent changes apply to PrimeVue widgets
 // (DataTable, Dialog, Select, DatePicker, etc) automatically.
 
-import { definePreset } from '@primevue/themes';
-import Aura from '@primevue/themes/aura';
+import { definePreset } from '@primeuix/themes';
+import Aura from '@primeuix/themes/aura';
 
 export const adManageTheme = definePreset(Aura, {
   semantic: {
