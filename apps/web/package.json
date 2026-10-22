@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@openaduc/shared": "workspace:*",
-    "@primevue/themes": "^4.5.4",
+    "@primeuix/themes": "^2.0.3",
     "@vueuse/core": "^15.0.0",
     "cronstrue": "^3.38.0",
     "pinia": "^4.1.0",

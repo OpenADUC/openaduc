@@ -114,9 +114,9 @@ importers:
       '@openaduc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@primevue/themes':
-        specifier: ^4.5.4
-        version: 4.5.4
+      '@primeuix/themes':
+        specifier: ^2.0.3
+        version: 2.0.3
       '@vueuse/core':
         specifier: ^15.0.0
         version: 15.0.0(vue@3.5.44(typescript@6.0.3))
@@ -566,11 +566,6 @@ packages:
 
   '@primevue/icons@5.0.3':
     resolution: {integrity: sha512-oCLPneUC4tDGNAgknDp/bePbmdOwT7lv/r0ti2vllrGSYmx4H8Ur3wli0IQv3LoAZSTwnbBGYNI0LWZgnOpIvQ==}
-
-  '@primevue/themes@4.5.4':
-    resolution: {integrity: sha512-rUFZxMHLanTZdvZq4zgZPk+KRBZ3s7fE3bBK32OrZBkHQhEJmkJ7Ftd4w4QFlXyz1B7c+k5invZiOOCjwHXg9Q==}
-    engines: {node: '>=12.11.0'}
-    deprecated: 'Deprecated. This package is no longer maintained. Please migrate to @primeuix/themes: https://www.npmjs.com/package/@primeuix/themes'
 
   '@rolldown/binding-android-arm-eabi@1.2.15':
     resolution: {integrity: sha512-aLcgK9gIJ3YRvrrtfSBbRa27F5WrpiTaPulnFpsHPxpUHgFlSgnU4854MHwoRGEBhfRJDWCS2WQ7lIjskE9Olw==}
@@ -2906,11 +2901,6 @@ snapshots:
       '@primevue/core': 5.0.3(vue@3.5.44(typescript@6.0.3))
     transitivePeerDependencies:
       - vue
-
-  '@primevue/themes@4.5.4':
-    dependencies:
-      '@primeuix/styled': 0.7.4
-      '@primeuix/themes': 2.0.3
 
   '@rolldown/binding-android-arm-eabi@1.2.15':
     optional: true
