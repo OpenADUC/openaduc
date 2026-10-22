@@ -579,3 +579,14 @@ export class StepUpBindFailedError extends Error {
     this.name = 'StepUpBindFailedError';
   }
 }
+
+/**
+ * Every configured domain controller was unreachable. The message names
+ * what failed (hosts, ports, errno) for the log; responses never carry it.
+ */
+export class DirectoryUnavailableError extends Error {
+  constructor(detail: string, cause?: unknown) {
+    super(`no domain controller reachable: ${detail}`, { cause });
+    this.name = 'DirectoryUnavailableError';
+  }
+}

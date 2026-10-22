@@ -34,6 +34,11 @@ const envSchema = z.object({
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   API_CORS_ORIGIN: z.string().transform(csv).prefault('http://localhost:5173'),
+  // Reverse proxies in front of the API whose X-Forwarded-For entries are
+  // trusted, counted from the API outwards. 1 = the bundled nginx. Set 2 if
+  // another proxy or load balancer sits in front of nginx, 0 if clients
+  // reach the API directly. Too high lets clients choose their own IP.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
 
   SESSION_COOKIE_SECRET: z.string().min(32),
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(1).default(60),
