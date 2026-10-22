@@ -28,9 +28,10 @@ export default fp(async (app) => {
   app.decorate('pgPool', pool);
   app.decorate('db', db);
 
-  // Kysely's PostgresDialect ends the pool it was given; ending it again
-  // throws, which made every graceful shutdown exit non-zero.
   app.addHook('onClose', async () => {
+    // Kysely ends the pool itself once its driver has initialised, and pg
+    // throws on a second end(). Only end it here if no query ever ran.
     await db.destroy();
+    if (!pool.ended) await pool.end();
   });
 });
