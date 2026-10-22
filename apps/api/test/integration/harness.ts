@@ -168,7 +168,7 @@ let instanceCounter = 0;
  * Usually called once per test file (beforeAll); call it again for a
  * second, independent instance (e.g. to run setup twice).
  */
-export async function startApi(): Promise<TestApi> {
+export async function startApi(options: { env?: Record<string, string> } = {}): Promise<TestApi> {
   const adminUrl = inject('adminDatabaseUrl');
   const dbName = `openaduc_test_${process.pid}_${++instanceCounter}`;
   await withAdmin(adminUrl, (c) => c.query(`CREATE DATABASE ${dbName} TEMPLATE ${TEMPLATE_DB}`));
@@ -194,6 +194,7 @@ export async function startApi(): Promise<TestApi> {
     AD_SERVICE_ACCOUNT_UPN: '',
     AD_SERVICE_ACCOUNT_PASSWORD: '',
     BOOTSTRAP_ADMIN_GROUP_DN: '',
+    ...options.env,
   });
 
   // Fresh module graph so this instance reads the env set above (loadEnv
