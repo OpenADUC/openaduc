@@ -11,22 +11,23 @@ describe('apiFetch on 401', () => {
     setUnauthorizedHandler(() => {});
   });
 
-  it('reports an expired session for ordinary requests', async () => {
+  it('reports an expired session', async () => {
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
-    vi.stubGlobal('fetch', respond(401, { error: { code: 'unauthorized', message: 'nope' } }));
+    vi.stubGlobal('fetch', respond(401, { error: { code: 'session_required', message: 'x' } }));
 
     await expect(apiFetch('/users')).rejects.toBeInstanceOf(ApiError);
     expect(onUnauthorized).toHaveBeenCalledOnce();
   });
 
-  it('leaves wrong passwords at sign-in and step-up to the caller', async () => {
+  it('leaves other 401s (wrong passwords, missing service account) to the caller', async () => {
     const onUnauthorized = vi.fn();
     setUnauthorizedHandler(onUnauthorized);
     vi.stubGlobal('fetch', respond(401, { error: { code: 'unauthorized', message: 'nope' } }));
 
     await expect(apiFetch('/auth/login', { method: 'POST', body: '{}' })).rejects.toThrow();
-    await expect(apiFetch('/auth/step-up', { method: 'POST', body: '{}' })).rejects.toThrow();
+    await expect(apiFetch('/setup/service-account', { method: 'POST' })).rejects.toThrow();
+    await expect(apiFetch('/users')).rejects.toThrow();
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 

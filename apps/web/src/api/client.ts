@@ -33,16 +33,16 @@ export function setStepUpRequiredHandler(fn: (message: string) => void): void {
 }
 
 /**
- * Hook called when a request comes back 401: the server session has
- * expired or been revoked. Wired in main.ts to clear the signed-in state
- * and send the operator to sign-in, then back. Not called for sign-in and
- * step-up themselves, where 401 just means a wrong password.
+ * Hook called when a request comes back 401 `session_required`: the server
+ * session has expired or been revoked. Wired in main.ts to clear the
+ * signed-in state and send the operator to sign-in, then back. Other 401s
+ * (a wrong password typed into a form, a missing service account) are left
+ * to the caller.
  */
 let onUnauthorized: (() => void) | null = null;
 export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
-const PASSWORD_CHECKS = ['/auth/login', '/auth/step-up'];
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`;
@@ -67,7 +67,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     if (res.status === 403 && code === 'step_up_required') {
       onStepUpRequired?.(message);
     }
-    if (res.status === 401 && !PASSWORD_CHECKS.some((p) => path.startsWith(p))) {
+    if (res.status === 401 && code === 'session_required') {
       onUnauthorized?.();
     }
     throw new ApiError(res.status, code, message, body.error?.details);

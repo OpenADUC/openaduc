@@ -16,6 +16,13 @@ export class AppError extends Error {
 
 export const Unauthorized = (msg = 'Unauthorized') =>
   new AppError({ statusCode: 401, code: 'unauthorized', message: msg });
+/**
+ * 401 for a request with no valid session. The web client signs the
+ * operator out only on this code; other 401s (a rejected password typed
+ * into a form) leave the session alone.
+ */
+export const SessionRequired = () =>
+  new AppError({ statusCode: 401, code: 'session_required', message: 'authentication required' });
 export const Forbidden = (msg = 'Forbidden') =>
   new AppError({ statusCode: 403, code: 'forbidden', message: msg });
 /**
