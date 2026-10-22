@@ -22,6 +22,7 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { rawAttributesFor } from '../lib/rawAttributes.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -716,7 +717,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                     : null,
               }
             : null,
-        rawAttributes: refreshed.user.rawAttributes,
+        rawAttributes: rawAttributesFor(req, refreshed.user.rawAttributes),
       };
 
       // Account view audit (configurable). Deduped per session+target on a

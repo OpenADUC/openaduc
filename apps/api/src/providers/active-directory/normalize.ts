@@ -32,6 +32,28 @@ export const BINARY_ATTRS = [
   'msExchSafeRecipientsHash',
 ];
 
+// Attributes that hold secrets. The wildcard query returns whatever the
+// bind account may read, and some deployments let the service account read
+// these; they must never reach the cache, the API or the UI. Lowercase:
+// LDAP attribute names are case-insensitive.
+export const SECRET_ATTRS: ReadonlySet<string> = new Set([
+  'ms-mcs-admpwd', // legacy LAPS password
+  'mslaps-password', // Windows LAPS cleartext password
+  'mslaps-encryptedpassword',
+  'mslaps-encryptedpasswordhistory',
+  'mslaps-encrypteddsrmpassword',
+  'mslaps-encrypteddsrmpasswordhistory',
+  'msds-managedpassword', // gMSA
+  'unicodepwd',
+  'userpassword',
+  'supplementalcredentials',
+  'msfve-recoverypassword', // BitLocker recovery
+]);
+
+export function isSecretAttr(name: string): boolean {
+  return SECRET_ATTRS.has(name.toLowerCase());
+}
+
 // Attributes the wildcard query returns but that we don't want to surface
 // anywhere — neither in the UI's "More from directory" extras, the Raw LDAP
 // tab, nor the cached rawAttributes JSONB blob. Either redundant with a
@@ -278,7 +300,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -331,7 +353,7 @@ export function normalizeOu(entry: Entry): DirectoryOu {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -418,7 +440,7 @@ export function normalizeDeletedUser(entry: Entry): DirectoryDeletedUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -459,7 +481,7 @@ export function normalizeComputer(entry: Entry): DirectoryComputer {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -502,7 +524,7 @@ export function normalizeDeletedComputer(entry: Entry): DirectoryDeletedComputer
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -555,7 +577,7 @@ export function normalizeGroup(entry: Entry): DirectoryGroup {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -599,7 +621,7 @@ export function normalizeGroupPolicy(entry: Entry): DirectoryGroupPolicy {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;

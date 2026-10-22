@@ -21,6 +21,7 @@ import {
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+import { rawAttributesFor } from '../lib/rawAttributes.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -212,7 +213,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
           cachedAt: cacheRow?.synced_at ? new Date(cacheRow.synced_at).toISOString() : null,
           isStale: Boolean(cacheRow?.stale_at),
         },
-        rawAttributes: live.rawAttributes,
+        rawAttributes: rawAttributesFor(req, live.rawAttributes),
       };
 
       // Audit the view, gated by the same setting as user/group views and

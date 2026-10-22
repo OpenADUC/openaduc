@@ -169,7 +169,7 @@ type TabId =
   | 'comPlus'
   | 'attributes';
 
-const tabs: { id: TabId; label: string }[] = [
+const allTabs: { id: TabId; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'address', label: 'Address' },
   { id: 'account', label: 'Account' },
@@ -188,6 +188,12 @@ const tabs: { id: TabId; label: string }[] = [
   // user object via UserDetail.rawAttributes.
   { id: 'attributes', label: 'Attribute Editor' },
 ];
+// The API only sends the full attribute set with view:raw_attributes.
+const tabs = computed(() =>
+  auth.hasCapability('view:raw_attributes')
+    ? allTabs
+    : allTabs.filter((t) => t.id !== 'attributes'),
+);
 const activeTab = ref<TabId>('general');
 
 // --- Attribute Editor tab --------------------------------------------
