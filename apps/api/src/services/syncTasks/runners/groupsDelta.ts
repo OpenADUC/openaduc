@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { sql } from 'kysely';
 import { upsertGroup } from '../../groupCache.js';
+import { upsertUser } from '../../userCache.js';
 import type { RunnerContext, RunnerResult } from '../types.js';
 
 const OVERLAP_MS = 5 * 60_000;
@@ -7,9 +9,13 @@ const OVERLAP_MS = 5 * 60_000;
 /**
  * Incremental group sync. Same shape as users.delta — pulls
  * `whenChanged>=lastSuccess - 5m` and upserts. Picks up new groups,
- * renames, description / type changes, and (importantly) membership
- * churn since `memberOf` lives on the user side but `member` lives on
- * the group side.
+ * renames, description / type changes and membership churn.
+ *
+ * Memberships are rebuilt from users' `memberOf`, and adding someone to a
+ * group changes the group's whenChanged but not the user's, so users.delta
+ * never sees it. For each changed group, re-read its current members and
+ * the users the cache still lists as members, so their `memberOf` is fresh
+ * before the rebuild.
  *
  * Triggers `memberships.rebuild` whenever it observed any change.
  */
@@ -18,22 +24,73 @@ export async function runGroupsDelta(ctx: RunnerContext): Promise<RunnerResult> 
     ? new Date(ctx.lastSuccessfulRunAt.getTime() - OVERLAP_MS)
     : undefined;
 
-  let count = 0;
+  const changedDns: string[] = [];
   for await (const group of ctx.provider.syncGroups(since ? { modifiedSince: since } : {})) {
     try {
       await upsertGroup(ctx.db, ctx.providerId, group);
-      count++;
+      changedDns.push(group.distinguishedName);
     } catch (err) {
       ctx.log.warn({ err, guid: group.objectGuid }, 'group upsert failed');
     }
   }
 
+  // Without `since` this was a full crawl; users.full covers memberships.
+  let membersRefreshed = 0;
+  if (since) {
+    for (const dn of changedDns) membersRefreshed += await refreshMembers(ctx, dn);
+  }
+
   return {
     cursor: new Date().toISOString(),
     stats: {
-      groupsSeen: count,
+      groupsSeen: changedDns.length,
+      membersRefreshed,
       modifiedSince: since?.toISOString() ?? null,
     },
-    triggers: count > 0 ? ['memberships.rebuild'] : [],
+    triggers: changedDns.length > 0 ? ['memberships.rebuild'] : [],
   };
+}
+
+async function refreshMembers(ctx: RunnerContext, groupDn: string): Promise<number> {
+  const refreshed = new Set<string>();
+  for await (const user of ctx.provider.syncGroupMembers(groupDn)) {
+    try {
+      await upsertUser(ctx.db, ctx.providerId, user, { source: 'sync' });
+      refreshed.add(user.objectGuid);
+    } catch (err) {
+      ctx.log.warn({ err, guid: user.objectGuid }, 'group member upsert failed');
+    }
+  }
+
+  // Cached members no longer in the group: re-read them so their memberOf
+  // drops it.
+  const cachedMembers = await ctx.db
+    .selectFrom('user_cache_records')
+    .select('object_guid')
+    .where('provider_id', '=', ctx.providerId)
+    .where('deleted_at', 'is', null)
+    .where(
+      sql<boolean>`exists (
+        select 1 from jsonb_array_elements_text(
+          case jsonb_typeof(raw_attributes_json -> 'memberOf')
+            when 'array' then raw_attributes_json -> 'memberOf'
+            when 'string' then jsonb_build_array(raw_attributes_json -> 'memberOf')
+            else '[]'::jsonb
+          end
+        ) as member_of
+        where lower(member_of) = lower(${groupDn})
+      )`,
+    )
+    .execute();
+  for (const { object_guid } of cachedMembers) {
+    if (refreshed.has(object_guid)) continue;
+    try {
+      const user = await ctx.provider.getUser({ kind: 'objectGuid', value: object_guid });
+      if (user) await upsertUser(ctx.db, ctx.providerId, user, { source: 'sync' });
+      refreshed.add(object_guid);
+    } catch (err) {
+      ctx.log.warn({ err, guid: object_guid }, 'former group member refresh failed');
+    }
+  }
+  return refreshed.size;
 }

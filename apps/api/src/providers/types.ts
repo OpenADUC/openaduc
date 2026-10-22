@@ -375,6 +375,11 @@ export interface DirectoryProvider {
   getComputerGroups(computerId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
 
   syncUsers(input: SyncInput): AsyncIterable<DirectoryUser>;
+  /**
+   * Current direct members of a group, read from the users' side (memberOf),
+   * which doesn't hit the group's 1500-value range limit on `member`.
+   */
+  syncGroupMembers(groupDn: string): AsyncIterable<DirectoryUser>;
   syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup>;
   syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer>;
   syncOus(input: SyncInput): AsyncIterable<DirectoryOu>;

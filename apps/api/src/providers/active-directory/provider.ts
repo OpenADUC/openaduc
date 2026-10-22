@@ -513,6 +513,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     yield* this.streamSearch(filter, USER_ATTRS_FULL, input.pageSize ?? 500, normalizeUser);
   }
 
+  async *syncGroupMembers(groupDn: string): AsyncIterable<DirectoryUser> {
+    const filter = `(&${USER_FILTER_BASE}(memberOf=${escapeLdapFilter(groupDn)}))`;
+    yield* this.streamSearch(filter, USER_ATTRS_FULL, 500, normalizeUser);
+  }
+
   async *syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup> {
     const filter = input.modifiedSince
       ? `(&${GROUP_FILTER_BASE}(whenChanged>=${formatGeneralizedTime(input.modifiedSince)}))`

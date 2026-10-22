@@ -283,6 +283,23 @@ export class SyncTaskService {
   }
 
   /**
+   * When the most recent successful run of this task started, or null if
+   * none has succeeded. Delta tasks fetch changes since then: anchoring on
+   * the start, not the finish, keeps changes made during a long run, and
+   * reading run history, not the task row, survives failed runs in between.
+   */
+  async lastSuccessfulStartAt(providerId: number, taskKey: SyncTaskKey): Promise<Date | null> {
+    const row = await this.db
+      .selectFrom('directory_sync_task_runs')
+      .select((eb) => eb.fn.max('started_at').as('started_at'))
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', taskKey)
+      .where('status', '=', 'succeeded')
+      .executeTakeFirst();
+    return row?.started_at ? new Date(row.started_at) : null;
+  }
+
+  /**
    * Mark a run as started. Updates the latest-status fields on the task
    * row AND opens a new history row that markFinished will close. Returns
    * the new history row's id so the caller can pass it back to
