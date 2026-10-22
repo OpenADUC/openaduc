@@ -4,7 +4,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { BadRequest, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
-import { buildEphemeralProvider } from '../services/directoryConfig.js';
+import {
+  buildEphemeralProvider,
+  type DirectoryProviderSummary,
+} from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
 import { isKnownTaskKey } from '../services/syncTasks/registry.js';
@@ -76,6 +79,31 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
     operationTimeoutMs: env.AD_OPERATION_TIMEOUT_MS,
     tlsCaPath: env.AD_TLS_CA_PATH,
   };
+
+  /** A provider bound as `bindUpn` against `dir`'s connection settings. */
+  function serviceAccountProvider(
+    dir: Pick<
+      DirectoryProviderSummary,
+      'name' | 'domain' | 'baseDn' | 'ldapUrls' | 'tlsMode' | 'tlsRejectUnauthorized'
+    >,
+    bindUpn: string,
+    bindPassword: string,
+  ) {
+    return buildEphemeralProvider(
+      {
+        name: dir.name,
+        type: 'active-directory',
+        domain: dir.domain,
+        baseDn: dir.baseDn,
+        ldapUrls: dir.ldapUrls,
+        tlsMode: dir.tlsMode,
+        bindUpn,
+        bindPassword,
+        tlsRejectUnauthorized: dir.tlsRejectUnauthorized ?? env.AD_TLS_REJECT_UNAUTHORIZED,
+      },
+      tlsFallbacks,
+    );
+  }
 
   // ---- GET /api/directories/public -------------------------------------
   app.get('/api/directories/public', async () => {
@@ -225,6 +253,43 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
         if (transportProblem) throw BadRequest(transportProblem);
       }
 
+      // Syncs send the stored service-account password to whatever these
+      // settings point at, and every sign-in sends an operator's. Changing
+      // them needs that password re-entered and a working bind first.
+      const effectiveTlsCheck = (v: boolean | null) => v ?? env.AD_TLS_REJECT_UNAUTHORIZED;
+      const connectionChanged =
+        (body.ldapUrls !== undefined &&
+          JSON.stringify(body.ldapUrls) !== JSON.stringify(before.ldapUrls)) ||
+        (body.tlsMode !== undefined && body.tlsMode !== before.tlsMode) ||
+        (body.tlsRejectUnauthorized !== undefined &&
+          body.tlsRejectUnauthorized !== effectiveTlsCheck(before.tlsRejectUnauthorized));
+      if (connectionChanged) {
+        if (!body.syncBindPassword) {
+          throw BadRequest(
+            "Re-enter the service account password to change how OpenADUC connects to this domain. It's checked against the new settings before they're saved.",
+          );
+        }
+        const syncBindUpn = body.syncBindUpn ?? before.syncBindUpn;
+        if (!syncBindUpn) {
+          throw BadRequest('Set a service account before changing how this domain is reached.');
+        }
+        const probe = await serviceAccountProvider(
+          {
+            ...before,
+            ldapUrls: body.ldapUrls ?? before.ldapUrls,
+            tlsMode: body.tlsMode ?? before.tlsMode,
+            tlsRejectUnauthorized: body.tlsRejectUnauthorized ?? before.tlsRejectUnauthorized,
+          },
+          syncBindUpn,
+          body.syncBindPassword,
+        ).authenticateUser({ username: syncBindUpn, password: body.syncBindPassword });
+        if (!probe.ok) {
+          throw BadRequest(
+            `Not saved: the service account couldn't sign in with the new settings (${probe.errorMessage ?? 'bind failed'}).`,
+          );
+        }
+      }
+
       const updated = await app.services.directoryConfig.update(id, compactPatch(body));
 
       // Don't echo password material in metadata; record only that it changed.
@@ -241,6 +306,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
           metadata: {
             changedFields,
             syncSecretRotated: body.syncBindPassword !== undefined,
+            ...(connectionChanged ? { connectionVerified: true } : {}),
           },
           before: {
             ldapUrls: before.ldapUrls,
@@ -268,7 +334,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // pass/fail message so the operator finds out about a typo at the
   // moment of typing instead of after waiting for the next scheduled run.
   app.post('/api/directories/:id/test-sync-bind', {
-    preHandler: app.requireCapability('configure:directory'),
+    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
@@ -288,25 +354,14 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
         if (!stored) {
           throw app.httpErrors.badRequest('no stored sync password — supply one or rotate first');
         }
+        // The stored password only ever goes out as the stored account.
+        if (body.syncBindUpn.toLowerCase() !== (directory.syncBindUpn ?? '').toLowerCase()) {
+          throw BadRequest('to test a different account, enter its password');
+        }
         password = stored.password;
       }
 
-      const tlsRejectUnauthorized =
-        directory.tlsRejectUnauthorized ?? env.AD_TLS_REJECT_UNAUTHORIZED;
-      const provider = buildEphemeralProvider(
-        {
-          name: directory.name,
-          type: 'active-directory',
-          domain: directory.domain,
-          baseDn: directory.baseDn,
-          ldapUrls: directory.ldapUrls,
-          tlsMode: directory.tlsMode,
-          bindUpn: body.syncBindUpn,
-          bindPassword: password,
-          tlsRejectUnauthorized,
-        },
-        tlsFallbacks,
-      );
+      const provider = serviceAccountProvider(directory, body.syncBindUpn, password);
       // Reuse the rich auth-classifier (returns specific reasons for
       // wrong-password / user-not-found / TLS / unreachable). For a SA
       // probe we don't need the full record — a successful bind is the

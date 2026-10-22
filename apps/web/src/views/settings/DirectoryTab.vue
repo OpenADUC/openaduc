@@ -8,7 +8,7 @@ const TLS_MODE_LABEL: Record<LdapTlsMode, string> = {
   ldaps: 'LDAPS',
   starttls: 'StartTLS',
 };
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
@@ -258,6 +258,19 @@ watch(
   },
 );
 
+// Changing where or how the domain is reached needs the service-account
+// password re-entered: the API binds with it before saving.
+const editConnectionChanged = computed(() => {
+  const before = editTarget.value;
+  if (!before) return false;
+  const urls = editForm.dcs.map((d) => editLdapUrl(d.host)).filter(Boolean);
+  return (
+    JSON.stringify(urls) !== JSON.stringify(before.ldapUrls) ||
+    editForm.tlsMode !== before.tlsMode ||
+    editForm.rejectUntrusted !== (before.tlsRejectUnauthorized ?? true)
+  );
+});
+
 function editLdapUrl(host: string): string {
   return ldapUrlFor(host, editForm.tlsMode, editForm.port);
 }
@@ -322,6 +335,12 @@ async function submitEdit(): Promise<void> {
   // Empty = keep stored password; non-empty = replace.
   if (editForm.syncBindPassword) {
     patch.syncBindPassword = editForm.syncBindPassword;
+  }
+
+  if (editConnectionChanged.value && !editForm.syncBindPassword) {
+    editError.value =
+      "Re-enter the service account password to change how OpenADUC connects to this domain. It's checked against the new settings before they're saved.";
+    return;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -693,7 +712,11 @@ onMounted(load);
             input-class="w-full"
             class="w-full"
             :placeholder="
-              editTarget?.hasSyncBindPassword ? 'Leave blank to keep stored password' : ''
+              editConnectionChanged
+                ? 'Required to change connection settings'
+                : editTarget?.hasSyncBindPassword
+                  ? 'Leave blank to keep stored password'
+                  : ''
             "
           />
         </div>
