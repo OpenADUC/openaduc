@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
+import {
+  ROLE_MEMBERS_SHOWN,
+  ROLES,
+  rolesResponseSchema,
+  rolesUpdateRequestSchema,
+  type Role,
+  type RoleMapping,
+  type RolesResponse,
+} from '@openaduc/shared';
 import { z } from 'zod';
-import { BadRequest } from '../plugins/errorHandler.js';
+import { BadRequest, Conflict } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 
 // Settings exposed to the operator UI. Not every app_settings row is here —
@@ -167,24 +176,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 // Each OpenADUC role (admin, operator, auditor) is granted to the direct
 // members of one AD group, stored as authz.<role>_group_dn.
 
-const ROLES = ['admin', 'operator', 'auditor'] as const;
-type RoleName = (typeof ROLES)[number];
-const roleKey = (role: RoleName) => `authz.${role}_group_dn`;
-
-const groupDnField = z.string().trim().min(1).max(1024).nullable().optional();
-const rolesPutSchema = z
-  .object({
-    admin: groupDnField,
-    operator: groupDnField,
-    auditor: groupDnField,
-    // Moving the admin role to a group the current admin isn't in would
-    // lock them out at their next sign-in; they have to say they mean it.
-    confirmAdminChange: z.boolean().optional(),
-  })
-  .strict();
+const roleKey = (role: Role) => `authz.${role}_group_dn`;
 
 export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<void> {
-  async function currentMapping(): Promise<Record<RoleName, string | null>> {
+  async function currentMapping(): Promise<Record<Role, string | null>> {
     const rows = await app.db
       .selectFrom('app_settings')
       .select(['key', 'value_json'])
@@ -196,11 +191,13 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
       .execute();
     const byKey = new Map(rows.map((r) => [r.key, r.value_json as string | null]));
     return Object.fromEntries(ROLES.map((r) => [r, byKey.get(roleKey(r)) ?? null])) as Record<
-      RoleName,
+      Role,
       string | null
     >;
   }
 
+  // Roles go to direct members only, so every count and check here
+  // ignores memberships that come through nested groups.
   async function findGroup(providerId: number, dn: string) {
     return app.db
       .selectFrom('group_cache_records as g')
@@ -213,6 +210,7 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
           .select((m) => m.fn.countAll<string>().as('n'))
           .whereRef('m.group_object_guid', '=', 'g.object_guid')
           .whereRef('m.provider_id', '=', 'g.provider_id')
+          .where('m.direct', '=', true)
           .as('member_count'),
       ])
       .where('g.provider_id', '=', providerId)
@@ -221,16 +219,47 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
       .executeTakeFirst();
   }
 
+  async function directMembers(providerId: number, groupGuid: string) {
+    const rows = await app.db
+      .selectFrom('user_group_memberships as m')
+      .innerJoin('user_cache_records as u', (j) =>
+        j
+          .onRef('u.object_guid', '=', 'm.user_object_guid')
+          .onRef('u.provider_id', '=', 'm.provider_id'),
+      )
+      .select(['u.object_guid', 'u.display_name', 'u.sam_account_name'])
+      .where('m.provider_id', '=', providerId)
+      .where('m.group_object_guid', '=', groupGuid)
+      .where('m.direct', '=', true)
+      .where('u.deleted_at', 'is', null)
+      .orderBy(sql`lower(coalesce(u.display_name, u.sam_account_name))`)
+      .limit(ROLE_MEMBERS_SHOWN)
+      .execute();
+    return rows.map((r) => ({
+      id: r.object_guid,
+      displayName: r.display_name,
+      samAccountName: r.sam_account_name ?? '',
+    }));
+  }
+
+  async function isDirectMember(providerId: number, groupGuid: string, userGuid: string) {
+    return !!(await app.db
+      .selectFrom('user_group_memberships')
+      .select('user_object_guid')
+      .where('provider_id', '=', providerId)
+      .where('group_object_guid', '=', groupGuid)
+      .where('user_object_guid', '=', userGuid)
+      .where('direct', '=', true)
+      .executeTakeFirst());
+  }
+
   // ---- GET /api/settings/roles -------------------------------------------
   app.get('/api/settings/roles', {
     preHandler: app.requireCapability('configure:security'),
-    handler: async (req) => {
+    handler: async (req): Promise<RolesResponse> => {
       const mapping = await currentMapping();
       const providerId = req.actor!.session.directoryId;
-      const roles: Record<
-        string,
-        { groupDn: string | null; groupName: string | null; memberCount: number | null }
-      > = {};
+      const roles = {} as Record<Role, RoleMapping>;
       for (const role of ROLES) {
         const dn = mapping[role];
         const group = dn ? await findGroup(providerId, dn) : undefined;
@@ -238,9 +267,10 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
           groupDn: dn,
           groupName: group?.name ?? null,
           memberCount: group ? Number(group.member_count ?? 0) : null,
+          members: group ? await directMembers(providerId, group.object_guid) : [],
         };
       }
-      return { roles };
+      return rolesResponseSchema.parse({ roles });
     },
   });
 
@@ -250,7 +280,7 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
   app.put('/api/settings/roles', {
     preHandler: [app.requireCapability('configure:security'), app.requireStepUp],
     handler: async (req) => {
-      const body = rolesPutSchema.parse(req.body);
+      const body = rolesUpdateRequestSchema.parse(req.body);
       const actor = req.actor!;
       const providerId = actor.session.directoryId;
       const before = await currentMapping();
@@ -264,21 +294,18 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
         after[role] = dn;
       }
 
+      // Moving or clearing the admin role can lock the current admin out.
       const newAdmin = after.admin;
-      if (newAdmin && newAdmin.toLowerCase() !== (before.admin ?? '').toLowerCase()) {
-        const group = await findGroup(providerId, newAdmin);
-        const isMember = group
-          ? !!(await app.db
-              .selectFrom('user_group_memberships')
-              .select('user_object_guid')
-              .where('provider_id', '=', providerId)
-              .where('group_object_guid', '=', group.object_guid)
-              .where('user_object_guid', '=', actor.session.actorUserId)
-              .executeTakeFirst())
+      if ((newAdmin ?? '').toLowerCase() !== (before.admin ?? '').toLowerCase()) {
+        const group = newAdmin ? await findGroup(providerId, newAdmin) : undefined;
+        const keepsAdmin = group
+          ? await isDirectMember(providerId, group.object_guid, actor.session.actorUserId)
           : false;
-        if (!isMember && !body.confirmAdminChange) {
-          throw app.httpErrors.conflict(
-            "You aren't a direct member of that group, so you'd lose admin rights at your next sign-in. Confirm to go ahead.",
+        if (!keepsAdmin && !body.confirmAdminChange) {
+          throw Conflict(
+            newAdmin
+              ? "You aren't a direct member of that group, so you'd lose admin rights at your next sign-in. Confirm to go ahead."
+              : 'With no admin group, nobody (you included) gets admin rights at their next sign-in. Confirm to go ahead.',
           );
         }
       }
@@ -286,14 +313,15 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
       await app.db.transaction().execute(async (trx) => {
         for (const role of ROLES) {
           if (after[role] === before[role]) continue;
+          const change = {
+            value_json: JSON.stringify(after[role]),
+            updated_by_actor_id: actor.session.actorUserId,
+            updated_at: new Date(),
+          };
           await trx
-            .updateTable('app_settings')
-            .set({
-              value_json: JSON.stringify(after[role]),
-              updated_by_actor_id: actor.session.actorUserId,
-              updated_at: new Date(),
-            })
-            .where('key', '=', roleKey(role))
+            .insertInto('app_settings')
+            .values({ key: roleKey(role), ...change })
+            .onConflict((oc) => oc.column('key').doUpdateSet(change))
             .execute();
         }
       });

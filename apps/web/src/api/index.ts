@@ -30,6 +30,8 @@ import type {
   MfaRegistrationResponse,
   MfaRegistrationStatus,
   RestoreUserResponse,
+  RolesResponse,
+  RolesUpdateRequest,
   SignInEventApp,
   SignInEventDetail,
   SignInEventsResponse,
@@ -751,20 +753,11 @@ export const api = {
     update(body: Record<string, unknown>): Promise<{ ok: boolean; updated: string[] }> {
       return apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(body) });
     },
-    roles(): Promise<{ roles: Record<RoleName, RoleMapping> }> {
+    roles(): Promise<RolesResponse> {
       return apiFetch('/settings/roles');
     },
-    updateRoles(
-      body: Partial<Record<RoleName, string | null>> & { confirmAdminChange?: boolean },
-    ): Promise<{ ok: boolean }> {
+    updateRoles(body: RolesUpdateRequest): Promise<{ ok: boolean }> {
       return apiFetch('/settings/roles', { method: 'PUT', body: JSON.stringify(body) });
     },
   },
 };
-
-export type RoleName = 'admin' | 'operator' | 'auditor';
-export interface RoleMapping {
-  groupDn: string | null;
-  groupName: string | null;
-  memberCount: number | null;
-}

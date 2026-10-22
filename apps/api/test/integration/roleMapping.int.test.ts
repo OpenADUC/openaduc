@@ -4,7 +4,12 @@ import { configureDirectory, DC, startApi, type TestApi, type TestClient } from 
 
 const DOMAIN_ADMINS = `CN=Domain Admins,CN=Users,${DC.baseDn}`;
 
-type Role = { groupDn: string | null; groupName: string | null; memberCount: number | null };
+type Role = {
+  groupDn: string | null;
+  groupName: string | null;
+  memberCount: number | null;
+  members: { samAccountName: string }[];
+};
 
 describe('mapping roles to AD groups', () => {
   let api: TestApi;
@@ -31,6 +36,12 @@ describe('mapping roles to AD groups', () => {
     const r = await roles();
     expect(r.admin).toMatchObject({ groupDn: DOMAIN_ADMINS, groupName: 'Domain Admins' });
     expect(r.operator).toMatchObject({ groupName: 'OpenADUC Operators', memberCount: 1 });
+  });
+
+  it('shows who currently qualifies for each role', async () => {
+    const r = await roles();
+    expect(r.operator?.members.map((m) => m.samAccountName)).toEqual(['oa.operator']);
+    expect(r.admin?.members.map((m) => m.samAccountName)).toContain('oa.admin');
   });
 
   it('takes effect at the next sign-in, without a restart', async () => {
@@ -83,6 +94,25 @@ describe('mapping roles to AD groups', () => {
       .where('key', '=', 'authz.admin_group_dn')
       .execute();
     api.app.services.settings.invalidate('authz.admin_group_dn');
+  });
+
+  it('asks for confirmation before an admin clears the admin role', async () => {
+    const res = await admin.put('/api/settings/roles', { admin: null });
+    expect(res.statusCode).toBe(409);
+    expect((await roles()).admin?.groupDn).toBe(DOMAIN_ADMINS);
+  });
+
+  it('saves a role whose settings row is missing', async () => {
+    await api.app.db
+      .deleteFrom('app_settings')
+      .where('key', '=', 'authz.auditor_group_dn')
+      .execute();
+    api.app.services.settings.invalidate('authz.auditor_group_dn');
+
+    expect(
+      (await admin.put('/api/settings/roles', { auditor: DC.groups.auditors })).statusCode,
+    ).toBe(200);
+    expect((await roles()).auditor?.groupDn).toBe(DC.groups.auditors);
   });
 
   it('needs step-up', async () => {

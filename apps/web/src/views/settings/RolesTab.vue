@@ -8,7 +8,8 @@ import Select from 'primevue/select';
 import Message from 'primevue/message';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { api, type RoleMapping, type RoleName } from '../../api/index.js';
+import { ROLE_MEMBERS_SHOWN, type RoleMapping, type Role as RoleName } from '@openaduc/shared';
+import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
@@ -36,7 +37,7 @@ const saving = ref(false);
 const current = ref<Record<RoleName, RoleMapping> | null>(null);
 const draft = ref<Record<RoleName, string | null>>({ admin: null, operator: null, auditor: null });
 const groups = ref<{ dn: string; label: string }[]>([]);
-const pendingAdminConfirm = ref(false);
+const pendingAdminConfirm = ref<string | null>(null);
 
 const changed = computed(() =>
   current.value
@@ -85,7 +86,7 @@ async function save(confirmAdminChange = false): Promise<void> {
     for (const r of changed.value) body[r] = draft.value[r];
     if (confirmAdminChange) body.confirmAdminChange = true;
     await api.settings.updateRoles(body);
-    pendingAdminConfirm.value = false;
+    pendingAdminConfirm.value = null;
     toast.add({
       severity: 'success',
       summary: 'Roles saved',
@@ -98,7 +99,7 @@ async function save(confirmAdminChange = false): Promise<void> {
       // The step-up dialog is opening; save again once it succeeds.
       auth.stepUpPendingAction = () => save(confirmAdminChange);
     } else if (err instanceof ApiError && err.status === 409) {
-      pendingAdminConfirm.value = true;
+      pendingAdminConfirm.value = err.message;
     } else {
       toast.add({
         severity: 'error',
@@ -134,6 +135,18 @@ onMounted(load);
               : `${current[info.role].memberCount} direct ${current[info.role].memberCount === 1 ? 'member' : 'members'}`
           }}
         </div>
+        <ul v-if="current[info.role].members.length" class="role-members">
+          <li v-for="m in current[info.role].members" :key="m.id">
+            {{ m.displayName ?? m.samAccountName }}
+            <span class="role-member-sam">{{ m.samAccountName }}</span>
+          </li>
+          <li
+            v-if="(current[info.role].memberCount ?? 0) > ROLE_MEMBERS_SHOWN"
+            class="role-member-sam"
+          >
+            and {{ current[info.role].memberCount! - ROLE_MEMBERS_SHOWN }} more
+          </li>
+        </ul>
       </div>
       <Select
         v-model="draft[info.role]"
@@ -149,15 +162,14 @@ onMounted(load);
     </div>
 
     <Message v-if="pendingAdminConfirm" severity="warn" :closable="false" class="role-warn">
-      You aren't a direct member of the new admin group, so you'll lose admin rights at your next
-      sign-in.
+      {{ pendingAdminConfirm }}
       <div class="role-warn-actions">
         <Button
           label="Cancel"
           text
           severity="secondary"
           size="small"
-          @click="pendingAdminConfirm = false"
+          @click="pendingAdminConfirm = null"
         />
         <Button
           label="Change it anyway"
@@ -203,6 +215,16 @@ onMounted(load);
 .role-count {
   font-size: 12px;
   color: var(--text-2);
+}
+.role-members {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.role-member-sam {
+  color: var(--text-3);
+  margin-left: 4px;
 }
 .role-select {
   width: 100%;
