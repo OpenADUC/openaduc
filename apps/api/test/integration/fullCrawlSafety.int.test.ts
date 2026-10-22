@@ -48,7 +48,7 @@ describe('two processes', () => {
   });
 
   it('never run tasks for the same directory at once', async () => {
-    const { SYNC_LOCK_CLASS } = await import('../../src/services/syncTasks/scheduler.js');
+    const { SYNC_LOCK_CLASS } = await import('../../src/lib/advisoryLocks.js');
     // Another process holding the directory's lock.
     const other = await api.app.pgPool.connect();
     try {
@@ -138,5 +138,50 @@ describe('stuck runs', () => {
       .executeTakeFirstOrThrow();
     expect(run.status).not.toBe('running');
     expect(run.finished_at).not.toBeNull();
+  });
+});
+
+describe('rebuilding group memberships', () => {
+  let api: TestApi;
+
+  beforeAll(async () => {
+    api = await startApi();
+    await configureDirectory(api);
+  });
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const membershipCount = async () =>
+    (await api.app.db.selectFrom('user_group_memberships').select('provider_id').execute()).length;
+
+  it('never shows readers an empty table part-way through', async () => {
+    const before = await membershipCount();
+    expect(before).toBeGreaterThan(0);
+
+    // Stall the rebuild after its delete: its insert reads the group cache,
+    // which another session holds locked.
+    const blocker = await api.app.pgPool.connect();
+    let rebuild: Promise<unknown> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('LOCK TABLE group_cache_records IN ACCESS EXCLUSIVE MODE');
+      rebuild = api.app.services.sync.runOnce(api.directoryId!, 'memberships.rebuild');
+      for (let i = 0; ; i++) {
+        const waiting = await blocker.query(
+          "select 1 from pg_locks l join pg_class c on c.oid = l.relation where c.relname = 'group_cache_records' and not l.granted",
+        );
+        if (waiting.rowCount) break;
+        if (i > 100) throw new Error('rebuild never reached the group cache');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      expect(await membershipCount()).toBe(before);
+    } finally {
+      await blocker.query('COMMIT');
+      blocker.release();
+    }
+    expect(await rebuild).toMatchObject({ ok: true });
+    expect(await membershipCount()).toBe(before);
   });
 });

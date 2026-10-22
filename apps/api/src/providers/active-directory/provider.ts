@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import type { LdapTlsMode } from '@openaduc/shared';
 import {
   Attribute,
   Change,
@@ -43,8 +44,14 @@ import type {
   UserRenameInput,
   WriteContext,
 } from '../types.js';
-import { StepUpBindFailedError } from '../types.js';
-import { type ClientConfig, withFailover } from './client.js';
+import { DirectoryUnavailableError, StepUpBindFailedError } from '../types.js';
+import {
+  type ClientConfig,
+  describeConnectionError,
+  certificateProblemMessage,
+  isDirectoryUnreachable,
+  withFailover,
+} from './client.js';
 import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
@@ -105,6 +112,7 @@ export interface ActiveDirectoryProviderConfig {
   name: string;
   baseDn: string;
   ldapUrls: readonly string[];
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized: boolean;
   tlsCaPath?: string | undefined;
   operationTimeoutMs: number;
@@ -131,10 +139,41 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     this.config = config;
     this.clientConfig = {
       ldapUrls: config.ldapUrls,
+      tlsMode: config.tlsMode,
       tlsRejectUnauthorized: config.tlsRejectUnauthorized,
       tlsCaPath: config.tlsCaPath,
       operationTimeoutMs: config.operationTimeoutMs,
     };
+  }
+
+  /**
+   * Bind as the operator on the first reachable DC and run `fn`. A refused
+   * bind is `permission_denied`; no reachable DC at all is
+   * `directory_error`. Once bound, `fn` must return its failures rather than
+   * throw, so a half-done write is never retried against another DC.
+   */
+  private async asOperator<T>(
+    ctx: WriteContext,
+    fn: (client: Client) => Promise<T>,
+  ): Promise<T | MutationResult> {
+    try {
+      return await withFailover(this.clientConfig, async (client) => {
+        try {
+          await client.bind(ctx.actorUsername, ctx.actorPassword);
+        } catch (err) {
+          if (isDirectoryUnreachable(err)) throw err;
+          return {
+            ok: false,
+            reason: 'permission_denied',
+            errorMessage: 'step-up bind failed',
+          } satisfies MutationResult;
+        }
+        return fn(client);
+      });
+    } catch (err) {
+      if (!(err instanceof DirectoryUnavailableError)) throw err;
+      return { ok: false, reason: 'directory_error', errorMessage: err.message };
+    }
   }
 
   // ---- Connection / auth -------------------------------------------------
@@ -184,10 +223,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         try {
           await client.bind(username, input.password);
         } catch (bindErr) {
+          // No answer from this DC: throw so withFailover tries the next.
+          if (isDirectoryUnreachable(bindErr)) throw bindErr;
           // Surface the actual reason. AD encodes a subcode in the error
           // text (e.g. "data 52e") that distinguishes wrong-password from
-          // user-not-found / disabled / expired / locked. Network or TLS
-          // failures look different at the JS error level (no LDAP code).
+          // user-not-found / disabled / expired / locked.
           return classifyBindError(bindErr);
         }
         try {
@@ -245,7 +285,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       return {
         ok: false,
         reason: 'directory_error',
-        errorMessage: err instanceof Error ? err.message : 'directory error',
+        errorMessage:
+          certificateProblemMessage(err) ??
+          `cannot reach directory: ${describeConnectionError(err)}`,
       };
     }
   }
@@ -540,16 +582,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   async unlockUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult> {
     // Write-as-user model: bind as the operator using the password they
     // re-supplied for this action, perform the modify, then drop the bind.
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return {
-          ok: false,
-          reason: 'permission_denied',
-          errorMessage: 'step-up bind failed',
-        };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         // Resolve the target's DN. Service bind would also work; using the
         // operator bind keeps the entire operation in one identity.
@@ -606,12 +639,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     input: ResetPasswordInput,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -683,12 +711,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     ctx: WriteContext,
     disable: boolean,
   ): Promise<MutationResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -765,16 +788,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     patch: UserAttributePatch,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return {
-          ok: false,
-          reason: 'permission_denied',
-          errorMessage: 'step-up bind failed',
-        };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -839,12 +853,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     ctx: WriteContext,
     op: 'add' | 'delete',
   ): Promise<MutationResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const userEntry = await this.findUserEntry(client, userId);
         if (!userEntry) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -928,12 +937,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     if (!trimmedTarget) {
       return { ok: false, reason: 'directory_error', errorMessage: 'empty target OU' };
     }
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -993,12 +997,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     input: UserRenameInput,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -1087,12 +1086,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     userId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult & { treeDelete?: boolean }> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
@@ -1225,12 +1219,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     const escapedName = escapeRdnValue(cleanName);
     const newDn = `OU=${escapedName},${cleanParent}`;
 
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const attrs: Record<string, string | string[]> = {
           objectClass: ['top', 'organizationalUnit'],
@@ -1284,12 +1273,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     if (!cleanDn) {
       return { ok: false, reason: 'directory_error', errorMessage: 'empty DN' };
     }
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         await client.del(cleanDn);
         return {
@@ -1342,12 +1326,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     if (!cleanDn) {
       return { ok: false, reason: 'directory_error', errorMessage: 'empty DN' };
     }
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const changes: Change[] = [];
 
@@ -1636,12 +1615,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     input: RestoreUserInput,
     ctx: WriteContext,
   ): Promise<RestoreResult> {
-    return withFailover(this.clientConfig, async (client) => {
-      try {
-        await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
-        return { ok: false, reason: 'permission_denied', errorMessage: 'step-up bind failed' };
-      }
+    return this.asOperator(ctx, async (client) => {
       try {
         const containerDn = await this._resolveDeletedObjectsContainer(client);
         if (!containerDn) {
@@ -1797,7 +1771,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     return withFailover(this.clientConfig, async (client) => {
       try {
         await client.bind(ctx.actorUsername, ctx.actorPassword);
-      } catch {
+      } catch (err) {
+        if (isDirectoryUnreachable(err)) throw err;
         throw new StepUpBindFailedError();
       }
       try {
@@ -1983,7 +1958,7 @@ function classifyBindError(err: unknown): AuthResult {
     return {
       ok: false,
       reason: 'directory_error',
-      errorMessage: `cannot reach directory: ${message}`,
+      errorMessage: certificateProblemMessage(err) ?? `cannot reach directory: ${message}`,
     };
   }
 
@@ -2084,8 +2059,8 @@ function classifyBindError(err: unknown): AuthResult {
  * below for the strict version used by restoreDeletedUser.
  */
 function escapeRdnValue(value: string): string {
-  // eslint-disable-next-line no-control-regex -- NUL is intentionally escaped per RFC 4514 §2.4
-  return value.replace(/[,+<>;"=\\ ]/g, (m) => `\\${m}`);
+  // NUL (written as \0, never a raw byte) is intentionally escaped per RFC 4514 §2.4
+  return value.replace(/[,+<>;"=\\\0]/g, (m) => `\\${m}`);
 }
 
 /**

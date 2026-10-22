@@ -3,6 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Kysely } from 'kysely';
 import type pg from 'pg';
 import type { DB } from '../../db/types.js';
+import { SYNC_LOCK_CLASS } from '../../lib/advisoryLocks.js';
 import type { DirectoryConfigService } from '../directoryConfig.js';
 import type { ProviderFactory } from '../../providers/registry.js';
 import { TASK_REGISTRY, isKnownTaskKey } from './registry.js';
@@ -21,8 +22,6 @@ import type { EntraRunnerRuntime, SyncTaskKey } from './types.js';
  * onboarding wizard can surface a per-step pass/fail summary instead of
  * polling the sync-task table.
  */
-/** First key of the per-directory sync advisory lock (the second is the directory id). */
-export const SYNC_LOCK_CLASS = 0x0ad0;
 
 export interface RunOnceResult {
   ok: boolean;
