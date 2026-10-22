@@ -235,6 +235,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // expiring-soon SQL filter and the user response both consume this
       // value so the page count and per-row date stay in sync.
       const maxAgeDays = await resolveMaxPwdAgeDays(provider);
+      const expiry = effectiveExpirySql(maxAgeDays);
 
       let baseQuery = app.db
         .selectFrom('user_cache_records')
@@ -278,22 +279,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               eb('account_expires_at', 'is not', null),
               eb('account_expires_at', '<=', horizon),
             ]),
+            eb('password_must_change', '=', true),
             // Password expiring or expired (excluding never-expires accounts).
             eb.and([
               eb('password_never_expires', '=', false),
-              maxAgeDays && maxAgeDays > 0
-                ? eb.and([
-                    eb('password_last_set_at', 'is not', null),
-                    eb(
-                      sql<Date>`password_last_set_at + (${maxAgeDays}::int * interval '1 day')`,
-                      '<=',
-                      horizon,
-                    ),
-                  ])
-                : eb.and([
-                    eb('password_expires_at', 'is not', null),
-                    eb('password_expires_at', '<=', horizon),
-                  ]),
+              eb(expiry, 'is not', null),
+              eb(expiry, '<=', horizon),
             ]),
           ]),
         );
@@ -312,19 +303,10 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         baseQuery = baseQuery
           .where('password_never_expires', '=', false)
           .where('enabled', '=', true);
-        if (maxAgeDays && maxAgeDays > 0) {
-          // computed expiry = password_last_set_at + maxAgeDays
-          const expiryExpr = sql<Date>`password_last_set_at + (${maxAgeDays}::int * interval '1 day')`;
-          baseQuery = baseQuery
-            .where('password_last_set_at', 'is not', null)
-            .where(expiryExpr, '>=', now)
-            .where(expiryExpr, '<=', horizon);
-        } else {
-          baseQuery = baseQuery
-            .where('password_expires_at', 'is not', null)
-            .where('password_expires_at', '>=', now)
-            .where('password_expires_at', '<=', horizon);
-        }
+        baseQuery = baseQuery
+          .where(expiry, 'is not', null)
+          .where(expiry, '>=', now)
+          .where(expiry, '<=', horizon);
       }
 
       // "Stale logon" filter — account hasn't logged in for ≥ N days, or never.
@@ -437,8 +419,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                 when not enabled then 2
                 when account_expires_at is not null and account_expires_at < now() then 3
                 when password_never_expires then 6
-                when password_expires_at is not null and password_expires_at < now() then 4
-                when password_expires_at is not null and password_expires_at < now() + interval '14 days' then 5
+                when password_must_change then 4
+                when ${expiry} < now() then 4
+                when ${expiry} < now() + interval '14 days' then 5
                 else 7
               end
             `,
@@ -446,7 +429,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         );
       } else {
         const orderColumn = SORT_MAP[q.sort] ?? 'display_name';
-        orderedQuery = baseQuery.selectAll().orderBy(sql.ref(orderColumn), orderDir);
+        orderedQuery = baseQuery
+          .selectAll()
+          .orderBy(orderColumn === 'password_expires_at' ? expiry : sql.ref(orderColumn), orderDir);
       }
 
       const [rows, totalRow] = await Promise.all([
@@ -493,6 +478,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           enabled: r.enabled,
           locked: r.locked,
           passwordNeverExpires: r.password_never_expires,
+          passwordMustChange: r.password_must_change,
           passwordExpiresAt: computeExpiresAt(
             r.password_never_expires,
             r.password_expires_at,
@@ -627,6 +613,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         lockedAt: dateOrNull(refreshed.user.lockedAt),
         autoUnlockAt: dateOrNull(autoUnlockAt),
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
+        passwordMustChange: refreshed.user.passwordMustChange,
         passwordExpiresAt: computeExpiresAt(
           refreshed.user.passwordNeverExpires,
           refreshed.user.passwordExpiresAt,
@@ -1547,6 +1534,9 @@ function computeExpiresAt(
   maxAgeDays: number | null,
 ): string | null {
   if (passwordNeverExpires) return null;
+  // AD's own computation (stored by sync) respects fine-grained policies.
+  if (cachedExpiresAt) return dateOrNull(cachedExpiresAt);
+  // Rows synced before it was stored: derive from the domain policy.
   if (maxAgeDays && maxAgeDays > 0 && passwordLastSetAt) {
     const last =
       passwordLastSetAt instanceof Date ? passwordLastSetAt : new Date(passwordLastSetAt);
@@ -1566,11 +1556,20 @@ function computeExpiresAt(
  * three call sites in this file (search, export, detail) hit the cache for
  * the typical concurrent request burst rather than re-querying the DC.
  *
- * Known gap: this is the *domain default*. Fine-grained password policies
- * (PSOs) targeting specific users/groups override `maxPwdAge` at the user
- * level — those users will show the domain expiry, not their PSO expiry,
- * until PSO resolution lands.
+ * Only a fallback now: sync stores AD's computed expiry, which already
+ * accounts for fine-grained password policies (PSOs).
  */
+/**
+ * SQL for a user's password expiry: the value AD computed (stored by sync),
+ * or for rows synced before that was stored, pwdLastSet + the domain's
+ * maximum age.
+ */
+function effectiveExpirySql(maxAgeDays: number | null) {
+  return maxAgeDays && maxAgeDays > 0
+    ? sql<Date | null>`coalesce(password_expires_at, password_last_set_at + (${maxAgeDays}::int * interval '1 day'))`
+    : sql<Date | null>`password_expires_at`;
+}
+
 async function resolveMaxPwdAgeDays(provider: DirectoryProvider): Promise<number | null> {
   try {
     const policy = await provider.getDomainPolicy();

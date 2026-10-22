@@ -75,7 +75,7 @@ export function avatarGradientFor(seed: string | null | undefined): string {
 }
 
 export type UserStatusKind =
-  'active' | 'disabled' | 'locked' | 'pwd-expired' | 'pwd-expiring' | 'expired';
+  'active' | 'disabled' | 'locked' | 'pwd-must-change' | 'pwd-expired' | 'pwd-expiring' | 'expired';
 
 export interface UserStatusInput {
   enabled?: boolean | null;
@@ -83,6 +83,7 @@ export interface UserStatusInput {
   accountExpiresAt?: string | null;
   passwordExpiresAt?: string | null;
   passwordNeverExpires?: boolean | null;
+  passwordMustChange?: boolean | null;
 }
 
 export function userStatus(u: UserStatusInput, now: Date = new Date()): UserStatusKind {
@@ -90,6 +91,7 @@ export function userStatus(u: UserStatusInput, now: Date = new Date()): UserStat
   if (u.enabled === false) return 'disabled';
   if (u.accountExpiresAt && new Date(u.accountExpiresAt).getTime() < now.getTime())
     return 'expired';
+  if (u.passwordMustChange) return 'pwd-must-change';
   if (!u.passwordNeverExpires && u.passwordExpiresAt) {
     const expiresMs = new Date(u.passwordExpiresAt).getTime() - now.getTime();
     const days = expiresMs / (24 * 60 * 60 * 1000);
@@ -104,6 +106,7 @@ export function userStatusLabel(kind: UserStatusKind): string {
     active: 'Active',
     disabled: 'Disabled',
     locked: 'Locked',
+    'pwd-must-change': 'Must change password',
     'pwd-expired': 'Password expired',
     'pwd-expiring': 'Expires soon',
     expired: 'Expired',

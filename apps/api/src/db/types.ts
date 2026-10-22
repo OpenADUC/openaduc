@@ -52,6 +52,7 @@ export interface UserCacheRecordsTable {
   password_never_expires: ColumnType<boolean, boolean | undefined, boolean>;
   password_last_set_at: Timestamp | null;
   password_expires_at: Timestamp | null;
+  password_must_change: ColumnType<boolean, boolean | undefined, boolean>;
   account_expires_at: Timestamp | null;
   last_logon_at: Timestamp | null;
   created_at_source: Timestamp | null;

@@ -114,7 +114,8 @@ export const USER_ATTRS = [
 // extra mails, secondary phones, addresses, employeeID, etc. Used by detail
 // reads and full sync; the cache stores the raw blob so the UI can decide
 // what to surface without a schema change per attribute.
-export const USER_ATTRS_FULL = ['*'];
+// '*' doesn't include constructed attributes; ask for the ones we use.
+export const USER_ATTRS_FULL = ['*', 'msDS-UserPasswordExpiryTimeComputed'];
 
 export const OU_ATTRS = [
   'distinguishedName',
@@ -304,11 +305,10 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     lockedAt: lockoutFiletime,
     passwordNeverExpires: uac.passwordNeverExpires,
     passwordLastSetAt: passwordLastSet,
-    // passwordExpiresAt requires the domain max-password-age policy. We
-    // leave it null at this layer; the API route resolves it from
-    // `passwordLastSetAt + getDomainPolicy().maxPwdAgeMs` so the policy
-    // fetch (cached per-provider) isn't on the per-entry hot path.
-    passwordExpiresAt: null,
+    // Constructed by AD from the effective policy (domain or PSO). Never-
+    // expires and must-change both come back as sentinels, which map to null.
+    passwordExpiresAt: filetimeToDate(asString(entry['msDS-UserPasswordExpiryTimeComputed'])),
+    passwordMustChange: asString(entry.pwdLastSet) === '0',
     accountExpiresAt: filetimeToDate(asString(entry.accountExpires)),
     lastLogonAt: filetimeToDate(asString(entry.lastLogonTimestamp)),
     lastBadPasswordAt: filetimeToDate(asString(entry.badPasswordTime)),

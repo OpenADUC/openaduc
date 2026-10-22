@@ -42,7 +42,10 @@ export interface DirectoryUser {
   // password rotation on.
   passwordNeverExpires: boolean;
   passwordLastSetAt: Date | null;
+  /** From AD's msDS-UserPasswordExpiryTimeComputed: respects fine-grained password policies. */
   passwordExpiresAt: Date | null;
+  /** pwdLastSet = 0: must change password at next logon. */
+  passwordMustChange: boolean;
   accountExpiresAt: Date | null;
   lastLogonAt: Date | null;
   // FILETIME of the most recent failed authentication attempt (AD's
