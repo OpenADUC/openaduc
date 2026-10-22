@@ -196,6 +196,8 @@ export async function configureDirectory(
 
 export class TestClient {
   private readonly cookies = new Map<string, string>();
+  /** Sent with every request, e.g. X-Forwarded-For to play a proxy. */
+  readonly headers: Record<string, string> = {};
 
   constructor(
     private readonly app: FastifyInstance,
@@ -208,7 +210,7 @@ export class TestClient {
     url: string,
     payload?: unknown,
   ): Promise<LightMyRequestResponse> {
-    const headers: Record<string, string> = { origin: ORIGIN };
+    const headers: Record<string, string> = { origin: ORIGIN, ...this.headers };
     if (this.cookies.size > 0) {
       headers.cookie = [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ');
     }
