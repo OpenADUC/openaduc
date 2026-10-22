@@ -48,7 +48,7 @@ The numbers below are sized to comfortably cover a directory of up to roughly **
 
 ### Network
 
-- **Outbound TCP/636 (LDAPS)** to your domain controllers — how OpenADUC reads and writes AD. Plain LDAP (389) is not supported.
+- **Outbound TCP/636 (LDAPS)**, or TCP/389 with StartTLS, to your domain controllers — how OpenADUC reads and writes AD. Unencrypted LDAP is not supported.
 - **Inbound TCP/443** for the web UI, terminated by a reverse proxy you provide (nginx, Caddy, Traefik, …). The bundled web container speaks plain HTTP on port 8080 and is not safe to expose without TLS in front.
 - No outbound internet access is required at runtime once the container images are pulled.
 

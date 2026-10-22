@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import type { LdapTlsMode } from '@openaduc/shared';
 import {
   Attribute,
   Change,
@@ -105,6 +106,7 @@ export interface ActiveDirectoryProviderConfig {
   name: string;
   baseDn: string;
   ldapUrls: readonly string[];
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized: boolean;
   tlsCaPath?: string | undefined;
   operationTimeoutMs: number;
@@ -131,6 +133,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     this.config = config;
     this.clientConfig = {
       ldapUrls: config.ldapUrls,
+      tlsMode: config.tlsMode,
       tlsRejectUnauthorized: config.tlsRejectUnauthorized,
       tlsCaPath: config.tlsCaPath,
       operationTimeoutMs: config.operationTimeoutMs,
