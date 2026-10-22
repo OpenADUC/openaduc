@@ -72,3 +72,5 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
+      - name: No raw control characters in source
+        run: pnpm check:control-chars
