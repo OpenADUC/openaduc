@@ -8,7 +8,7 @@ import { loadEnv } from '../config/env.js';
 // still rate-limited and bind-protected — an attacker cross-site posting a
 // guess at /api/auth/login can't escalate beyond what they could do without
 // the browser session anyway.
-const SAFE_PATHS = new Set<string>(['/api/health', '/api/auth/login']);
+const SAFE_PATHS = new Set<string>(['/api/health', '/api/auth/login', '/api/setup/initialize']);
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -46,11 +46,10 @@ export default fp(async (app) => {
     const method = req.method.toUpperCase();
     if (SAFE_METHODS.has(method)) return;
 
-    // Setup routes are public until the first directory is configured. They
-    // run with no admin session, so cross-site CSRF is moot — there's no
-    // identity to forge against. Skip them.
+    // Only the first setup step runs without a session; the later steps
+    // carry the new admin's cookie and get the same check as everything else.
     const path = req.routeOptions?.url ?? req.url.split('?')[0];
-    if (path && (path.startsWith('/api/setup') || SAFE_PATHS.has(path))) return;
+    if (path && SAFE_PATHS.has(path)) return;
 
     const origin = req.headers.origin;
     const referer = req.headers.referer;

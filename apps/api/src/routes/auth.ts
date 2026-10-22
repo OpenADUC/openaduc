@@ -3,7 +3,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { meResponseSchema, stepUpRequestSchema, type Capability } from '@openaduc/shared';
 import { loadEnv } from '../config/env.js';
-import { BadRequest, Unauthorized } from '../plugins/errorHandler.js';
+import {
+  AppError,
+  BadRequest,
+  DIRECTORY_UNAVAILABLE_MESSAGE,
+  Unauthorized,
+} from '../plugins/errorHandler.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
 
@@ -35,6 +40,25 @@ function cookieOptions() {
     path: '/',
   };
 }
+
+// One answer for every credential failure. AD's reasons (unknown user,
+// wrong password, locked, disabled, expired, must change, no OpenADUC role)
+// would tell an anonymous caller which usernames exist, and some are only
+// reported after AD has accepted the password. The audit row keeps the
+// real reason for administrators.
+const SignInFailed = () =>
+  Unauthorized(
+    'Sign-in failed. Check your username and password. If it keeps failing, your account may be locked, disabled or not set up for OpenADUC; contact your administrator.',
+  );
+
+// Directory errors carry hosts, ports and library text; keep those in the
+// logs and audit row.
+const DirectoryUnavailable = () =>
+  new AppError({
+    statusCode: 502,
+    code: 'directory_unavailable',
+    message: DIRECTORY_UNAVAILABLE_MESSAGE,
+  });
 
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // ---- POST /api/auth/login --------------------------------------------
@@ -104,13 +128,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             },
           })
           .catch((err) => req.log.error({ err }, 'audit insert failed for auth.login failure'));
-        if (result.reason === 'directory_error') {
-          throw app.httpErrors.badGateway(result.errorMessage ?? 'directory unreachable');
-        }
-        if (result.reason === 'account_disabled' || result.reason === 'account_locked') {
-          throw Unauthorized(result.errorMessage ?? 'account is not allowed to sign in');
-        }
-        throw Unauthorized(result.errorMessage ?? 'invalid username or password');
+        if (result.reason === 'directory_error') throw DirectoryUnavailable();
+        throw SignInFailed();
       }
 
       // Auth succeeded — clear any backoff state for this (ip, username).
@@ -132,7 +151,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             metadata: { username: bindUsername, directoryId: directory.id },
           })
           .catch((err) => req.log.error({ err }, 'audit insert failed for auth.login deny'));
-        throw Unauthorized('account is not authorized to use this application');
+        throw SignInFailed();
       }
 
       const { session, cookieToken } = await app.services.sessions.createAdminSession({
@@ -271,23 +290,41 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             metadata: { detail: result.errorMessage },
           })
           .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup failure'));
-        // Surface the real reason — same pattern as login. "step-up failed"
-        // alone is useless when the operator can't tell whether they
-        // mistyped, the directory's down, or their account just got
-        // disabled while they were sitting on the page.
-        const detail = result.errorMessage ?? 'step-up failed';
-        if (result.reason === 'directory_error') {
-          throw app.httpErrors.badGateway(detail);
-        }
-        throw Unauthorized(detail);
+        // Same generic answers as sign-in; the reason is in the audit row.
+        if (result.reason === 'directory_error') throw DirectoryUnavailable();
+        throw SignInFailed();
       }
 
       // Step-up succeeded — clear backoff state.
       app.services.loginBackoff.recordSuccess(req.ip ?? null, username);
 
-      const writes = actor.session.capabilities.filter((c): c is Capability =>
-        WRITE_CAPABILITIES.includes(c as Capability),
+      // Roles come from AD group membership, which may have changed since
+      // sign-in. Re-read them from this bind so a revoked role can't be kept
+      // alive by stepping up.
+      const capabilities = await app.services.authorization.resolveCapabilities(
+        result.groupDns ?? result.user?.memberOfDns ?? [],
       );
+      if (capabilities.length === 0) {
+        const { revokedElevatedIds } = await app.services.sessions.revokeAdminSession(
+          actor.session.id,
+        );
+        app.services.credentialCache.deleteMany(revokedElevatedIds);
+        await app.services.audit
+          .recordEvent({
+            ...baseAudit,
+            action: 'auth.stepup',
+            result: 'denied',
+            errorCode: 'no_capabilities',
+          })
+          .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup denial'));
+        reply.clearCookie(SESSION_COOKIE_NAME, cookieOptions());
+        throw Unauthorized('your account is no longer authorized to use this application');
+      }
+      const removedCapabilities = actor.session.capabilities.filter(
+        (c) => !capabilities.includes(c as Capability),
+      );
+
+      const writes = capabilities.filter((c) => WRITE_CAPABILITIES.includes(c));
 
       const {
         admin: rotated,
@@ -302,9 +339,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           actorUsername: actor.session.actorUsername,
           actorEmail: actor.session.actorEmail,
           actorDn: actor.session.actorDn,
-          capabilities: actor.session.capabilities,
+          capabilities,
           sourceIp: req.ip,
           userAgent: req.headers['user-agent'] ?? null,
+          notAfter: actor.session.expiresAt,
         },
         elevatedCapabilities: writes,
       });
@@ -327,6 +365,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             capabilities: writes,
             expiresAt: elevated.expiresAt.toISOString(),
             rotatedFromSessionId: actor.session.id,
+            ...(removedCapabilities.length > 0 ? { removedCapabilities } : {}),
           },
         })
         .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup success'));

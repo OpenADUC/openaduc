@@ -1,0 +1,4 @@
+{
+  "*": "prettier --ignore-unknown --write",
+  "*.{ts,tsx,vue,js,mjs,cjs}": "node scripts/check-control-chars.mjs"
+}

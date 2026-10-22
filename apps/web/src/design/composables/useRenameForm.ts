@@ -39,7 +39,7 @@ export function useRenameForm() {
           givenName: u.givenName,
           surname: u.surname,
           displayName: u.displayName,
-          cn: rawScalar(u.rawAttributes['cn']),
+          cn: u.cn,
           samAccountName: u.samAccountName,
           userPrincipalName: u.userPrincipalName,
           email: u.email,
@@ -89,9 +89,7 @@ export function useRenameForm() {
   // proxyAddresses only matter when the account has them (Exchange or
   // Entra-synced mailboxes); otherwise only `mail` changes.
   const hasProxyAddresses = computed(() => {
-    const raw = user.value?.rawAttributes['proxyAddresses'];
-    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
-    return list.some((p) => typeof p === 'string' && p.startsWith('SMTP:'));
+    return !!user.value?.primarySmtpAddress;
   });
 
   const offerKeepAlias = computed(
@@ -124,11 +122,6 @@ export function useRenameForm() {
 function norm(v: string | null): string | null {
   const t = (v ?? '').trim();
   return t === '' ? null : t;
-}
-
-function rawScalar(v: unknown): string | null {
-  const value = Array.isArray(v) ? v[v.length - 1] : v;
-  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function emptyIdentity(): RenameIdentity {

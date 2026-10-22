@@ -3,6 +3,7 @@ import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryOu } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { memberOfArray } from './userCache.js';
 
 /**
  * Upsert an OU into the cache. The unique key is
@@ -49,7 +50,7 @@ export async function markOusStale(
     SET stale_at = ${now}
     WHERE provider_id = ${providerId}
       AND stale_at IS NULL
-      AND lower(distinguished_name) NOT IN (${sql.join(Array.from(seenDnsLower))})
+      AND lower(distinguished_name) <> ALL(${Array.from(seenDnsLower)}::text[])
   `.execute(db);
 }
 
@@ -63,8 +64,11 @@ export async function rebuildMemberships(
   db: Kysely<DB>,
   providerId: number,
 ): Promise<{ count: number }> {
-  await db.deleteFrom('user_group_memberships').where('provider_id', '=', providerId).execute();
-  const result = await sql<{ count: string }>`
+  // One transaction: readers see the old memberships or the new ones,
+  // never an empty table between the delete and the insert.
+  return db.transaction().execute(async (trx) => {
+    await trx.deleteFrom('user_group_memberships').where('provider_id', '=', providerId).execute();
+    const result = await sql<{ count: string }>`
     WITH inserted AS (
       INSERT INTO user_group_memberships (provider_id, user_object_guid, group_object_guid, direct, synced_at)
       SELECT
@@ -74,15 +78,7 @@ export async function rebuildMemberships(
         true,
         now()
       FROM user_cache_records u
-      CROSS JOIN LATERAL jsonb_array_elements_text(
-        CASE
-          WHEN jsonb_typeof(u.raw_attributes_json -> 'memberOf') = 'array'
-            THEN u.raw_attributes_json -> 'memberOf'
-          WHEN u.raw_attributes_json ? 'memberOf'
-            THEN jsonb_build_array(u.raw_attributes_json -> 'memberOf')
-          ELSE '[]'::jsonb
-        END
-      ) AS member_dn
+      CROSS JOIN LATERAL jsonb_array_elements_text(${memberOfArray('u.raw_attributes_json')}) AS member_dn
       JOIN group_cache_records g
         ON g.provider_id = u.provider_id
         AND lower(g.distinguished_name) = lower(member_dn)
@@ -93,7 +89,8 @@ export async function rebuildMemberships(
       RETURNING 1
     )
     SELECT COUNT(*)::text AS count FROM inserted
-  `.execute(db);
-  const row = result.rows[0];
-  return { count: row ? Number(row.count) : 0 };
+  `.execute(trx);
+    const row = result.rows[0];
+    return { count: row ? Number(row.count) : 0 };
+  });
 }

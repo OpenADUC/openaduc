@@ -26,6 +26,8 @@ export const DC = {
   domain: 'openaduc.test',
   baseDn: 'DC=openaduc,DC=test',
   password: 'OpenADUC-dev-User1',
+  /** Built-in Administrator, for test setup that changes the directory. */
+  administratorPassword: 'OpenADUC-dev-Admin1',
   serviceAccount: 'svc-openaduc',
   groups: {
     operators: 'CN=OpenADUC Operators,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test',
@@ -66,6 +68,89 @@ export async function readDirectoryUser(
   }
 }
 
+/**
+ * Add a user to, or remove them from, a group, as the domain Administrator.
+ * Tests that change memberships must undo them: `reseedDirectory` only adds.
+ */
+export async function setGroupMember(
+  groupDn: string,
+  samAccountName: string,
+  member: boolean,
+): Promise<void> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    const { searchEntries } = await client.search(DC.baseDn, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${samAccountName})`,
+      attributes: ['distinguishedName'],
+    });
+    const userDn = searchEntries[0]?.dn;
+    if (!userDn) throw new Error(`no such user: ${samAccountName}`);
+    const { Change, Attribute } = await import('ldapts');
+    try {
+      await client.modify(
+        groupDn,
+        new Change({
+          operation: member ? 'add' : 'delete',
+          modification: new Attribute({ type: 'member', values: [userDn] }),
+        }),
+      );
+    } catch (err) {
+      // Already in the requested state.
+      const name = (err as Error).name;
+      if (
+        name !== 'AlreadyExistsError' &&
+        name !== 'NoSuchAttributeError' &&
+        name !== 'UnwillingToPerformError'
+      )
+        throw err;
+    }
+  } finally {
+    await client.unbind();
+  }
+}
+
+/** Run `fn` with an LDAP client bound as the domain Administrator. */
+export async function asAdministrator<T>(fn: (client: LdapClient) => Promise<T>): Promise<T> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    return await fn(client);
+  } finally {
+    await client.unbind();
+  }
+}
+
+/** Replace one attribute on a user, as the domain Administrator. */
+export async function setUserAttribute(
+  samAccountName: string,
+  attribute: string,
+  values: string[],
+): Promise<void> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    const { searchEntries } = await client.search(DC.baseDn, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${samAccountName})`,
+      attributes: ['distinguishedName'],
+    });
+    const dn = searchEntries[0]?.dn;
+    if (!dn) throw new Error(`no such user: ${samAccountName}`);
+    const { Change, Attribute } = await import('ldapts');
+    await client.modify(
+      dn,
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type: attribute, values }),
+      }),
+    );
+  } finally {
+    await client.unbind();
+  }
+}
+
 // ---- API instance ------------------------------------------------------
 
 export interface TestApi {
@@ -83,7 +168,7 @@ let instanceCounter = 0;
  * Usually called once per test file (beforeAll); call it again for a
  * second, independent instance (e.g. to run setup twice).
  */
-export async function startApi(): Promise<TestApi> {
+export async function startApi(options: { env?: Record<string, string> } = {}): Promise<TestApi> {
   const adminUrl = inject('adminDatabaseUrl');
   const dbName = `openaduc_test_${process.pid}_${++instanceCounter}`;
   await withAdmin(adminUrl, (c) => c.query(`CREATE DATABASE ${dbName} TEMPLATE ${TEMPLATE_DB}`));
@@ -109,6 +194,7 @@ export async function startApi(): Promise<TestApi> {
     AD_SERVICE_ACCOUNT_UPN: '',
     AD_SERVICE_ACCOUNT_PASSWORD: '',
     BOOTSTRAP_ADMIN_GROUP_DN: '',
+    ...options.env,
   });
 
   // Fresh module graph so this instance reads the env set above (loadEnv

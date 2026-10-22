@@ -15,6 +15,10 @@ services:
 
   api:
     command: ['pnpm', 'dev']
+    # Production compose files don't publish the API: it's reached through
+    # the web container's nginx, which is the one proxy it trusts.
+    ports:
+      - '127.0.0.1:3000:3000'
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages/shared:/app/packages/shared

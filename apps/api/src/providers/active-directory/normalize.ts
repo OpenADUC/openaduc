@@ -32,6 +32,28 @@ export const BINARY_ATTRS = [
   'msExchSafeRecipientsHash',
 ];
 
+// Attributes that hold secrets. The wildcard query returns whatever the
+// bind account may read, and some deployments let the service account read
+// these; they must never reach the cache, the API or the UI. Lowercase:
+// LDAP attribute names are case-insensitive.
+export const SECRET_ATTRS: ReadonlySet<string> = new Set([
+  'ms-mcs-admpwd', // legacy LAPS password
+  'mslaps-password', // Windows LAPS cleartext password
+  'mslaps-encryptedpassword',
+  'mslaps-encryptedpasswordhistory',
+  'mslaps-encrypteddsrmpassword',
+  'mslaps-encrypteddsrmpasswordhistory',
+  'msds-managedpassword', // gMSA
+  'unicodepwd',
+  'userpassword',
+  'supplementalcredentials',
+  'msfve-recoverypassword', // BitLocker recovery
+]);
+
+export function isSecretAttr(name: string): boolean {
+  return SECRET_ATTRS.has(name.toLowerCase());
+}
+
 // Attributes the wildcard query returns but that we don't want to surface
 // anywhere — neither in the UI's "More from directory" extras, the Raw LDAP
 // tab, nor the cached rawAttributes JSONB blob. Either redundant with a
@@ -61,6 +83,11 @@ const SKIP_RAW_ATTRS = new Set<string>([
   // names resolved, so the raw DN list is duplicate noise.
   'managedObjects',
 ]);
+
+/** True for attributes never kept in rawAttributes: noise and secrets. */
+function omitFromRaw(name: string): boolean {
+  return SKIP_RAW_ATTRS.has(name) || isSecretAttr(name);
+}
 
 // Attribute set for deleted-object reads. Recycle-Bin-enabled domains keep
 // most user attributes around for the deleted-object lifetime; tombstones
@@ -293,7 +320,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -313,6 +340,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     mobile: asString(entry.mobile),
     title: asString(entry.title),
     department: asString(entry.department),
+    office: asString(entry.physicalDeliveryOfficeName),
     managerDn: asString(entry.manager),
     enabled: uac.enabled,
     locked: lockedNow,
@@ -322,6 +350,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     // Constructed by AD from the effective policy (domain or PSO). Never-
     // expires and must-change both come back as sentinels, which map to null.
     passwordExpiresAt: filetimeToDate(asString(entry['msDS-UserPasswordExpiryTimeComputed'])),
+    passwordExpiryComputed: entry['msDS-UserPasswordExpiryTimeComputed'] !== undefined,
     passwordMustChange: asString(entry.pwdLastSet) === '0',
     accountExpiresAt: filetimeToDate(asString(entry.accountExpires)),
     lastLogonAt: filetimeToDate(asString(entry.lastLogonTimestamp)),
@@ -345,7 +374,7 @@ export function normalizeOu(entry: Entry): DirectoryOu {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -432,7 +461,7 @@ export function normalizeDeletedUser(entry: Entry): DirectoryDeletedUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -473,7 +502,7 @@ export function normalizeComputer(entry: Entry): DirectoryComputer {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -516,7 +545,7 @@ export function normalizeDeletedComputer(entry: Entry): DirectoryDeletedComputer
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -569,7 +598,7 @@ export function normalizeGroup(entry: Entry): DirectoryGroup {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -613,7 +642,7 @@ export function normalizeGroupPolicy(entry: Entry): DirectoryGroupPolicy {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
