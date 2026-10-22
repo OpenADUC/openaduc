@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { configureDirectory, DC, reseedDirectory, startApi, type TestApi } from './harness.js';
+import {
+  configureDirectory,
+  DC,
+  reseedDirectory,
+  setUserAttribute,
+  startApi,
+  type TestApi,
+} from './harness.js';
+
+// accountExpires is a FILETIME: 100 ns ticks since 1601. 0 means never.
+const filetime = (d: Date) => String((BigInt(d.getTime()) + 11644473600000n) * 10000n);
 
 describe('sign-in failures look the same whatever the reason', () => {
   let api: TestApi;
@@ -26,7 +36,26 @@ describe('sign-in failures look the same whatever the reason', () => {
   };
 
   it('unknown user, wrong password, locked, disabled, expired and no-role are indistinguishable', async () => {
+    await setUserAttribute('alice.anders', 'accountExpires', [
+      filetime(new Date(Date.now() - 86_400_000)),
+    ]);
+    let accountExpired;
+    try {
+      accountExpired = await attempt('alice.anders', DC.password);
+      // The directory refused the bind; alice getting this far and then
+      // failing for having no role would prove nothing about expiry.
+      const audit = await api.app.db
+        .selectFrom('audit_events')
+        .select('error_code')
+        .where('action', '=', 'auth.login')
+        .orderBy('id', 'desc')
+        .executeTakeFirstOrThrow();
+      expect(audit.error_code).toBe('invalid_credentials');
+    } finally {
+      await setUserAttribute('alice.anders', 'accountExpires', ['0']);
+    }
     const results = {
+      accountExpired,
       unknownUser: await attempt('no.such.user', 'whatever-password'),
       wrongPassword: await attempt('alice.anders', 'not-the-password'),
       locked: await attempt('dave.diaz', DC.password),
