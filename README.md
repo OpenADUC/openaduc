@@ -98,6 +98,8 @@ OpenADUC sits in front of Active Directory and writes to it on behalf of operato
 - [Cloudflare Access](https://www.cloudflare.com/zero-trust/products/access/), [Pomerium](https://www.pomerium.com/), or [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) backed by an MFA-capable IdP.
 - [Microsoft Entra Application Proxy](https://learn.microsoft.com/entra/identity/app-proxy/) with Conditional Access — a natural fit if you already run Entra ID.
 
+With a proxy in front of the bundled web container, set `TRUST_PROXY_HOPS=2` so sign-in rate limits and the audit log see the real client address (see [configuration](docs/configuration.md)).
+
 This is defence in depth, not SSO replacement: the proxy enforces MFA at the network boundary, and operators then sign in to OpenADUC with their AD credentials. OpenADUC does not (yet) consume proxy-asserted identity headers.
 
 ### What OpenADUC does and does not provide
@@ -106,7 +108,7 @@ This is defence in depth, not SSO replacement: the proxy enforces MFA at the net
 - **Step-up re-auth on every write.** Mutating calls require re-entering the AD password; the elevated session is short-lived (default 60 min) and password material lives only in process memory.
 - **Append-only audit log.** Database triggers reject `UPDATE`, `DELETE`, and `TRUNCATE` on `audit_events`; even a compromised app cannot silently rewrite history.
 - **Encrypted secrets at rest.** Service-account passwords, Entra client secrets, and Teams webhooks are AES-256-GCM encrypted with `ENCRYPTION_KEY`. Back this key up alongside your database backups — losing it makes those rows unrecoverable.
-- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy).
+- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy). It sends a strict Content-Security-Policy, refuses framing, and adds HSTS when your proxy forwards `X-Forwarded-Proto: https`.
 
 For the threat model, capability list, step-up flow, and AD-specific risks, see [docs/security.md](docs/security.md).
 

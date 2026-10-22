@@ -30,12 +30,9 @@ Full instructions, including local Samba AD setup and per-package test commands,
 3. **Add or update tests** for behavior you change. Both apps use Vitest. Untested behavior changes will be asked for tests on review.
 4. **Run the checks locally before pushing:**
    ```bash
-   pnpm lint
-   pnpm typecheck
-   pnpm test
-   pnpm build
+   pnpm check
    ```
-   CI runs the same set. PRs that don't pass CI won't be reviewed until they do.
+   It runs the same set as CI: format check, control-character check, typecheck, lint, tests and build. `pnpm install` also installs git hooks that format staged files and reject AI co-author trailers in commit messages. PRs that don't pass CI won't be reviewed until they do.
 5. **Migrations** must be additive and reversible where possible. Never edit a migration that has already shipped in a tagged release — write a new one.
 6. **Don't commit generated files, `.env`, `node_modules/`, or anything else covered by `.gitignore`.**
 
