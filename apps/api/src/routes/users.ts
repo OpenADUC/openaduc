@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  csvRow,
   groupMembershipChangeSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
@@ -22,25 +23,10 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 
 const idParamSchema = z.object({ id: z.guid() });
-
-// ---- CSV helpers --------------------------------------------------------
-//
-// Minimal RFC 4180 quoting: wrap in double quotes when the value contains
-// quote, comma, or newline; double up internal quotes. Null/undefined render
-// empty.
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const s = value instanceof Date ? value.toISOString() : String(value);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function csvRow(cells: unknown[]): string {
-  return cells.map(csvCell).join(',');
-}
 
 const CSV_COLUMNS = [
   'objectGuid',
@@ -180,6 +166,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
             computeExpiresAt(
               r.password_never_expires,
               r.password_expires_at,
+              r.password_expiry_computed,
               r.password_last_set_at,
               maxAgeDays,
             ),
@@ -236,6 +223,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // expiring-soon SQL filter and the user response both consume this
       // value so the page count and per-row date stay in sync.
       const maxAgeDays = await resolveMaxPwdAgeDays(provider);
+      const expiry = effectiveExpirySql(maxAgeDays);
 
       let baseQuery = app.db
         .selectFrom('user_cache_records')
@@ -279,22 +267,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               eb('account_expires_at', 'is not', null),
               eb('account_expires_at', '<=', horizon),
             ]),
+            eb('password_must_change', '=', true),
             // Password expiring or expired (excluding never-expires accounts).
             eb.and([
               eb('password_never_expires', '=', false),
-              maxAgeDays && maxAgeDays > 0
-                ? eb.and([
-                    eb('password_last_set_at', 'is not', null),
-                    eb(
-                      sql<Date>`password_last_set_at + (${maxAgeDays}::int * interval '1 day')`,
-                      '<=',
-                      horizon,
-                    ),
-                  ])
-                : eb.and([
-                    eb('password_expires_at', 'is not', null),
-                    eb('password_expires_at', '<=', horizon),
-                  ]),
+              eb(expiry, 'is not', null),
+              eb(expiry, '<=', horizon),
             ]),
           ]),
         );
@@ -313,19 +291,10 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         baseQuery = baseQuery
           .where('password_never_expires', '=', false)
           .where('enabled', '=', true);
-        if (maxAgeDays && maxAgeDays > 0) {
-          // computed expiry = password_last_set_at + maxAgeDays
-          const expiryExpr = sql<Date>`password_last_set_at + (${maxAgeDays}::int * interval '1 day')`;
-          baseQuery = baseQuery
-            .where('password_last_set_at', 'is not', null)
-            .where(expiryExpr, '>=', now)
-            .where(expiryExpr, '<=', horizon);
-        } else {
-          baseQuery = baseQuery
-            .where('password_expires_at', 'is not', null)
-            .where('password_expires_at', '>=', now)
-            .where('password_expires_at', '<=', horizon);
-        }
+        baseQuery = baseQuery
+          .where(expiry, 'is not', null)
+          .where(expiry, '>=', now)
+          .where(expiry, '<=', horizon);
       }
 
       // "Stale logon" filter — account hasn't logged in for ≥ N days, or never.
@@ -438,8 +407,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                 when not enabled then 2
                 when account_expires_at is not null and account_expires_at < now() then 3
                 when password_never_expires then 6
-                when password_expires_at is not null and password_expires_at < now() then 4
-                when password_expires_at is not null and password_expires_at < now() + interval '14 days' then 5
+                when password_must_change then 4
+                when ${expiry} < now() then 4
+                when ${expiry} < now() + interval '14 days' then 5
                 else 7
               end
             `,
@@ -447,7 +417,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         );
       } else {
         const orderColumn = SORT_MAP[q.sort] ?? 'display_name';
-        orderedQuery = baseQuery.selectAll().orderBy(sql.ref(orderColumn), orderDir);
+        orderedQuery = baseQuery
+          .selectAll()
+          .orderBy(orderColumn === 'password_expires_at' ? expiry : sql.ref(orderColumn), orderDir);
       }
 
       const [rows, totalRow] = await Promise.all([
@@ -495,9 +467,11 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           enabled: r.enabled,
           locked: r.locked,
           passwordNeverExpires: r.password_never_expires,
+          passwordMustChange: r.password_must_change,
           passwordExpiresAt: computeExpiresAt(
             r.password_never_expires,
             r.password_expires_at,
+            r.password_expiry_computed,
             r.password_last_set_at,
             maxAgeDays,
           ),
@@ -629,9 +603,11 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         lockedAt: dateOrNull(refreshed.user.lockedAt),
         autoUnlockAt: dateOrNull(autoUnlockAt),
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
+        passwordMustChange: refreshed.user.passwordMustChange,
         passwordExpiresAt: computeExpiresAt(
           refreshed.user.passwordNeverExpires,
           refreshed.user.passwordExpiresAt,
+          refreshed.user.passwordExpiryComputed ?? false,
           refreshed.user.passwordLastSetAt,
           maxAgeDays,
         ),
@@ -661,6 +637,16 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         l: rawScalarValue(raw['l']),
         st: rawScalarValue(raw['st']),
         postalCode: rawScalarValue(raw['postalCode']),
+        cn: rawScalarValue(raw['cn']),
+        physicalDeliveryOfficeName: refreshed.user.office ?? null,
+        postOfficeBox: rawScalarValue(raw['postOfficeBox']),
+        profilePath: rawScalarValue(raw['profilePath']),
+        scriptPath: rawScalarValue(raw['scriptPath']),
+        homeDirectory: rawScalarValue(raw['homeDirectory']),
+        pager: rawScalarValue(raw['pager']),
+        facsimileTelephoneNumber: rawScalarValue(raw['facsimileTelephoneNumber']),
+        info: rawScalarValue(raw['info']),
+        primarySmtpAddress: primarySmtpAddress(raw['proxyAddresses']),
         otherMailbox: rawArrayValues(raw['otherMailbox']),
         otherHomePhone: rawArrayValues(raw['otherHomePhone']),
         otherMobile: rawArrayValues(raw['otherMobile']),
@@ -718,7 +704,10 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                     : null,
               }
             : null,
-        rawAttributes: refreshed.user.rawAttributes,
+        rawAttributes: rawAttributesFor(
+          req.actor?.session.capabilities,
+          refreshed.user.rawAttributes,
+        ),
       };
 
       // Account view audit (configurable). Deduped per session+target on a
@@ -1130,6 +1119,23 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         req.log.warn({ err }, 'recycle bin status unavailable for delete preflight');
       }
 
+      // What a tree delete would take with it. Read on the operator's bind,
+      // like the delete itself; unreadable counts come back null.
+      let childCounts = new Map<string, number | null>();
+      try {
+        childCounts = await provider.countChildObjects(
+          rows.map((r) => r.distinguished_name),
+          ctx(actor, req),
+        );
+      } catch (err) {
+        if (err instanceof StepUpBindFailedError) {
+          throw StepUpRequired(
+            'the directory rejected your editing session — please re-authenticate',
+          );
+        }
+        req.log.warn({ err }, 'child object count unavailable for delete preflight');
+      }
+
       return {
         recycleBin,
         users: body.ids.map((id) => {
@@ -1142,6 +1148,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               distinguishedName: null,
               enabled: null,
               privileged: false,
+              childObjects: null,
               blockedReason: 'not_found' as const,
             };
           }
@@ -1153,6 +1160,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
             distinguishedName: row.distinguished_name,
             enabled: row.enabled,
             privileged: rawScalarValue(raw['adminCount']) === '1',
+            childObjects: childCounts.get(row.distinguished_name) ?? null,
             blockedReason: userDeleteBlockReason({
               enabled: row.enabled,
               sid: row.sid,
@@ -1199,10 +1207,15 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           targetType: 'user',
           targetId: live.objectGuid,
           targetDn: live.distinguishedName,
-          metadata: { samAccountName: live.samAccountName },
+          metadata: {
+            samAccountName: live.samAccountName,
+            allowTreeDelete: body.allowTreeDelete === true,
+          },
         },
         async () => {
-          const r = await provider.deleteUser({ kind: 'objectGuid', value: id }, ctx(actor, req));
+          const r = await provider.deleteUser({ kind: 'objectGuid', value: id }, ctx(actor, req), {
+            allowTreeDelete: body.allowTreeDelete === true,
+          });
           return {
             ok: r.ok,
             before: r.before ?? null,
@@ -1434,32 +1447,6 @@ function parseMfaMethods(v: unknown): string[] {
  * `maxAgeDays` is supplied by the caller via `resolveMaxPwdAgeDays(provider)`
  * so the domain-policy lookup happens once per request rather than per row.
  */
-/** Read a single string value from a raw LDAP attribute (last value wins). */
-function rawScalarValue(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  if (Array.isArray(v)) {
-    if (v.length === 0) return null;
-    return rawScalarValue(v[v.length - 1]);
-  }
-  if (typeof v === 'string') return v.length > 0 ? v : null;
-  return String(v);
-}
-
-/** Read every string value from a raw LDAP attribute as an array. */
-function rawArrayValues(v: unknown): string[] {
-  if (v === null || v === undefined) return [];
-  const arr = Array.isArray(v) ? v : [v];
-  const out: string[] = [];
-  for (const x of arr) {
-    if (typeof x === 'string') {
-      if (x.length > 0) out.push(x);
-    } else if (x !== null && x !== undefined) {
-      out.push(String(x));
-    }
-  }
-  return out;
-}
-
 /**
  * Compute email aliases from the proxyAddresses attribute.
  *
@@ -1472,6 +1459,12 @@ function rawArrayValues(v: unknown): string[] {
  * `*.onmicrosoft.com` (and the routing variant `*.mail.onmicrosoft.com`)
  * — those are tenant-internal addresses the operator can't act on.
  */
+/** The primary (`SMTP:`) proxy address, prefix stripped, or null. */
+function primarySmtpAddress(v: unknown): string | null {
+  const primary = rawArrayValues(v).find((entry) => entry.startsWith('SMTP:'));
+  return primary ? primary.slice(5) : null;
+}
+
 function deriveEmailAliases(v: unknown): string[] {
   return rawArrayValues(v)
     .filter((entry) => !entry.startsWith('SMTP:'))
@@ -1545,10 +1538,15 @@ async function resolveManager(
 function computeExpiresAt(
   passwordNeverExpires: boolean,
   cachedExpiresAt: Date | string | null,
+  expiryComputed: boolean,
   passwordLastSetAt: Date | string | null,
   maxAgeDays: number | null,
 ): string | null {
   if (passwordNeverExpires) return null;
+  // AD's own computation (stored by sync) respects fine-grained policies,
+  // including ones that never expire (null).
+  if (expiryComputed || cachedExpiresAt) return dateOrNull(cachedExpiresAt);
+  // Rows synced before it was stored: derive from the domain policy.
   if (maxAgeDays && maxAgeDays > 0 && passwordLastSetAt) {
     const last =
       passwordLastSetAt instanceof Date ? passwordLastSetAt : new Date(passwordLastSetAt);
@@ -1568,11 +1566,21 @@ function computeExpiresAt(
  * three call sites in this file (search, export, detail) hit the cache for
  * the typical concurrent request burst rather than re-querying the DC.
  *
- * Known gap: this is the *domain default*. Fine-grained password policies
- * (PSOs) targeting specific users/groups override `maxPwdAge` at the user
- * level — those users will show the domain expiry, not their PSO expiry,
- * until PSO resolution lands.
+ * Only a fallback now: sync stores AD's computed expiry, which already
+ * accounts for fine-grained password policies (PSOs).
  */
+/**
+ * SQL for a user's password expiry, the same rule as computeExpiresAt: the
+ * value AD computed (stored by sync; null when a fine-grained policy never
+ * expires), or for rows synced before that was stored, pwdLastSet + the
+ * domain's maximum age.
+ */
+function effectiveExpirySql(maxAgeDays: number | null) {
+  return maxAgeDays && maxAgeDays > 0
+    ? sql<Date | null>`case when password_expiry_computed then password_expires_at else coalesce(password_expires_at, password_last_set_at + (${maxAgeDays}::int * interval '1 day')) end`
+    : sql<Date | null>`password_expires_at`;
+}
+
 async function resolveMaxPwdAgeDays(provider: DirectoryProvider): Promise<number | null> {
   try {
     const policy = await provider.getDomainPolicy();

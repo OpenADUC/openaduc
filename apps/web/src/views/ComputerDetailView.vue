@@ -1,14 +1,14 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { latestRequest } from '../design/lib/latestRequest.js';
-import { computed, onMounted, ref, watch } from 'vue';
+import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import DetailLoading from '../design/primitives/DetailLoading.vue';
+import { computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { api } from '../api/index.js';
-import { ApiError } from '../api/client.js';
 import type { ComputerDetail } from '@openaduc/shared';
 import LiveBadge from '../design/primitives/LiveBadge.vue';
 import Card from '../design/primitives/Card.vue';
@@ -21,49 +21,23 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const toast = useToast();
 
-const computer = ref<ComputerDetail | null>(null);
-const loading = ref(false);
-const refreshing = ref(false);
-const error = ref<string | null>(null);
+const {
+  record: computer,
+  loading,
+  error,
+  load,
+  refreshing,
+  refresh,
+} = useDetailRecord<ComputerDetail>({
+  id: () => props.id,
+  fetch: async (id) => (await api.computers.get(id)).computer,
+  notFoundMessage: 'Computer not found',
+  failedMessage: 'Failed to load computer',
+});
 
-// Responses can arrive out of order when moving between computers; only the
-// latest may land, so the page never shows (or acts on) the previous one.
-const computerRequests = latestRequest();
-
-async function load(): Promise<void> {
-  const isCurrent = computerRequests.begin();
-  loading.value = true;
-  error.value = null;
-  if (computer.value && computer.value.id !== props.id) computer.value = null;
-  try {
-    const r = await api.computers.get(props.id);
-    if (!isCurrent()) return;
-    computer.value = r.computer;
-  } catch (err) {
-    if (!isCurrent()) return;
-    if (err instanceof ApiError && err.status === 404) {
-      error.value = 'Computer not found';
-    } else {
-      error.value = err instanceof Error ? err.message : 'Failed to load computer';
-    }
-  } finally {
-    if (isCurrent()) loading.value = false;
-  }
-}
-
-async function refreshFromAd(): Promise<void> {
-  refreshing.value = true;
-  try {
-    await load();
-    // load() reports failures through `error` rather than throwing.
-    if (error.value) {
-      toast.add({ severity: 'error', summary: 'Refresh failed', detail: error.value, life: 5000 });
-    } else {
-      toast.add({ severity: 'success', summary: 'Refreshed', life: 2000 });
-    }
-  } finally {
-    refreshing.value = false;
-  }
+function refreshFromAd(): Promise<void> {
+  // GET live-refreshes against AD, so a reload is a sync of this one object.
+  return refresh(toast, 'Refreshed');
 }
 
 watch(() => props.id, load);
@@ -95,9 +69,7 @@ function openManagedBy(): void {
   <div class="page-inner computer-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <div v-if="!computer && loading" class="detail-loading" role="status">
-      <i class="pi pi-spin pi-spinner" aria-hidden="true" /> Loading computer…
-    </div>
+    <DetailLoading v-if="!computer && loading">Loading computer…</DetailLoading>
     <div v-if="computer" class="detail-stack">
       <section :ref="setHero" class="detail-hero" :class="{ 'is-compact': compact }">
         <div class="detail-hero-top">
@@ -544,13 +516,5 @@ function openManagedBy(): void {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.detail-loading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 48px 0;
-  justify-content: center;
-  color: var(--text-2);
 }
 </style>

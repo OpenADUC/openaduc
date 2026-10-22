@@ -28,6 +28,8 @@ export const userSummarySchema = z.object({
   locked: z.boolean(),
   passwordNeverExpires: z.boolean(),
   passwordExpiresAt: z.string().nullable(),
+  // Must change password at next logon (pwdLastSet = 0).
+  passwordMustChange: z.boolean(),
   accountExpiresAt: z.string().nullable(),
   lastLogonAt: z.string().nullable(),
   // AD's `whenChanged` — the most recent attribute modification on the
@@ -103,6 +105,20 @@ export const userDetailSchema = userSummarySchema.extend({
   l: z.string().nullable(),
   st: z.string().nullable(),
   postalCode: z.string().nullable(),
+  // Attributes the property pages show by name. Typed fields, so readers
+  // without view:raw_attributes still get them.
+  cn: z.string().nullable(),
+  physicalDeliveryOfficeName: z.string().nullable(),
+  postOfficeBox: z.string().nullable(),
+  profilePath: z.string().nullable(),
+  scriptPath: z.string().nullable(),
+  homeDirectory: z.string().nullable(),
+  pager: z.string().nullable(),
+  facsimileTelephoneNumber: z.string().nullable(),
+  info: z.string().nullable(),
+  // The `SMTP:` (primary) entry of proxyAddresses, prefix stripped; null
+  // when the account has no proxyAddresses.
+  primarySmtpAddress: z.string().nullable(),
   // Multi-valued AD attributes; empty array if absent on the entry.
   otherMailbox: z.array(z.string()),
   otherHomePhone: z.array(z.string()),
@@ -171,10 +187,11 @@ export const userDetailSchema = userSummarySchema.extend({
     })
     .nullable(),
   // Every populated LDAP attribute on the user entry, with binary blobs
-  // (objectGUID, photos, etc.) stripped at the provider layer. Each value is
-  // a string or string[] in practice, but the schema is loose because AD
-  // doesn't constrain the set we'll see across customer directories.
-  rawAttributes: z.record(z.string(), z.unknown()),
+  // (objectGUID, photos, etc.) and secrets stripped at the provider layer.
+  // Each value is a string or string[] in practice, but the schema is loose
+  // because AD doesn't constrain the set we'll see across customer
+  // directories. Null for callers without view:raw_attributes.
+  rawAttributes: z.record(z.string(), z.unknown()).nullable(),
 });
 export type UserDetail = z.infer<typeof userDetailSchema>;
 
@@ -388,6 +405,9 @@ export const userDeleteRequestSchema = z
     // Makes every delete name its target explicitly, so a wrong id in the
     // URL fails instead of deleting the wrong person.
     confirmSamAccountName: z.string().min(1).max(256),
+    // Required to delete an account that contains other objects (e.g.
+    // Exchange ActiveSync devices): those go with it in a tree delete.
+    allowTreeDelete: z.boolean().optional(),
   })
   .strict();
 export type UserDeleteRequest = z.infer<typeof userDeleteRequestSchema>;
@@ -422,6 +442,8 @@ export const userDeletePreflightResponseSchema = z.object({
       enabled: z.boolean().nullable(),
       // adminCount=1. Deletable, but the dialog flags it.
       privileged: z.boolean(),
+      // Objects inside the account, deleted with it. Null = couldn't tell.
+      childObjects: z.number().int().nullable(),
       blockedReason: userDeleteBlockReasonSchema.nullable(),
     }),
   ),

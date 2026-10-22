@@ -42,7 +42,7 @@ const text = computed(() => {
   white-space: nowrap;
 }
 .sync-freshness.stale {
-  color: var(--p-amber-500, #f59e0b);
+  color: var(--amber);
   font-weight: 600;
 }
 </style>

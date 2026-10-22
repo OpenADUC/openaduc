@@ -3,6 +3,7 @@ import type { ListFreshness } from '@openaduc/shared';
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import { TASK_REGISTRY } from './syncTasks/registry.js';
+import { SyncTaskService } from './syncTasks/service.js';
 import type { SyncTaskKey } from './syncTasks/types.js';
 
 const TASKS = {
@@ -23,14 +24,8 @@ export async function listFreshness(
   list: keyof typeof TASKS,
 ): Promise<ListFreshness> {
   const [delta] = TASKS[list];
-  const [lastRun, task] = await Promise.all([
-    db
-      .selectFrom('directory_sync_task_runs')
-      .select((eb) => eb.fn.max('finished_at').as('finished_at'))
-      .where('provider_id', '=', providerId)
-      .where('task_key', 'in', [...TASKS[list]])
-      .where('status', '=', 'succeeded')
-      .executeTakeFirst(),
+  const [lastSyncedAt, task] = await Promise.all([
+    new SyncTaskService(db).lastSuccessfulFinishAt(providerId, TASKS[list]),
     db
       .selectFrom('directory_sync_tasks')
       .select('interval_minutes')
@@ -38,7 +33,6 @@ export async function listFreshness(
       .where('task_key', '=', delta)
       .executeTakeFirst(),
   ]);
-  const lastSyncedAt = lastRun?.finished_at ? new Date(lastRun.finished_at) : null;
   const intervalMinutes = task?.interval_minutes ?? TASK_REGISTRY[delta].defaultIntervalMinutes;
   const allowedMs = Math.max(2 * intervalMinutes, 60) * 60_000;
   return {

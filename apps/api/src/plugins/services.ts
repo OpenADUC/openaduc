@@ -65,12 +65,20 @@ export default fp(async (app) => {
   const teams = new TeamsNotifierService(entraIntegration, app.log);
   const signInEvents = new SignInEventsService(app.db, app.log);
 
-  const sync = new SyncTaskScheduler(app.db, directoryConfig, providers, notifier, app.log, {
-    integration: entraIntegration,
-    graph: graphClient,
-    photos,
-    teams,
-  });
+  const sync = new SyncTaskScheduler(
+    app.db,
+    app.pgLockPool,
+    directoryConfig,
+    providers,
+    notifier,
+    app.log,
+    {
+      integration: entraIntegration,
+      graph: graphClient,
+      photos,
+      teams,
+    },
+  );
 
   app.decorate('services', {
     audit,

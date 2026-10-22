@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { latestRequest } from '../design/lib/latestRequest.js';
+import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable, { type DataTableRowClickEvent } from 'primevue/datatable';
@@ -27,11 +28,6 @@ const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
 
-const group = ref<GroupDetail | null>(null);
-const loading = ref(false);
-const refreshing = ref(false);
-const error = ref<string | null>(null);
-
 // Drives the compact-on-scroll hero. `setHero` is bound to the hero
 // section's :ref. `compact` flips on scroll; `heroHeight` tracks the
 // rendered height so the Members card's sticky head pins flush with
@@ -56,45 +52,23 @@ const busyMemberId = ref<string | null>(null);
 const canManage = computed(() => auth.hasCapability('write:group.membership'));
 const memberCount = computed(() => group.value?.members.length ?? 0);
 
-// Responses can arrive out of order when moving between groups; only the
-// latest may land, so the page never shows (or acts on) the previous one.
-const groupRequests = latestRequest();
+const {
+  record: group,
+  loading,
+  error,
+  load,
+  refreshing,
+  refresh,
+} = useDetailRecord<GroupDetail>({
+  id: () => props.id,
+  fetch: async (id) => (await api.groups.get(id)).group,
+  notFoundMessage: 'Group not found',
+  failedMessage: 'Failed to load group',
+});
 
-async function load(): Promise<void> {
-  const isCurrent = groupRequests.begin();
-  loading.value = true;
-  error.value = null;
-  if (group.value && group.value.id !== props.id) group.value = null;
-  try {
-    const r = await api.groups.get(props.id);
-    if (!isCurrent()) return;
-    group.value = r.group;
-  } catch (err) {
-    if (!isCurrent()) return;
-    if (err instanceof ApiError && err.status === 404) {
-      error.value = 'Group not found';
-    } else {
-      error.value = err instanceof Error ? err.message : 'Failed to load group';
-    }
-  } finally {
-    if (isCurrent()) loading.value = false;
-  }
-}
-
-async function refreshFromAd(): Promise<void> {
-  // Same trick as user detail: GET always live-refreshes.
-  refreshing.value = true;
-  try {
-    await load();
-    // load() reports failures through `error` rather than throwing.
-    if (error.value) {
-      toast.add({ severity: 'error', summary: 'Refresh failed', detail: error.value, life: 5000 });
-    } else {
-      toast.add({ severity: 'success', summary: 'Refreshed', life: 2000 });
-    }
-  } finally {
-    refreshing.value = false;
-  }
+function refreshFromAd(): Promise<void> {
+  // GET live-refreshes against AD, so a reload is a sync of this one object.
+  return refresh(toast, 'Refreshed');
 }
 
 watch(() => props.id, load);
@@ -250,9 +224,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   >
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <div v-if="!group && loading" class="detail-loading" role="status">
-      <i class="pi pi-spin pi-spinner" aria-hidden="true" /> Loading group…
-    </div>
+    <DetailLoading v-if="!group && loading">Loading group…</DetailLoading>
     <div v-if="group" class="detail-stack">
       <!-- Hero. Mirrors the User detail layout: avatar (rounded square so
            a group reads as a different class of thing than a person at a
@@ -885,13 +857,5 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
 
 .w-full {
   width: 100%;
-}
-.detail-loading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 48px 0;
-  justify-content: center;
-  color: var(--text-2);
 }
 </style>

@@ -21,11 +21,12 @@ The full env schema lives in [`apps/api/src/config/env.ts`](../apps/api/src/conf
 
 ## API server
 
-| Variable          | Default                 | Description                                                                                                  |
-| ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `API_HOST`        | `0.0.0.0`               | Bind address for the Fastify HTTP server.                                                                    |
-| `API_PORT`        | `3000`                  | TCP port for the API.                                                                                        |
-| `API_CORS_ORIGIN` | `http://localhost:5173` | Comma-separated list of origins allowed by CORS. In production, set this to the public origin of the web UI. |
+| Variable           | Default                 | Description                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `API_HOST`         | `0.0.0.0`               | Bind address for the Fastify HTTP server.                                                                                                                                                                                                                                                                                                                                 |
+| `API_PORT`         | `3000`                  | TCP port for the API.                                                                                                                                                                                                                                                                                                                                                     |
+| `API_CORS_ORIGIN`  | `http://localhost:5173` | Comma-separated list of origins allowed by CORS. In production, set this to the public origin of the web UI.                                                                                                                                                                                                                                                              |
+| `TRUST_PROXY_HOPS` | `1`                     | How many reverse proxies in front of the API to trust for the client's address (`X-Forwarded-For`). `1` is the bundled nginx. Add one for each proxy or load balancer in front of it (e.g. `2` behind an identity-aware proxy), or `0` if clients reach the API directly. Too high lets clients choose the address used for rate limits, login backoff and the audit log. |
 
 ## Sessions and step-up
 
@@ -41,10 +42,10 @@ These can be overridden per-deployment via the **app_settings** table (settings 
 
 ## Database
 
-| Variable            | Default | Description                                                                          |
-| ------------------- | ------- | ------------------------------------------------------------------------------------ |
-| `DATABASE_POOL_MIN` | `2`     | Minimum idle Postgres connections.                                                   |
-| `DATABASE_POOL_MAX` | `10`    | Maximum Postgres connections. Bump if you see pool exhaustion under heavy sync load. |
+| Variable            | Default | Description                                                                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_POOL_MIN` | `2`     | Minimum idle Postgres connections.                                                                                                                      |
+| `DATABASE_POOL_MAX` | `10`    | Maximum Postgres connections for queries. Sync tasks hold one more each, from a separate pool of the same size, so a process can open up to twice this. |
 
 ## Active Directory connection
 
@@ -57,16 +58,16 @@ These variables only matter on **first boot before the setup wizard has run**. I
 | `AD_BASE_DN`                  | —       | Base DN for searches (e.g. `DC=example,DC=com`).                                                                                                            |
 | `AD_SERVICE_ACCOUNT_UPN`      | —       | UPN of the read/sync service account (e.g. `openaduc-sync@example.com`).                                                                                    |
 | `AD_SERVICE_ACCOUNT_PASSWORD` | —       | Password for the service account. Stored encrypted in the DB once seeded.                                                                                   |
-| `AD_TLS_REJECT_UNAUTHORIZED`  | `1`     | Set to `0` only for local dev with self-signed Samba. **Never** set to `0` in production.                                                                   |
+| `AD_TLS_REJECT_UNAUTHORIZED`  | `1`     | Keep at `1`. For a DC with a private CA set `AD_TLS_CA_PATH` instead; `0` lets anyone on the network path impersonate the DC and collect passwords.         |
 | `AD_TLS_CA_PATH`              | —       | Path inside the API container to a custom CA bundle (PEM) used to validate the LDAPS certificate.                                                           |
 | `AD_OPERATION_TIMEOUT_MS`     | `15000` | Timeout (in ms) for individual LDAP operations. Increase if your DCs are slow or far away.                                                                  |
 | `SYNC_SCHEDULER_ENABLED`      | `1`     | Set to `0` to stop scheduled directory sync tasks in this process (the integration tests do). Manual and setup-time syncs still run.                        |
 
 ## Authorization bootstrap
 
-| Variable                   | Default | Description                                                                                                                                                                                                         |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. The setup wizard sets this for you. The recovery account from the wizard works without it. |
+| Variable                   | Default | Description                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. Applies only while no admin group is set in the app's settings. Setup sets Domain Admins there unless the admin signing in already qualifies through this variable. |
 
 ## Frontend (build-time)
 
