@@ -437,7 +437,6 @@ export class SyncTaskScheduler {
         (s) => s.taskKey === taskKey,
       );
       const lastCursor = summary?.lastCursor ?? null;
-      const lastFinishedAt = summary?.lastFinishedAt ?? null;
       const intervalMinutes = summary?.intervalMinutes ?? def.defaultIntervalMinutes;
 
       const provider = await this.providers.buildWithCreds(providerId, creds);
@@ -448,8 +447,7 @@ export class SyncTaskScheduler {
         log,
         lastCursor,
         intervalMinutes,
-        // Use last_finished_at — the previous successful run window's end.
-        lastSuccessfulRunAt: summary?.lastStatus === 'succeeded' ? lastFinishedAt : null,
+        lastSuccessfulRunAt: await this.tasks.lastSuccessfulStartAt(providerId, taskKey),
         ...(entraRuntime ? { entra: entraRuntime } : {}),
       });
       cursor = result.cursor;

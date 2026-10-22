@@ -3,6 +3,7 @@ import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryOu } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { memberOfArray } from './userCache.js';
 
 /**
  * Upsert an OU into the cache. The unique key is
@@ -77,15 +78,7 @@ export async function rebuildMemberships(
         true,
         now()
       FROM user_cache_records u
-      CROSS JOIN LATERAL jsonb_array_elements_text(
-        CASE
-          WHEN jsonb_typeof(u.raw_attributes_json -> 'memberOf') = 'array'
-            THEN u.raw_attributes_json -> 'memberOf'
-          WHEN u.raw_attributes_json ? 'memberOf'
-            THEN jsonb_build_array(u.raw_attributes_json -> 'memberOf')
-          ELSE '[]'::jsonb
-        END
-      ) AS member_dn
+      CROSS JOIN LATERAL jsonb_array_elements_text(${memberOfArray('u.raw_attributes_json')}) AS member_dn
       JOIN group_cache_records g
         ON g.provider_id = u.provider_id
         AND lower(g.distinguished_name) = lower(member_dn)
