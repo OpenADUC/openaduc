@@ -111,6 +111,17 @@ export async function setGroupMember(
   }
 }
 
+/** Run `fn` with an LDAP client bound as the domain Administrator. */
+export async function asAdministrator<T>(fn: (client: LdapClient) => Promise<T>): Promise<T> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    return await fn(client);
+  } finally {
+    await client.unbind();
+  }
+}
+
 /** Replace one attribute on a user, as the domain Administrator. */
 export async function setUserAttribute(
   samAccountName: string,
