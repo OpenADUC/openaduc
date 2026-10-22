@@ -378,6 +378,8 @@ export interface DirectoryProvider {
   getComputerGroups(computerId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
 
   syncUsers(input: SyncInput): AsyncIterable<DirectoryUser>;
+  /** Every user locked out right now (honours the lockout duration), paged. */
+  syncLockedUsers(): AsyncIterable<DirectoryUser>;
   syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup>;
   syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer>;
   syncOus(input: SyncInput): AsyncIterable<DirectoryOu>;

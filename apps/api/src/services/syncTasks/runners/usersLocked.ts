@@ -4,7 +4,7 @@ import type { RunnerContext, RunnerResult } from '../types.js';
 /**
  * High-frequency lockout poller. Runs every 5 min by default.
  *
- * Pulls only users with a non-zero `lockoutTime`, patches the lockout
+ * Pulls only users whose lockout is in effect now, patches the lockout
  * fields (`locked`, `live_refreshed_at`) on matching cache rows, and
  * clears the `locked` flag on any cache row that *was* locked but is no
  * longer in the result set (an admin elsewhere unlocked them, or AD
@@ -15,14 +15,11 @@ import type { RunnerContext, RunnerResult } from '../types.js';
  * delta or full pass.
  */
 export async function runUsersLocked(ctx: RunnerContext): Promise<RunnerResult> {
-  const lockedUsers = await ctx.provider.searchUsers({
-    locked: true,
-    pageSize: 500,
-  });
-
+  // Paged, not capped: during a password spray hundreds of accounts lock at
+  // once, and anyone past a size limit would be shown as unlocked.
   const seenGuids = new Set<string>();
   const now = new Date().toISOString();
-  for (const user of lockedUsers) {
+  for await (const user of ctx.provider.syncLockedUsers()) {
     seenGuids.add(user.objectGuid);
     try {
       await ctx.db
@@ -59,6 +56,6 @@ export async function runUsersLocked(ctx: RunnerContext): Promise<RunnerResult> 
   }
 
   return {
-    stats: { lockedCount: lockedUsers.length, clearedCount: cleared },
+    stats: { lockedCount: seenGuids.size, clearedCount: cleared },
   };
 }
