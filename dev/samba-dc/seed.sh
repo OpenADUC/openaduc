@@ -97,6 +97,18 @@ replace: pwdLastSet
 pwdLastSet: 0
 EOF
 
+# Tests send wrong passwords, and lockouts here never expire on their own:
+# unlock every other fixture account.
+for sam in oa.admin oa.operator oa.auditor svc-openaduc alice.anders bob.baker carol.chen erin.evans; do
+  dn=$(ldbsearch -H "$SAM" -b "$BASE" "(sAMAccountName=$sam)" dn | sed -n 's/^dn: //p')
+  ldbmodify -H "$SAM" >/dev/null <<EOF
+dn: $dn
+changetype: modify
+replace: lockoutTime
+lockoutTime: 0
+EOF
+done
+
 # Lock Dave out the way a real user gets locked: bad password binds.
 locked() {
   ldbsearch -H "$SAM" -b "CN=Dave Diaz,OU=Staff,$ROOT,$BASE" -s base lockoutTime \
