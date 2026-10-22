@@ -285,9 +285,33 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       // Step-up succeeded — clear backoff state.
       app.services.loginBackoff.recordSuccess(req.ip ?? null, username);
 
-      const writes = actor.session.capabilities.filter((c): c is Capability =>
-        WRITE_CAPABILITIES.includes(c as Capability),
+      // Roles come from AD group membership, which may have changed since
+      // sign-in. Re-read them from this bind so a revoked role can't be kept
+      // alive by stepping up.
+      const capabilities = await app.services.authorization.resolveCapabilities(
+        result.groupDns ?? result.user?.memberOfDns ?? [],
       );
+      if (capabilities.length === 0) {
+        const { revokedElevatedIds } = await app.services.sessions.revokeAdminSession(
+          actor.session.id,
+        );
+        app.services.credentialCache.deleteMany(revokedElevatedIds);
+        await app.services.audit
+          .recordEvent({
+            ...baseAudit,
+            action: 'auth.stepup',
+            result: 'denied',
+            errorCode: 'no_capabilities',
+          })
+          .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup denial'));
+        reply.clearCookie(SESSION_COOKIE_NAME, cookieOptions());
+        throw Unauthorized('your account is no longer authorized to use this application');
+      }
+      const removedCapabilities = actor.session.capabilities.filter(
+        (c) => !capabilities.includes(c as Capability),
+      );
+
+      const writes = capabilities.filter((c) => WRITE_CAPABILITIES.includes(c));
 
       const {
         admin: rotated,
@@ -302,9 +326,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           actorUsername: actor.session.actorUsername,
           actorEmail: actor.session.actorEmail,
           actorDn: actor.session.actorDn,
-          capabilities: actor.session.capabilities,
+          capabilities,
           sourceIp: req.ip,
           userAgent: req.headers['user-agent'] ?? null,
+          notAfter: actor.session.expiresAt,
         },
         elevatedCapabilities: writes,
       });
@@ -327,6 +352,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
             capabilities: writes,
             expiresAt: elevated.expiresAt.toISOString(),
             rotatedFromSessionId: actor.session.id,
+            ...(removedCapabilities.length > 0 ? { removedCapabilities } : {}),
           },
         })
         .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup success'));
