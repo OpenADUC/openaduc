@@ -103,6 +103,35 @@ export async function setGroupMember(
   }
 }
 
+/** Replace one attribute on a user, as the domain Administrator. */
+export async function setUserAttribute(
+  samAccountName: string,
+  attribute: string,
+  values: string[],
+): Promise<void> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    const { searchEntries } = await client.search(DC.baseDn, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${samAccountName})`,
+      attributes: ['distinguishedName'],
+    });
+    const dn = searchEntries[0]?.dn;
+    if (!dn) throw new Error(`no such user: ${samAccountName}`);
+    const { Change, Attribute } = await import('ldapts');
+    await client.modify(
+      dn,
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type: attribute, values }),
+      }),
+    );
+  } finally {
+    await client.unbind();
+  }
+}
+
 // ---- API instance ------------------------------------------------------
 
 export interface TestApi {
