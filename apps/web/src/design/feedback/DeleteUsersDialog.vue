@@ -38,6 +38,7 @@ const {
   confirmed,
   withChildren,
   childObjectTotal,
+  childCountUnknown,
   includeChildren,
   load,
   run,
@@ -137,11 +138,15 @@ const deleteLabel = computed(() => {
                 Privileged
               </span>
               <span
-                v-if="(u.childObjects ?? 0) > 0"
+                v-if="u.childObjects !== 0"
                 class="du-tag"
                 title="Objects stored inside this account, such as Exchange ActiveSync devices"
               >
-                Contains {{ u.childObjects }} {{ u.childObjects === 1 ? 'object' : 'objects' }}
+                {{
+                  u.childObjects === null
+                    ? 'May contain objects'
+                    : `Contains ${u.childObjects} ${u.childObjects === 1 ? 'object' : 'objects'}`
+                }}
               </span>
               <span class="du-ou">{{ ouOf(u.distinguishedName) }}</span>
             </li>
@@ -162,7 +167,13 @@ const deleteLabel = computed(() => {
 
         <label v-if="withChildren.length > 0" class="du-children">
           <input v-model="includeChildren" type="checkbox" />
-          <span>
+          <span v-if="childCountUnknown">
+            Also delete any objects inside
+            {{ withChildren.length === 1 ? 'this account' : 'these accounts' }} (e.g. Exchange
+            ActiveSync devices). OpenADUC couldn't count them, and they can't be deleted separately
+            from here.
+          </span>
+          <span v-else>
             Also delete the {{ childObjectTotal }}
             {{ childObjectTotal === 1 ? 'object' : 'objects' }} inside
             {{ withChildren.length === 1 ? 'this account' : 'these accounts' }} (e.g. Exchange

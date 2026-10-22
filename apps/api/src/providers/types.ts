@@ -441,7 +441,7 @@ export interface DirectoryProvider {
     ctx: WriteContext,
     options?: { allowTreeDelete?: boolean },
   ): Promise<MutationResult & { treeDelete?: boolean }>;
-  /** How many objects sit directly under each DN (null where unreadable). */
+  /** How many objects sit anywhere under each DN (null where unreadable). */
   countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than

@@ -14,17 +14,24 @@ import {
 const SAM = 'tree.test';
 const DN = `CN=${SAM},OU=Staff,OU=OpenADUC Test,DC=openaduc,DC=test`;
 
-// A disabled user with an object inside it, like an Exchange ActiveSync
-// device container. (classStore is one of the few classes Samba's schema
-// allows under a user.)
-async function createUserWithChild(): Promise<void> {
+// A disabled user with a container inside it holding one more object, like
+// an Exchange ActiveSync devices container with a device. (classStore is one
+// of the few classes Samba's schema allows under a user.)
+const CHILDREN = [`CN=Devices,${DN}`, `CN=Phone,CN=Devices,${DN}`];
+
+async function removeUserWithChildren(): Promise<void> {
   await asAdministrator(async (c) => {
-    await c.del(`CN=Devices,${DN}`).catch(() => undefined);
-    await c.del(DN).catch(() => undefined);
+    for (const dn of [...CHILDREN].reverse().concat(DN)) await c.del(dn).catch(() => undefined);
   });
+}
+
+async function createUserWithChild(): Promise<void> {
+  await removeUserWithChildren();
   sambaTool('user', 'create', SAM, 'OpenADUC-dev-User1', '--userou=OU=Staff,OU=OpenADUC Test');
   sambaTool('user', 'disable', SAM);
-  await asAdministrator((c) => c.add(`CN=Devices,${DN}`, { objectClass: 'classStore' }));
+  await asAdministrator(async (c) => {
+    for (const dn of CHILDREN) await c.add(dn, { objectClass: 'classStore' });
+  });
 }
 
 describe('deleting a user that has child objects', () => {
@@ -51,20 +58,17 @@ describe('deleting a user that has child objects', () => {
     await api.app.services.sync.runOnce(api.directoryId!, 'users.full');
   });
   afterAll(async () => {
-    await asAdministrator(async (c) => {
-      await c.del(`CN=Devices,${DN}`).catch(() => undefined);
-      await c.del(DN).catch(() => undefined);
-    });
+    await removeUserWithChildren();
     reseedDirectory(); // brings carol back
     await api?.close();
   });
 
-  it('preflight reports how many objects each account contains', async () => {
+  it('preflight reports how many objects each account contains, at any depth', async () => {
     const [tree, carol] = [await userId(SAM), await userId('carol.chen')];
     const res = await admin.post('/api/users/delete-preflight', { ids: [tree, carol] });
     const users = res.json<{ users: { id: string; childObjects: number | null }[] }>().users;
 
-    expect(users.find((u) => u.id === tree)?.childObjects).toBe(1);
+    expect(users.find((u) => u.id === tree)?.childObjects).toBe(2);
     expect(users.find((u) => u.id === carol)?.childObjects).toBe(0);
   });
 

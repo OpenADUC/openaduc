@@ -1441,12 +1441,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       const counts = new Map<string, number | null>();
       for (const dn of dns) {
         try {
+          // Everything a tree delete would remove: the whole subtree, which
+          // the search returns with the base itself, so minus one.
           const { searchEntries } = await client.search(dn, {
-            scope: 'one',
+            scope: 'sub',
             filter: '(objectClass=*)',
             attributes: ['1.1'],
           });
-          counts.set(dn, searchEntries.length);
+          counts.set(dn, Math.max(0, searchEntries.length - 1));
         } catch {
           counts.set(dn, null);
         }

@@ -27,6 +27,7 @@ const {
   confirmed,
   withChildren,
   childObjectTotal,
+  childCountUnknown,
   includeChildren,
   load,
   run,
@@ -108,7 +109,11 @@ async function submit(): Promise<void> {
             style="display: flex; gap: 6px; align-items: flex-start; margin-bottom: 10px"
           >
             <input v-model="includeChildren" type="checkbox" :disabled="phase === 'running'" />
-            <span>
+            <span v-if="childCountUnknown">
+              This object may contain other objects that couldn't be counted. Delete any it contains
+              too.
+            </span>
+            <span v-else>
               This object contains {{ childObjectTotal }} other
               {{ childObjectTotal === 1 ? 'object' : 'objects' }}. Delete
               {{ childObjectTotal === 1 ? 'it' : 'them' }} too.

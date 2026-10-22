@@ -38,11 +38,14 @@ export function useUserDeletion() {
 
   // Accounts holding other objects (Exchange ActiveSync devices, …). AD can
   // only delete them together with those objects, which needs its own
-  // explicit yes.
-  const withChildren = computed(() => eligible.value.filter((u) => (u.childObjects ?? 0) > 0));
+  // explicit yes. An account whose objects couldn't be counted (null) may
+  // hold some, so it asks for the same yes rather than failing the delete.
+  const mayHoldObjects = (u: PreflightUser) => u.childObjects !== 0;
+  const withChildren = computed(() => eligible.value.filter(mayHoldObjects));
   const childObjectTotal = computed(() =>
     withChildren.value.reduce((n, u) => n + (u.childObjects ?? 0), 0),
   );
+  const childCountUnknown = computed(() => withChildren.value.some((u) => u.childObjects === null));
   const includeChildren = ref(false);
 
   // One account: its logon name, which proves the operator knows who
@@ -83,7 +86,7 @@ export function useUserDeletion() {
       try {
         await api.users.remove(u.id, {
           confirmSamAccountName: u.samAccountName ?? '',
-          ...((u.childObjects ?? 0) > 0 ? { allowTreeDelete: includeChildren.value } : {}),
+          ...(mayHoldObjects(u) ? { allowTreeDelete: includeChildren.value } : {}),
         });
         deletedIds.value.push(u.id);
       } catch (err) {
@@ -112,6 +115,7 @@ export function useUserDeletion() {
     confirmed,
     withChildren,
     childObjectTotal,
+    childCountUnknown,
     includeChildren,
     load,
     run,
