@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   LDAP_TLS_MODES,
@@ -9,7 +8,7 @@ import {
   type Capability,
 } from '@openaduc/shared';
 import { BadRequest, Forbidden, Unauthorized } from '../plugins/errorHandler.js';
-import { SETUP_LOCK_KEY } from '../lib/advisoryLocks.js';
+import { SETUP_LOCK_KEY, withAdvisoryLock } from '../lib/advisoryLocks.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
@@ -131,16 +130,8 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
     }
   }
 
-  async function withSetupLock<T>(fn: () => Promise<T>): Promise<T> {
-    return app.db.connection().execute(async (conn) => {
-      await sql`select pg_advisory_lock(${SETUP_LOCK_KEY})`.execute(conn);
-      try {
-        return await fn();
-      } finally {
-        await sql`select pg_advisory_unlock(${SETUP_LOCK_KEY})`.execute(conn);
-      }
-    });
-  }
+  const withSetupLock = <T>(fn: () => Promise<T>) =>
+    withAdvisoryLock(app.pgLockPool, SETUP_LOCK_KEY, fn);
 
   async function firstConfiguredDirectoryId(): Promise<number | null> {
     const directories = await app.services.directoryConfig.listAll();
