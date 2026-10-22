@@ -1117,6 +1117,23 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         req.log.warn({ err }, 'recycle bin status unavailable for delete preflight');
       }
 
+      // What a tree delete would take with it. Read on the operator's bind,
+      // like the delete itself; unreadable counts come back null.
+      let childCounts = new Map<string, number | null>();
+      try {
+        childCounts = await provider.countChildObjects(
+          rows.map((r) => r.distinguished_name),
+          ctx(actor, req),
+        );
+      } catch (err) {
+        if (err instanceof StepUpBindFailedError) {
+          throw StepUpRequired(
+            'the directory rejected your editing session — please re-authenticate',
+          );
+        }
+        req.log.warn({ err }, 'child object count unavailable for delete preflight');
+      }
+
       return {
         recycleBin,
         users: body.ids.map((id) => {
@@ -1129,6 +1146,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               distinguishedName: null,
               enabled: null,
               privileged: false,
+              childObjects: null,
               blockedReason: 'not_found' as const,
             };
           }
@@ -1140,6 +1158,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
             distinguishedName: row.distinguished_name,
             enabled: row.enabled,
             privileged: rawScalarValue(raw['adminCount']) === '1',
+            childObjects: childCounts.get(row.distinguished_name) ?? null,
             blockedReason: userDeleteBlockReason({
               enabled: row.enabled,
               sid: row.sid,
@@ -1186,10 +1205,15 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           targetType: 'user',
           targetId: live.objectGuid,
           targetDn: live.distinguishedName,
-          metadata: { samAccountName: live.samAccountName },
+          metadata: {
+            samAccountName: live.samAccountName,
+            allowTreeDelete: body.allowTreeDelete === true,
+          },
         },
         async () => {
-          const r = await provider.deleteUser({ kind: 'objectGuid', value: id }, ctx(actor, req));
+          const r = await provider.deleteUser({ kind: 'objectGuid', value: id }, ctx(actor, req), {
+            allowTreeDelete: body.allowTreeDelete === true,
+          });
           return {
             ok: r.ok,
             before: r.before ?? null,

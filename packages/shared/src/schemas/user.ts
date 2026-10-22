@@ -403,6 +403,9 @@ export const userDeleteRequestSchema = z
     // Makes every delete name its target explicitly, so a wrong id in the
     // URL fails instead of deleting the wrong person.
     confirmSamAccountName: z.string().min(1).max(256),
+    // Required to delete an account that contains other objects (e.g.
+    // Exchange ActiveSync devices): those go with it in a tree delete.
+    allowTreeDelete: z.boolean().optional(),
   })
   .strict();
 export type UserDeleteRequest = z.infer<typeof userDeleteRequestSchema>;
@@ -437,6 +440,8 @@ export const userDeletePreflightResponseSchema = z.object({
       enabled: z.boolean().nullable(),
       // adminCount=1. Deletable, but the dialog flags it.
       privileged: z.boolean(),
+      // Objects inside the account, deleted with it. Null = couldn't tell.
+      childObjects: z.number().int().nullable(),
       blockedReason: userDeleteBlockReasonSchema.nullable(),
     }),
   ),

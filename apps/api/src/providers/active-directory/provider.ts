@@ -1099,6 +1099,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   async deleteUser(
     userId: DirectoryObjectIdentifier,
     ctx: WriteContext,
+    options: { allowTreeDelete?: boolean } = {},
   ): Promise<MutationResult & { treeDelete?: boolean }> {
     return this.asOperator(ctx, async (client) => {
       try {
@@ -1121,6 +1122,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           await client.del(user.distinguishedName);
         } catch (err) {
           if (!(err instanceof NotAllowedOnNonLeafError)) throw err;
+          // The account holds other objects. Deleting them too must be the
+          // operator's explicit choice, never a silent escalation.
+          if (!options.allowTreeDelete) {
+            return {
+              ok: false,
+              reason: 'policy_violation',
+              errorMessage:
+                'the account contains other objects (e.g. Exchange ActiveSync devices); confirm deleting them too',
+              before,
+            };
+          }
           treeDelete = true;
           await client.del(user.distinguishedName, new TreeDeleteControl());
         }
@@ -1416,6 +1428,27 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   // operator's bind password is in the credential cache. Bind failure
   // throws `StepUpBindFailedError`, which the route maps to a 401/403
   // prompting re-elevation.
+
+  async countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>> {
+    return this._withOperatorBind(ctx, async (client) => {
+      const counts = new Map<string, number | null>();
+      for (const dn of dns) {
+        try {
+          // Everything a tree delete would remove: the whole subtree, which
+          // the search returns with the base itself, so minus one.
+          const { searchEntries } = await client.search(dn, {
+            scope: 'sub',
+            filter: '(objectClass=*)',
+            attributes: ['1.1'],
+          });
+          counts.set(dn, Math.max(0, searchEntries.length - 1));
+        } catch {
+          counts.set(dn, null);
+        }
+      }
+      return counts;
+    });
+  }
 
   async getRecycleBinStatus(ctx: WriteContext): Promise<RecycleBinStatus> {
     return this._withOperatorBind(ctx, async (client) => {
