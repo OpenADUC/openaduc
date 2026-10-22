@@ -275,10 +275,20 @@ select {
   color: inherit;
 }
 
-input:focus,
-textarea:focus,
-select:focus,
-button:focus {
+/* Focus: mouse clicks leave no ring, keyboard focus always shows one.
+   PrimeVue text fields and dropdowns draw their own focus border, so they
+   don't get a second ring. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.p-inputtext:focus-visible,
+.p-textarea:focus-visible,
+.p-select:focus-visible,
+.p-password-input:focus-visible {
   outline: none;
 }
 

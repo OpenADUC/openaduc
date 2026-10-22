@@ -45,7 +45,6 @@ const label = computed(() => (isDark.value ? 'Switch to light mode' : 'Switch to
 }
 
 .theme-toggle:focus-visible {
-  outline: none;
   border-color: var(--accent);
 }
 </style>

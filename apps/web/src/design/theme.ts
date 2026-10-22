@@ -9,6 +9,13 @@ import Aura from '@primeuix/themes/aura';
 
 export const adManageTheme = definePreset(Aura, {
   semantic: {
+    // Same keyboard-focus ring as our own controls (tokens.css).
+    focusRing: {
+      width: '2px',
+      style: 'solid',
+      color: '{primary.color}',
+      offset: '2px',
+    },
     primary: {
       50: '#ecfeff',
       100: '#cffafe',
@@ -90,11 +97,12 @@ export const adManageTheme = definePreset(Aura, {
         },
       },
       light: {
+        // White on cyan-500 is 2.4:1; cyan-700 gives 5.4:1 (WCAG AA).
         primary: {
-          color: '{primary.500}',
+          color: '{primary.700}',
           contrastColor: '#ffffff',
-          hoverColor: '{primary.600}',
-          activeColor: '{primary.700}',
+          hoverColor: '{primary.800}',
+          activeColor: '{primary.900}',
         },
       },
     },
