@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  csvRow,
   groupMembershipChangeSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
@@ -22,7 +23,6 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { csvRow } from '../lib/csv.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
