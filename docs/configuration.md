@@ -64,9 +64,9 @@ These variables only matter on **first boot before the setup wizard has run**. I
 
 ## Authorization bootstrap
 
-| Variable                   | Default | Description                                                                                                                                                                                                         |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. The setup wizard sets this for you. The recovery account from the wizard works without it. |
+| Variable                   | Default | Description                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. Applies only while no admin group is set in the app's settings. Setup sets Domain Admins there unless the admin signing in already qualifies through this variable. |
 
 ## Frontend (build-time)
 
