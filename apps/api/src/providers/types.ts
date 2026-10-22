@@ -394,6 +394,8 @@ export interface DirectoryProvider {
    * which doesn't hit the group's 1500-value range limit on `member`.
    */
   syncGroupMembers(groupDn: string): AsyncIterable<DirectoryUser>;
+  /** Every user locked out right now (honours the lockout duration), paged. */
+  syncLockedUsers(): AsyncIterable<DirectoryUser>;
   syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup>;
   syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer>;
   syncOus(input: SyncInput): AsyncIterable<DirectoryOu>;

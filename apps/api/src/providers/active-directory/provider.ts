@@ -560,6 +560,15 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     yield* this.streamSearch(filter, USER_ATTRS_FULL, 500, normalizeUser);
   }
 
+  async *syncLockedUsers(): AsyncIterable<DirectoryUser> {
+    // LDAP can't filter on the constructed lockout bit, so narrow by
+    // lockoutTime and keep only accounts whose lockout is still in effect.
+    const filter = `(&${USER_FILTER_BASE}(lockoutTime>=1))`;
+    for await (const user of this.streamSearch(filter, USER_ATTRS, 500, normalizeUser)) {
+      if (user.locked) yield user;
+    }
+  }
+
   async *syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup> {
     const filter = input.modifiedSince
       ? `(&${GROUP_FILTER_BASE}(whenChanged>=${formatGeneralizedTime(input.modifiedSince)}))`

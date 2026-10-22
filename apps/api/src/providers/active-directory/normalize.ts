@@ -135,6 +135,7 @@ export const USER_ATTRS = [
   'badPasswordTime',
   'whenCreated',
   'whenChanged',
+  'msDS-User-Account-Control-Computed',
 ];
 
 // Wildcard pulls every non-operational attribute populated on the entry —
@@ -142,7 +143,14 @@ export const USER_ATTRS = [
 // reads and full sync; the cache stores the raw blob so the UI can decide
 // what to surface without a schema change per attribute.
 // '*' doesn't include constructed attributes; ask for the ones we use.
-export const USER_ATTRS_FULL = ['*', 'msDS-UserPasswordExpiryTimeComputed'];
+export const USER_ATTRS_FULL = [
+  '*',
+  'msDS-UserPasswordExpiryTimeComputed',
+  'msDS-User-Account-Control-Computed',
+];
+
+/** msDS-User-Account-Control-Computed bit: locked out right now. */
+const UF_LOCKOUT = 0x10;
 
 export const OU_ATTRS = [
   'distinguishedName',
@@ -289,7 +297,13 @@ export function normalizeUser(entry: Entry): DirectoryUser {
 
   const uac = parseUserAccountControl(asString(entry.userAccountControl));
   const lockoutTimeStr = asString(entry.lockoutTime);
-  const lockedNow = isLocked(lockoutTimeStr);
+  // AD never clears lockoutTime when the lockout duration lapses, so a
+  // non-zero lockoutTime alone overstates lockouts. The constructed
+  // msDS-User-Account-Control-Computed has the effective bit (UF_LOCKOUT);
+  // fall back to lockoutTime only when it wasn't returned.
+  const computedUac = asString(entry['msDS-User-Account-Control-Computed']);
+  const lockedNow =
+    computedUac !== null ? (Number(computedUac) & UF_LOCKOUT) !== 0 : isLocked(lockoutTimeStr);
   const lockoutFiletime = filetimeToDate(lockoutTimeStr);
   const dn = asString(entry.distinguishedName);
   if (!dn) {
