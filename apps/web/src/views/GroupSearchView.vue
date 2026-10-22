@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import type { ListFreshness } from '@openaduc/shared';
+import SyncFreshness from '../design/primitives/SyncFreshness.vue';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
@@ -29,6 +31,7 @@ interface FilterEntry<T> {
 }
 
 const rows = ref<GroupSummary[]>([]);
+const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const drawerOpen = ref(false);
@@ -85,6 +88,7 @@ async function load(): Promise<void> {
     // to 50_000 specifically so the operator can filter/sort locally
     // without re-hitting the API for every keystroke.
     const resp = await api.groups.search({ pageSize: 50_000, sort: 'name', sortDir: 'asc' });
+    freshness.value = resp.freshness;
     rows.value = resp.rows;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load groups';
@@ -161,6 +165,7 @@ onMounted(load);
   <div class="page-inner page-fill groups-page">
     <PageHeader :title="`Groups (${total.toLocaleString()})`">
       <template #actions>
+        <SyncFreshness :freshness="freshness" />
         <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"

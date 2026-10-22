@@ -79,7 +79,7 @@ async function copy(kind: 'guid' | 'dn'): Promise<void> {
 // Sort raw attributes alphabetically and render values as JSON for the dump.
 const rawEntries = computed<Array<[string, string]>>(() => {
   const p = policy.value;
-  if (!p) return [];
+  if (!p?.rawAttributes) return [];
   const out: Array<[string, string]> = [];
   for (const [k, v] of Object.entries(p.rawAttributes)) {
     out.push([k, formatAttr(v)]);

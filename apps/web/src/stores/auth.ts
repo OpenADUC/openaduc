@@ -113,6 +113,11 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** The server no longer recognises the session (expired or revoked). */
+  function sessionEnded(): void {
+    actor.value = null;
+  }
+
   async function logout(): Promise<void> {
     try {
       await api.auth.logout();
@@ -211,6 +216,7 @@ export const useAuthStore = defineStore('auth', () => {
   const disableEditMode = revokeStepUp;
 
   return {
+    sessionEnded,
     actor,
     initialized,
     loading,

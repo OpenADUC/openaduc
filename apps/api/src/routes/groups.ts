@@ -11,6 +11,7 @@ import {
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+import { listFreshness } from '../services/listFreshness.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -119,6 +120,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       ]);
 
       const result: GroupSearchResponse = {
+        freshness: await listFreshness(app.db, provider.id, 'groups'),
         rows: rows.map((r) => ({
           id: r.id,
           name: r.name,

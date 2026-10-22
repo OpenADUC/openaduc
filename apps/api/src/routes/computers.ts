@@ -21,6 +21,8 @@ import {
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+import { rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
+import { listFreshness } from '../services/listFreshness.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -112,6 +114,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       ]);
 
       const result: ComputerSearchResponse = {
+        freshness: await listFreshness(app.db, provider.id, 'computers'),
         rows: rows.map((r) => ({
           id: r.id,
           name: r.name,
@@ -203,6 +206,12 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
         managedBy,
         passwordLastSetAt: live.passwordLastSetAt ? live.passwordLastSetAt.toISOString() : null,
         createdAtSource: live.createdAtSource ? live.createdAtSource.toISOString() : null,
+        machineRole: rawScalarValue(live.rawAttributes['machineRole']),
+        siteName: rawScalarValue(live.rawAttributes['msDS-SiteName']),
+        operatingSystemServicePack: rawScalarValue(
+          live.rawAttributes['operatingSystemServicePack'],
+        ),
+        location: rawScalarValue(live.rawAttributes['location']),
         groupMemberships: groupRows.map((g) => ({
           id: g.id || null,
           name: g.name,
@@ -212,7 +221,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
           cachedAt: cacheRow?.synced_at ? new Date(cacheRow.synced_at).toISOString() : null,
           isStale: Boolean(cacheRow?.stale_at),
         },
-        rawAttributes: live.rawAttributes,
+        rawAttributes: rawAttributesFor(req.actor?.session.capabilities, live.rawAttributes),
       };
 
       // Audit the view, gated by the same setting as user/group views and

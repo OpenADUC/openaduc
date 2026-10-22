@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { listFreshnessSchema } from './freshness.js';
 
 export const groupSummarySchema = z.object({
   id: z.string(),
@@ -34,6 +35,7 @@ export const groupSearchResponseSchema = z.object({
   total: z.number().int(),
   page: z.number().int(),
   pageSize: z.number().int(),
+  freshness: listFreshnessSchema,
 });
 export type GroupSearchResponse = z.infer<typeof groupSearchResponseSchema>;
 
