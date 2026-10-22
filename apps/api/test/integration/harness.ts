@@ -26,6 +26,8 @@ export const DC = {
   domain: 'openaduc.test',
   baseDn: 'DC=openaduc,DC=test',
   password: 'OpenADUC-dev-User1',
+  /** Built-in Administrator, for test setup that changes the directory. */
+  administratorPassword: 'OpenADUC-dev-Admin1',
   serviceAccount: 'svc-openaduc',
   groups: {
     operators: 'CN=OpenADUC Operators,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test',
@@ -53,6 +55,49 @@ export async function readDirectoryUser(
       attributes,
     });
     return searchEntries[0] ?? null;
+  } finally {
+    await client.unbind();
+  }
+}
+
+/**
+ * Add a user to, or remove them from, a group, as the domain Administrator.
+ * Tests that change memberships must undo them: `reseedDirectory` only adds.
+ */
+export async function setGroupMember(
+  groupDn: string,
+  samAccountName: string,
+  member: boolean,
+): Promise<void> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    const { searchEntries } = await client.search(DC.baseDn, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${samAccountName})`,
+      attributes: ['distinguishedName'],
+    });
+    const userDn = searchEntries[0]?.dn;
+    if (!userDn) throw new Error(`no such user: ${samAccountName}`);
+    const { Change, Attribute } = await import('ldapts');
+    try {
+      await client.modify(
+        groupDn,
+        new Change({
+          operation: member ? 'add' : 'delete',
+          modification: new Attribute({ type: 'member', values: [userDn] }),
+        }),
+      );
+    } catch (err) {
+      // Already in the requested state.
+      const name = (err as Error).name;
+      if (
+        name !== 'AlreadyExistsError' &&
+        name !== 'NoSuchAttributeError' &&
+        name !== 'UnwillingToPerformError'
+      )
+        throw err;
+    }
   } finally {
     await client.unbind();
   }
