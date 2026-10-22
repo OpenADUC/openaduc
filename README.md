@@ -108,7 +108,7 @@ This is defence in depth, not SSO replacement: the proxy enforces MFA at the net
 - **Step-up re-auth on every write.** Mutating calls require re-entering the AD password; the elevated session is short-lived (default 60 min) and password material lives only in process memory.
 - **Append-only audit log.** Database triggers reject `UPDATE`, `DELETE`, and `TRUNCATE` on `audit_events`; even a compromised app cannot silently rewrite history.
 - **Encrypted secrets at rest.** Service-account passwords, Entra client secrets, and Teams webhooks are AES-256-GCM encrypted with `ENCRYPTION_KEY`. Back this key up alongside your database backups — losing it makes those rows unrecoverable.
-- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy).
+- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy). It sends a strict Content-Security-Policy, refuses framing, and adds HSTS when your proxy forwards `X-Forwarded-Proto: https`.
 
 For the threat model, capability list, step-up flow, and AD-specific risks, see [docs/security.md](docs/security.md).
 
