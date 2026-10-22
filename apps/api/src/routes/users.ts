@@ -22,6 +22,7 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -646,6 +647,16 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         l: rawScalarValue(raw['l']),
         st: rawScalarValue(raw['st']),
         postalCode: rawScalarValue(raw['postalCode']),
+        cn: rawScalarValue(raw['cn']),
+        physicalDeliveryOfficeName: refreshed.user.office ?? null,
+        postOfficeBox: rawScalarValue(raw['postOfficeBox']),
+        profilePath: rawScalarValue(raw['profilePath']),
+        scriptPath: rawScalarValue(raw['scriptPath']),
+        homeDirectory: rawScalarValue(raw['homeDirectory']),
+        pager: rawScalarValue(raw['pager']),
+        facsimileTelephoneNumber: rawScalarValue(raw['facsimileTelephoneNumber']),
+        info: rawScalarValue(raw['info']),
+        primarySmtpAddress: primarySmtpAddress(raw['proxyAddresses']),
         otherMailbox: rawArrayValues(raw['otherMailbox']),
         otherHomePhone: rawArrayValues(raw['otherHomePhone']),
         otherMobile: rawArrayValues(raw['otherMobile']),
@@ -703,7 +714,10 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                     : null,
               }
             : null,
-        rawAttributes: refreshed.user.rawAttributes,
+        rawAttributes: rawAttributesFor(
+          req.actor?.session.capabilities,
+          refreshed.user.rawAttributes,
+        ),
       };
 
       // Account view audit (configurable). Deduped per session+target on a
@@ -1419,32 +1433,6 @@ function parseMfaMethods(v: unknown): string[] {
  * `maxAgeDays` is supplied by the caller via `resolveMaxPwdAgeDays(provider)`
  * so the domain-policy lookup happens once per request rather than per row.
  */
-/** Read a single string value from a raw LDAP attribute (last value wins). */
-function rawScalarValue(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  if (Array.isArray(v)) {
-    if (v.length === 0) return null;
-    return rawScalarValue(v[v.length - 1]);
-  }
-  if (typeof v === 'string') return v.length > 0 ? v : null;
-  return String(v);
-}
-
-/** Read every string value from a raw LDAP attribute as an array. */
-function rawArrayValues(v: unknown): string[] {
-  if (v === null || v === undefined) return [];
-  const arr = Array.isArray(v) ? v : [v];
-  const out: string[] = [];
-  for (const x of arr) {
-    if (typeof x === 'string') {
-      if (x.length > 0) out.push(x);
-    } else if (x !== null && x !== undefined) {
-      out.push(String(x));
-    }
-  }
-  return out;
-}
-
 /**
  * Compute email aliases from the proxyAddresses attribute.
  *
@@ -1457,6 +1445,12 @@ function rawArrayValues(v: unknown): string[] {
  * `*.onmicrosoft.com` (and the routing variant `*.mail.onmicrosoft.com`)
  * — those are tenant-internal addresses the operator can't act on.
  */
+/** The primary (`SMTP:`) proxy address, prefix stripped, or null. */
+function primarySmtpAddress(v: unknown): string | null {
+  const primary = rawArrayValues(v).find((entry) => entry.startsWith('SMTP:'));
+  return primary ? primary.slice(5) : null;
+}
+
 function deriveEmailAliases(v: unknown): string[] {
   return rawArrayValues(v)
     .filter((entry) => !entry.startsWith('SMTP:'))

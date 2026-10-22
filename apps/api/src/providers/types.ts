@@ -27,6 +27,11 @@ export interface DirectoryUser {
   mobile: string | null;
   title: string | null;
   department: string | null;
+  /**
+   * physicalDeliveryOfficeName. Typed because it's kept out of
+   * rawAttributes; only full reads carry it.
+   */
+  office?: string | null;
   managerDn: string | null;
   enabled: boolean;
   locked: boolean;
@@ -378,6 +383,11 @@ export interface DirectoryProvider {
   getComputerGroups(computerId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
 
   syncUsers(input: SyncInput): AsyncIterable<DirectoryUser>;
+  /**
+   * Current direct members of a group, read from the users' side (memberOf),
+   * which doesn't hit the group's 1500-value range limit on `member`.
+   */
+  syncGroupMembers(groupDn: string): AsyncIterable<DirectoryUser>;
   syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup>;
   syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer>;
   syncOus(input: SyncInput): AsyncIterable<DirectoryOu>;
@@ -580,5 +590,16 @@ export class StepUpBindFailedError extends Error {
   constructor(message = 'step-up bind failed') {
     super(message);
     this.name = 'StepUpBindFailedError';
+  }
+}
+
+/**
+ * Every configured domain controller was unreachable. The message names
+ * what failed (hosts, ports, errno) for the log; responses never carry it.
+ */
+export class DirectoryUnavailableError extends Error {
+  constructor(detail: string, cause?: unknown) {
+    super(`no domain controller reachable: ${detail}`, { cause });
+    this.name = 'DirectoryUnavailableError';
   }
 }
