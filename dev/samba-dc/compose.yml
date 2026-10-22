@@ -15,6 +15,9 @@ services:
     volumes:
       - samba-data:/var/lib/samba
       - ./.generated:/export
+      # Mounted rather than baked in, so `pnpm dc:seed` runs the current
+      # fixtures without an image rebuild.
+      - ./seed.sh:/usr/local/bin/seed.sh:ro
     healthcheck:
       test:
         [
