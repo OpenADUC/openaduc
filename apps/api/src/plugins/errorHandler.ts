@@ -38,6 +38,8 @@ export const StepUpRequired = (msg = 'editing session expired — please re-auth
   new AppError({ statusCode: 403, code: 'step_up_required', message: msg });
 export const NotFound = (msg = 'Not found') =>
   new AppError({ statusCode: 404, code: 'not_found', message: msg });
+export const Conflict = (msg: string) =>
+  new AppError({ statusCode: 409, code: 'conflict', message: msg });
 export const BadRequest = (msg: string, details?: unknown) =>
   new AppError({ statusCode: 400, code: 'bad_request', message: msg, details });
 

@@ -31,6 +31,8 @@ import type {
   MfaRegistrationResponse,
   MfaRegistrationStatus,
   RestoreUserResponse,
+  RolesResponse,
+  RolesUpdateRequest,
   SignInEventApp,
   SignInEventDetail,
   SignInEventsResponse,
@@ -757,6 +759,12 @@ export const api = {
     },
     update(body: Record<string, unknown>): Promise<{ ok: boolean; updated: string[] }> {
       return apiFetch('/settings', { method: 'PATCH', body: JSON.stringify(body) });
+    },
+    roles(): Promise<RolesResponse> {
+      return apiFetch('/settings/roles');
+    },
+    updateRoles(body: RolesUpdateRequest): Promise<{ ok: boolean }> {
+      return apiFetch('/settings/roles', { method: 'PUT', body: JSON.stringify(body) });
     },
   },
 };

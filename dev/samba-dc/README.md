@@ -49,16 +49,7 @@ Groups live in `OU=Groups`. `Engineering` is nested inside `All Staff`. Domain p
 
 In the setup wizard: LDAP URL `ldaps://localhost:10636`, base DN `DC=openaduc,DC=test`, admin `oa.admin`, then service account `svc-openaduc`. Setup maps the admin role to Domain Admins.
 
-OpenADUC has no screen yet for mapping the operator and auditor roles to AD groups, so map the fixture groups in the database after setup:
-
-```sql
-update app_settings set value_json = '"CN=OpenADUC Operators,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test"'
-  where key = 'authz.operator_group_dn';
-update app_settings set value_json = '"CN=OpenADUC Auditors,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test"'
-  where key = 'authz.auditor_group_dn';
-```
-
-Restart the API afterwards (settings are cached).
+Then map the other two roles in **Configuration → Roles**: Operator → `OpenADUC Operators`, Auditor → `OpenADUC Auditors`. They apply at each operator's next sign-in.
 
 ## How it works
 
