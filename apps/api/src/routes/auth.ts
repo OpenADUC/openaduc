@@ -7,6 +7,7 @@ import {
   AppError,
   BadRequest,
   DIRECTORY_UNAVAILABLE_MESSAGE,
+  SessionRequired,
   Unauthorized,
 } from '../plugins/errorHandler.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
@@ -318,7 +319,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           })
           .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup denial'));
         reply.clearCookie(SESSION_COOKIE_NAME, cookieOptions());
-        throw Unauthorized('your account is no longer authorized to use this application');
+        // The session is gone: say so with the code that signs the client out.
+        throw SessionRequired('your account is no longer authorized to use this application');
       }
       const removedCapabilities = actor.session.capabilities.filter(
         (c) => !capabilities.includes(c as Capability),

@@ -24,8 +24,8 @@ export const Unauthorized = (msg = 'Unauthorized') =>
  * operator out only on this code; other 401s (a rejected password typed
  * into a form) leave the session alone.
  */
-export const SessionRequired = () =>
-  new AppError({ statusCode: 401, code: 'session_required', message: 'authentication required' });
+export const SessionRequired = (msg = 'authentication required') =>
+  new AppError({ statusCode: 401, code: 'session_required', message: msg });
 export const Forbidden = (msg = 'Forbidden') =>
   new AppError({ statusCode: 403, code: 'forbidden', message: msg });
 /**

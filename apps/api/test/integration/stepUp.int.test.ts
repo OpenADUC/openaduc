@@ -53,6 +53,8 @@ describe('step-up re-reads the operator’s roles from AD', () => {
     const res = await operator.post('/api/auth/step-up', { password: DC.password });
 
     expect(res.statusCode).toBe(401);
+    // The code the web client signs out on.
+    expect(res.json()).toMatchObject({ error: { code: 'session_required' } });
     expect((await operator.get('/api/auth/me')).statusCode).toBe(401);
     const audit = await api.app.db
       .selectFrom('audit_events')
