@@ -25,6 +25,9 @@ const {
   blocked,
   confirmWord,
   confirmed,
+  withChildren,
+  childObjectTotal,
+  includeChildren,
   load,
   run,
 } = useUserDeletion();
@@ -100,6 +103,17 @@ async function submit(): Promise<void> {
           <div style="margin-bottom: 10px; color: var(--os-window-text-muted)">
             {{ recycleText }}
           </div>
+          <label
+            v-if="withChildren.length > 0"
+            style="display: flex; gap: 6px; align-items: flex-start; margin-bottom: 10px"
+          >
+            <input v-model="includeChildren" type="checkbox" :disabled="phase === 'running'" />
+            <span>
+              This object contains {{ childObjectTotal }} other
+              {{ childObjectTotal === 1 ? 'object' : 'objects' }}. Delete
+              {{ childObjectTotal === 1 ? 'it' : 'them' }} too.
+            </span>
+          </label>
           <label for="del-confirm" style="display: block; margin-bottom: 4px">
             Type <strong>{{ confirmWord }}</strong> to confirm:
           </label>

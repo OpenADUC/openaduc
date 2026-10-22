@@ -36,13 +36,25 @@ export function useUserDeletion() {
   const blocked = computed(() => preflight.value?.users.filter((u) => u.blockedReason) ?? []);
   const single = computed(() => (eligible.value.length === 1 ? eligible.value[0]! : null));
 
+  // Accounts holding other objects (Exchange ActiveSync devices, …). AD can
+  // only delete them together with those objects, which needs its own
+  // explicit yes.
+  const withChildren = computed(() => eligible.value.filter((u) => (u.childObjects ?? 0) > 0));
+  const childObjectTotal = computed(() =>
+    withChildren.value.reduce((n, u) => n + (u.childObjects ?? 0), 0),
+  );
+  const includeChildren = ref(false);
+
   // One account: its logon name, which proves the operator knows who
   // they're deleting. Several: a fixed word, since typing a list isn't
   // practical.
   const confirmWord = computed(() => single.value?.samAccountName ?? 'DELETE');
   const confirmed = computed(() => {
     const v = typed.value.trim();
-    return single.value ? v.toLowerCase() === confirmWord.value.toLowerCase() : v === 'DELETE';
+    const typedOk = single.value
+      ? v.toLowerCase() === confirmWord.value.toLowerCase()
+      : v === 'DELETE';
+    return typedOk && (withChildren.value.length === 0 || includeChildren.value);
   });
 
   async function load(ids: string[]): Promise<void> {
@@ -50,6 +62,7 @@ export function useUserDeletion() {
     loadError.value = null;
     preflight.value = null;
     typed.value = '';
+    includeChildren.value = false;
     progress.value = 0;
     deletedIds.value = [];
     failures.value = [];
@@ -68,7 +81,10 @@ export function useUserDeletion() {
     phase.value = 'running';
     for (const u of eligible.value) {
       try {
-        await api.users.remove(u.id, { confirmSamAccountName: u.samAccountName ?? '' });
+        await api.users.remove(u.id, {
+          confirmSamAccountName: u.samAccountName ?? '',
+          ...((u.childObjects ?? 0) > 0 ? { allowTreeDelete: includeChildren.value } : {}),
+        });
         deletedIds.value.push(u.id);
       } catch (err) {
         failures.value.push({
@@ -94,6 +110,9 @@ export function useUserDeletion() {
     blocked,
     confirmWord,
     confirmed,
+    withChildren,
+    childObjectTotal,
+    includeChildren,
     load,
     run,
   };

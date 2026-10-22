@@ -433,12 +433,16 @@ export interface DirectoryProvider {
   ): Promise<MutationResult>;
   // Delete a disabled user. Re-checks against the live entry that the
   // account is disabled and isn't one of AD's own accounts, and returns
-  // `policy_violation` if not. Falls back to a tree delete when the user
-  // has child objects (Exchange ActiveSync devices, for one).
+  // `policy_violation` if not. A user with child objects (Exchange
+  // ActiveSync devices, for one) needs a tree delete, which removes them
+  // too; that only happens with `allowTreeDelete`, otherwise it's refused.
   deleteUser(
     userId: DirectoryObjectIdentifier,
     ctx: WriteContext,
+    options?: { allowTreeDelete?: boolean },
   ): Promise<MutationResult & { treeDelete?: boolean }>;
+  /** How many objects sit directly under each DN (null where unreadable). */
+  countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.
