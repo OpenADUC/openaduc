@@ -100,7 +100,13 @@ describe('after setup', () => {
     const res = await api.client().get('/api/setup/status');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json<{ existingDirectory: unknown }>().existingDirectory).toBeNull();
+    expect(res.json()).toEqual({
+      configured: true,
+      onboardingComplete: true,
+      hasServiceAccount: false,
+      onboardingCompletedAt: null,
+      existingDirectory: null,
+    });
     expect(res.body).not.toContain('localhost');
     expect(res.body).not.toContain(DC.serviceAccount);
     expect(res.body).not.toContain(DC.baseDn);

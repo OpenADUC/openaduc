@@ -168,10 +168,11 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         : null;
     return {
       configured: directories.some((d) => d.configured),
+      onboardingComplete: !!onboardingCompletedAt,
       hasServiceAccount: firstConfigured
         ? !!firstConfigured.syncBindUpn && firstConfigured.hasSyncBindPassword
         : false,
-      onboardingCompletedAt,
+      onboardingCompletedAt: isSetupAdmin ? onboardingCompletedAt : null,
       existingDirectory: firstConfigured
         ? {
             id: firstConfigured.id,
@@ -240,7 +241,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
               detail: auth.errorMessage,
             },
           })
-          .catch(() => undefined);
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
         const detail =
           auth.errorMessage ?? 'could not bind as that admin against the supplied directory';
         if (auth.reason === 'directory_error') {
@@ -270,7 +271,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             actorDisplayName: auth.user.displayName,
             metadata: { domain: body.domain, adminUsername: body.adminUsername },
           })
-          .catch(() => undefined);
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
         throw Forbidden(
           `To finish setup, sign in with an account that is a direct member of ${adminGroup}. ` +
             `That group's members become OpenADUC administrators.`,
@@ -343,7 +344,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             tlsMode: created.tlsMode,
           },
         })
-        .catch(() => undefined);
+        .catch((err) => req.log.error({ err }, 'audit insert failed'));
 
       reply.setCookie(SESSION_COOKIE_NAME, cookieToken, {
         ...cookieOptions(),
@@ -425,7 +426,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             errorCode: auth.reason ?? 'unknown',
             metadata: { username: bindUpn, detail: auth.errorMessage },
           })
-          .catch(() => undefined);
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
         const detail = auth.errorMessage ?? 'service-account bind failed';
         if (auth.reason === 'directory_error') {
           throw app.httpErrors.badGateway(detail);
@@ -446,7 +447,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           actorDisplayName: req.actor!.session.actorDisplayName,
           metadata: { username: bindUpn },
         })
-        .catch(() => undefined);
+        .catch((err) => req.log.error({ err }, 'audit insert failed'));
 
       const adminUpn = req.actor!.session.actorUsername ?? null;
       const sameAsAdmin = !!adminUpn && adminUpn.toLowerCase() === bindUpn.toLowerCase();
