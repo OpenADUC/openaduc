@@ -37,8 +37,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
-    ports:
-      - '3000:3000'
 
   web:
     image: ${OPENADUC_WEB_IMAGE:-openaduc/web:latest}

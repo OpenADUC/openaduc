@@ -3,6 +3,7 @@ import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryComputer } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { uuidNotIn } from '../lib/sqlSets.js';
 
 /**
  * Upsert a computer into the cache. Mirrors the user / group cache helpers.
@@ -91,6 +92,6 @@ export async function markComputersStale(
     .set({ stale_at: now })
     .where('provider_id', '=', providerId)
     .where('stale_at', 'is', null)
-    .where('object_guid', 'not in', Array.from(seenGuids))
+    .where(uuidNotIn('object_guid', seenGuids))
     .execute();
 }

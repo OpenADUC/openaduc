@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { markGroupsStale, upsertGroup } from '../../groupCache.js';
 import type { RunnerContext, RunnerResult } from '../types.js';
+import { shouldMarkStale } from './fullCrawl.js';
 
 /**
  * Full group crawl + stale-mark for unseen rows. Daily reconciliation.
@@ -8,18 +9,23 @@ import type { RunnerContext, RunnerResult } from '../types.js';
 export async function runGroupsFull(ctx: RunnerContext): Promise<RunnerResult> {
   const seen = new Set<string>();
   let count = 0;
+  let lastError: unknown = null;
 
   for await (const group of ctx.provider.syncGroups({})) {
+    count++;
     try {
       await upsertGroup(ctx.db, ctx.providerId, group);
       seen.add(group.objectGuid);
-      count++;
     } catch (err) {
+      lastError = err;
       ctx.log.warn({ err, guid: group.objectGuid }, 'group upsert failed');
     }
   }
 
-  await markGroupsStale(ctx.db, ctx.providerId, seen);
+  const crawl = { found: count, written: seen.size, lastError };
+  if (await shouldMarkStale(ctx, { kind: 'groups', table: 'group_cache_records', ...crawl })) {
+    await markGroupsStale(ctx.db, ctx.providerId, seen);
+  }
 
   return {
     cursor: new Date().toISOString(),

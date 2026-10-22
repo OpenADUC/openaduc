@@ -2,6 +2,8 @@
 <script setup lang="ts">
 import { runBulk } from '../design/lib/bulk.js';
 import Dialog from 'primevue/dialog';
+import type { ListFreshness } from '@openaduc/shared';
+import SyncFreshness from '../design/primitives/SyncFreshness.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
@@ -17,7 +19,7 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
-import type { UserSummary } from '@openaduc/shared';
+import { csvRow, type UserSummary } from '@openaduc/shared';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -52,6 +54,7 @@ interface FilterEntry<T> {
 const rows = ref<UserRow[]>([]);
 const filteredRows = ref<UserRow[]>([]);
 const total = ref(0);
+const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const drawerOpen = ref(false);
@@ -151,6 +154,7 @@ async function load(): Promise<void> {
     rows.value = resp.rows.map(decorate);
     filteredRows.value = rows.value;
     total.value = resp.total;
+    freshness.value = resp.freshness;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load users';
   } finally {
@@ -343,12 +347,7 @@ watch(
 // Generate from filteredRows so the export honors whatever the operator
 // is looking at right now. Replaces the server-side /users/export.csv
 // path; with all rows already in memory there's no reason to re-query.
-function csvEscape(v: unknown): string {
-  if (v == null) return '';
-  const s = String(v);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+// csvRow neutralises formula-like cells, same as the server export.
 
 function exportCsv(): void {
   const cols: { header: string; pick: (r: UserRow) => unknown }[] = [
@@ -364,9 +363,9 @@ function exportCsv(): void {
     { header: 'Title', pick: (r) => r.title ?? '' },
     { header: 'Modified', pick: (r) => r.modifiedAtSource ?? '' },
   ];
-  const lines = [cols.map((c) => csvEscape(c.header)).join(',')];
+  const lines = [csvRow(cols.map((c) => c.header))];
   for (const r of filteredRows.value) {
-    lines.push(cols.map((c) => csvEscape(c.pick(r))).join(','));
+    lines.push(csvRow(cols.map((c) => c.pick(r))));
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -545,6 +544,7 @@ onMounted(() => {
   <div class="page-inner page-fill users-page">
     <PageHeader :title="`Users (${total.toLocaleString()})`">
       <template #actions>
+        <SyncFreshness :freshness="freshness" />
         <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"

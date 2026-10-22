@@ -37,7 +37,7 @@ const activeStepLabel = computed(() => {
 async function refreshStatus(): Promise<{ jumpTo: 1 | 2 | 3 | 4 | 5 }> {
   const status = await api.setup.status();
   existingDirectory.value = status.existingDirectory;
-  if (status.onboardingCompletedAt) return { jumpTo: 5 };
+  if (status.onboardingComplete) return { jumpTo: 5 };
 
   try {
     const job = await api.setup.initialSyncStatus();

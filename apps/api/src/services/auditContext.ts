@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyRequest } from 'fastify';
+import { DirectoryUnavailableError } from '../providers/types.js';
 import type { AuditService, AuditEventInput } from './audit.js';
+
+// Errors withAudit has already written a failure row for, so the error
+// handler doesn't write a second one.
+const auditedErrors = new WeakSet<object>();
+export const wasAudited = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && auditedErrors.has(err);
 
 // Build the request-scoped audit fields once per route handler. Routes spread
 // this into recordEvent calls so source_ip / user_agent / correlation_id /
@@ -65,11 +72,13 @@ export async function withAudit<T extends WriteOpResult>(
           : 'success';
 
   const errorCode =
-    opError instanceof Error
-      ? (opError as Error).name
-      : opResult && opResult.ok === false
-        ? (opResult.errorCode ?? null)
-        : null;
+    opError instanceof DirectoryUnavailableError
+      ? 'directory_unavailable'
+      : opError instanceof Error
+        ? (opError as Error).name
+        : opResult && opResult.ok === false
+          ? (opResult.errorCode ?? null)
+          : null;
 
   const before = opResult?.before ?? null;
   const after = opResult?.after ?? null;
@@ -82,7 +91,10 @@ export async function withAudit<T extends WriteOpResult>(
     after,
   });
 
-  if (opError !== undefined) throw opError;
+  if (opError !== undefined) {
+    if (typeof opError === 'object' && opError !== null) auditedErrors.add(opError);
+    throw opError;
+  }
   return opResult as T;
 }
 

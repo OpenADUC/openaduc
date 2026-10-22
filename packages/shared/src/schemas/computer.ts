@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { listFreshnessSchema } from './freshness.js';
 
 const queryBoolean = z.union([z.boolean(), z.string()]).transform((v, ctx) => {
   if (typeof v === 'boolean') return v;
@@ -60,6 +61,7 @@ export const computerSearchResponseSchema = z.object({
   total: z.number().int(),
   page: z.number().int(),
   pageSize: z.number().int(),
+  freshness: listFreshnessSchema,
 });
 export type ComputerSearchResponse = z.infer<typeof computerSearchResponseSchema>;
 
@@ -76,6 +78,12 @@ export const computerDetailSchema = computerSummarySchema.extend({
     .nullable(),
   passwordLastSetAt: z.string().nullable(),
   createdAtSource: z.string().nullable(),
+  // Attributes the property pages show by name, typed so readers without
+  // view:raw_attributes still get them.
+  machineRole: z.string().nullable(),
+  siteName: z.string().nullable(),
+  operatingSystemServicePack: z.string().nullable(),
+  location: z.string().nullable(),
   // Direct group memberships, resolved against group_cache_records where
   // possible. Same shape the user detail uses.
   groupMemberships: z.array(
@@ -89,7 +97,8 @@ export const computerDetailSchema = computerSummarySchema.extend({
     cachedAt: z.string().nullable(),
     isStale: z.boolean(),
   }),
-  rawAttributes: z.record(z.string(), z.unknown()),
+  // Null for callers without view:raw_attributes.
+  rawAttributes: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ComputerDetail = z.infer<typeof computerDetailSchema>;
 
@@ -124,6 +133,7 @@ export const deletedComputerSearchResponseSchema = z.object({
 export type DeletedComputerSearchResponse = z.infer<typeof deletedComputerSearchResponseSchema>;
 
 export const deletedComputerDetailSchema = deletedComputerSummarySchema.extend({
-  rawAttributes: z.record(z.string(), z.unknown()),
+  // Null for callers without view:raw_attributes.
+  rawAttributes: z.record(z.string(), z.unknown()).nullable(),
 });
 export type DeletedComputerDetail = z.infer<typeof deletedComputerDetailSchema>;

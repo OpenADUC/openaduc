@@ -280,6 +280,50 @@ export class SyncTaskService {
       .where('task_key', '=', taskKey)
       .where('last_status', '=', 'running')
       .execute();
+    // Close the history rows the crashed or stuck run left open, or run
+    // history shows them as running forever.
+    await this.db
+      .updateTable('directory_sync_task_runs')
+      .set({ status: 'failed', error: reason, finished_at: new Date() })
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', taskKey)
+      .where('status', '=', 'running')
+      .execute();
+  }
+
+  /**
+   * When the most recent successful run of any of `taskKeys` finished, or
+   * null if none has succeeded.
+   */
+  async lastSuccessfulFinishAt(
+    providerId: number,
+    taskKeys: readonly SyncTaskKey[],
+  ): Promise<Date | null> {
+    const row = await this.db
+      .selectFrom('directory_sync_task_runs')
+      .select((eb) => eb.fn.max('finished_at').as('finished_at'))
+      .where('provider_id', '=', providerId)
+      .where('task_key', 'in', [...taskKeys])
+      .where('status', '=', 'succeeded')
+      .executeTakeFirst();
+    return row?.finished_at ? new Date(row.finished_at) : null;
+  }
+
+  /**
+   * When the most recent successful run of this task started, or null if
+   * none has succeeded. Delta tasks fetch changes since then: anchoring on
+   * the start, not the finish, keeps changes made during a long run, and
+   * reading run history, not the task row, survives failed runs in between.
+   */
+  async lastSuccessfulStartAt(providerId: number, taskKey: SyncTaskKey): Promise<Date | null> {
+    const row = await this.db
+      .selectFrom('directory_sync_task_runs')
+      .select((eb) => eb.fn.max('started_at').as('started_at'))
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', taskKey)
+      .where('status', '=', 'succeeded')
+      .executeTakeFirst();
+    return row?.started_at ? new Date(row.started_at) : null;
   }
 
   /**

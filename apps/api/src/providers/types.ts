@@ -27,6 +27,11 @@ export interface DirectoryUser {
   mobile: string | null;
   title: string | null;
   department: string | null;
+  /**
+   * physicalDeliveryOfficeName. Typed because it's kept out of
+   * rawAttributes; only full reads carry it.
+   */
+  office?: string | null;
   managerDn: string | null;
   enabled: boolean;
   locked: boolean;
@@ -42,7 +47,16 @@ export interface DirectoryUser {
   // password rotation on.
   passwordNeverExpires: boolean;
   passwordLastSetAt: Date | null;
+  /** From AD's msDS-UserPasswordExpiryTimeComputed: respects fine-grained password policies. */
   passwordExpiresAt: Date | null;
+  /**
+   * AD sent msDS-UserPasswordExpiryTimeComputed, so passwordExpiresAt is
+   * its answer (null = never expires) rather than unknown. Only full reads
+   * request it.
+   */
+  passwordExpiryComputed?: boolean;
+  /** pwdLastSet = 0: must change password at next logon. */
+  passwordMustChange: boolean;
   accountExpiresAt: Date | null;
   lastLogonAt: Date | null;
   // FILETIME of the most recent failed authentication attempt (AD's
@@ -375,6 +389,13 @@ export interface DirectoryProvider {
   getComputerGroups(computerId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
 
   syncUsers(input: SyncInput): AsyncIterable<DirectoryUser>;
+  /**
+   * Current direct members of a group, read from the users' side (memberOf),
+   * which doesn't hit the group's 1500-value range limit on `member`.
+   */
+  syncGroupMembers(groupDn: string): AsyncIterable<DirectoryUser>;
+  /** Every user locked out right now (honours the lockout duration), paged. */
+  syncLockedUsers(): AsyncIterable<DirectoryUser>;
   syncGroups(input: SyncInput): AsyncIterable<DirectoryGroup>;
   syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer>;
   syncOus(input: SyncInput): AsyncIterable<DirectoryOu>;
@@ -433,12 +454,16 @@ export interface DirectoryProvider {
   ): Promise<MutationResult>;
   // Delete a disabled user. Re-checks against the live entry that the
   // account is disabled and isn't one of AD's own accounts, and returns
-  // `policy_violation` if not. Falls back to a tree delete when the user
-  // has child objects (Exchange ActiveSync devices, for one).
+  // `policy_violation` if not. A user with child objects (Exchange
+  // ActiveSync devices, for one) needs a tree delete, which removes them
+  // too; that only happens with `allowTreeDelete`, otherwise it's refused.
   deleteUser(
     userId: DirectoryObjectIdentifier,
     ctx: WriteContext,
+    options?: { allowTreeDelete?: boolean },
   ): Promise<MutationResult & { treeDelete?: boolean }>;
+  /** How many objects sit anywhere under each DN (null where unreadable). */
+  countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.
@@ -577,5 +602,16 @@ export class StepUpBindFailedError extends Error {
   constructor(message = 'step-up bind failed') {
     super(message);
     this.name = 'StepUpBindFailedError';
+  }
+}
+
+/**
+ * Every configured domain controller was unreachable. The message names
+ * what failed (hosts, ports, errno) for the log; responses never carry it.
+ */
+export class DirectoryUnavailableError extends Error {
+  constructor(detail: string, cause?: unknown) {
+    super(`no domain controller reachable: ${detail}`, { cause });
+    this.name = 'DirectoryUnavailableError';
   }
 }

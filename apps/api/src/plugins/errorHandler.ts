@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
+import type { FastifyRequest } from 'fastify';
+import { DirectoryUnavailableError } from '../providers/types.js';
+import { auditContextFromRequest, wasAudited } from '../services/auditContext.js';
 
 export class AppError extends Error {
   readonly statusCode: number;
@@ -16,6 +19,13 @@ export class AppError extends Error {
 
 export const Unauthorized = (msg = 'Unauthorized') =>
   new AppError({ statusCode: 401, code: 'unauthorized', message: msg });
+/**
+ * 401 for a request with no valid session. The web client signs the
+ * operator out only on this code; other 401s (a rejected password typed
+ * into a form) leave the session alone.
+ */
+export const SessionRequired = (msg = 'authentication required') =>
+  new AppError({ statusCode: 401, code: 'session_required', message: msg });
 export const Forbidden = (msg = 'Forbidden') =>
   new AppError({ statusCode: 403, code: 'forbidden', message: msg });
 /**
@@ -28,15 +38,54 @@ export const StepUpRequired = (msg = 'editing session expired — please re-auth
   new AppError({ statusCode: 403, code: 'step_up_required', message: msg });
 export const NotFound = (msg = 'Not found') =>
   new AppError({ statusCode: 404, code: 'not_found', message: msg });
+export const Conflict = (msg: string) =>
+  new AppError({ statusCode: 409, code: 'conflict', message: msg });
 export const BadRequest = (msg: string, details?: unknown) =>
   new AppError({ statusCode: 400, code: 'bad_request', message: msg, details });
 
+/** What callers hear about an outage, whatever its cause. */
+export const DIRECTORY_UNAVAILABLE_MESSAGE =
+  'The directory is unavailable right now. Try again shortly or contact your administrator.';
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * A write that the outage stopped before it reached withAudit (its
+ * pre-write directory read failed) still gets an audit row saying why.
+ */
+async function auditUnstartedWrite(req: FastifyRequest, err: Error): Promise<void> {
+  if (!req.actor || READ_METHODS.has(req.method) || wasAudited(err)) return;
+  await req.server.services.audit
+    .recordEvent({
+      ...auditContextFromRequest(req),
+      action: 'directory.unavailable',
+      result: 'failure',
+      errorCode: 'directory_unavailable',
+      targetType: 'system',
+      providerId: req.actor.session.directoryId,
+      metadata: { method: req.method, route: req.routeOptions.url ?? req.url, params: req.params },
+    })
+    .catch((auditErr) => req.log.error({ err: auditErr }, 'audit insert failed'));
+}
+
 export default fp(async (app) => {
-  app.setErrorHandler((err, req, reply) => {
+  app.setErrorHandler(async (err, req, reply) => {
     if (err instanceof ZodError) {
       req.log.info({ issues: err.issues }, 'validation error');
       return reply.status(400).send({
         error: { code: 'validation_error', message: 'Invalid request', issues: err.issues },
+      });
+    }
+    if (err instanceof DirectoryUnavailableError) {
+      // Which hosts and ports failed, and how, goes to the log only: the
+      // response is the same for every caller, as for sign-in.
+      req.log.error({ err }, err.message);
+      await auditUnstartedWrite(req, err);
+      return reply.status(502).send({
+        error: {
+          code: 'directory_unavailable',
+          message: DIRECTORY_UNAVAILABLE_MESSAGE,
+        },
       });
     }
     if (err instanceof AppError) {

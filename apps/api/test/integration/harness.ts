@@ -168,7 +168,7 @@ let instanceCounter = 0;
  * Usually called once per test file (beforeAll); call it again for a
  * second, independent instance (e.g. to run setup twice).
  */
-export async function startApi(): Promise<TestApi> {
+export async function startApi(options: { env?: Record<string, string> } = {}): Promise<TestApi> {
   const adminUrl = inject('adminDatabaseUrl');
   const dbName = `openaduc_test_${process.pid}_${++instanceCounter}`;
   await withAdmin(adminUrl, (c) => c.query(`CREATE DATABASE ${dbName} TEMPLATE ${TEMPLATE_DB}`));
@@ -194,6 +194,7 @@ export async function startApi(): Promise<TestApi> {
     AD_SERVICE_ACCOUNT_UPN: '',
     AD_SERVICE_ACCOUNT_PASSWORD: '',
     BOOTSTRAP_ADMIN_GROUP_DN: '',
+    ...options.env,
   });
 
   // Fresh module graph so this instance reads the env set above (loadEnv
@@ -270,7 +271,8 @@ export async function configureDirectory(
     await new Promise((r) => setTimeout(r, 250));
   }
 
-  // No UI for mapping these yet (#89); write the settings directly.
+  // Faster than PUT /api/settings/roles (which needs step-up); that route
+  // has its own test.
   for (const [key, dn] of [
     ['authz.operator_group_dn', DC.groups.operators],
     ['authz.auditor_group_dn', DC.groups.auditors],
@@ -325,6 +327,9 @@ export class TestClient {
   }
   patch(url: string, body: unknown = {}) {
     return this.request('PATCH', url, body);
+  }
+  put(url: string, body: unknown = {}) {
+    return this.request('PUT', url, body);
   }
   delete(url: string, body?: unknown) {
     return this.request('DELETE', url, body);

@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import type { ListFreshness } from '@openaduc/shared';
+import SyncFreshness from '../design/primitives/SyncFreshness.vue';
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
@@ -34,6 +36,7 @@ interface FilterEntry<T> {
 }
 
 const rows = ref<CmpRow[]>([]);
+const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const drawerOpen = ref(false);
@@ -89,6 +92,7 @@ async function load(): Promise<void> {
   error.value = null;
   try {
     const resp = await api.computers.search({ pageSize: 50_000, sort: 'name', sortDir: 'asc' });
+    freshness.value = resp.freshness;
     rows.value = resp.rows.map(decorate);
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load computers';
@@ -154,6 +158,7 @@ onMounted(load);
   <div class="page-inner page-fill computers-page">
     <PageHeader :title="`Computers (${total.toLocaleString()})`">
       <template #actions>
+        <SyncFreshness :freshness="freshness" />
         <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"
