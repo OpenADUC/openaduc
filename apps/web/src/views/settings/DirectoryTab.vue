@@ -474,7 +474,7 @@ onMounted(load);
         </dd>
         <template v-if="d.certificateCheckOff">
           <dt class="fld-label">Needs attention</dt>
-          <dd class="transport-problem" role="alert">
+          <dd class="needs-attention" role="alert">
             Certificate checks are off, so anyone on the network path could impersonate this domain
             controller and collect every password sent to it. Give OpenADUC the CA that issued its
             certificate (AD_TLS_CA_PATH) and turn “Reject untrusted TLS certificates” back on.
@@ -482,7 +482,7 @@ onMounted(load);
         </template>
         <template v-if="d.transportProblem">
           <dt class="fld-label">Needs attention</dt>
-          <dd class="transport-problem" role="alert">
+          <dd class="needs-attention" role="alert">
             {{ d.transportProblem }} Edit the domain controllers to fix it.
           </dd>
         </template>
@@ -876,8 +876,8 @@ onMounted(load);
 :deep(.p-password .p-password-input) {
   width: 100%;
 }
-.transport-problem {
-  color: var(--p-red-600, #dc2626);
+.needs-attention {
+  color: var(--red);
   font-size: 13px;
 }
 </style>

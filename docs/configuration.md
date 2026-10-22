@@ -21,11 +21,12 @@ The full env schema lives in [`apps/api/src/config/env.ts`](../apps/api/src/conf
 
 ## API server
 
-| Variable          | Default                 | Description                                                                                                  |
-| ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `API_HOST`        | `0.0.0.0`               | Bind address for the Fastify HTTP server.                                                                    |
-| `API_PORT`        | `3000`                  | TCP port for the API.                                                                                        |
-| `API_CORS_ORIGIN` | `http://localhost:5173` | Comma-separated list of origins allowed by CORS. In production, set this to the public origin of the web UI. |
+| Variable           | Default                 | Description                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `API_HOST`         | `0.0.0.0`               | Bind address for the Fastify HTTP server.                                                                                                                                                                                                                                                                                                                                 |
+| `API_PORT`         | `3000`                  | TCP port for the API.                                                                                                                                                                                                                                                                                                                                                     |
+| `API_CORS_ORIGIN`  | `http://localhost:5173` | Comma-separated list of origins allowed by CORS. In production, set this to the public origin of the web UI.                                                                                                                                                                                                                                                              |
+| `TRUST_PROXY_HOPS` | `1`                     | How many reverse proxies in front of the API to trust for the client's address (`X-Forwarded-For`). `1` is the bundled nginx. Add one for each proxy or load balancer in front of it (e.g. `2` behind an identity-aware proxy), or `0` if clients reach the API directly. Too high lets clients choose the address used for rate limits, login backoff and the audit log. |
 
 ## Sessions and step-up
 
@@ -64,9 +65,9 @@ These variables only matter on **first boot before the setup wizard has run**. I
 
 ## Authorization bootstrap
 
-| Variable                   | Default | Description                                                                                                                                                                                                         |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. The setup wizard sets this for you. The recovery account from the wizard works without it. |
+| Variable                   | Default | Description                                                                                                                                                                                                                                                                                  |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BOOTSTRAP_ADMIN_GROUP_DN` | —       | DN of an AD security group whose members are auto-granted the `admin` role until in-app role assignments are configured. Applies only while no admin group is set in the app's settings. Setup sets Domain Admins there unless the admin signing in already qualifies through this variable. |
 
 ## Frontend (build-time)
 

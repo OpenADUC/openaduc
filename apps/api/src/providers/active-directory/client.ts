@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { readFileSync } from 'node:fs';
 import { type LdapTlsMode, ldapUrlScheme } from '@openaduc/shared';
-import { Client, type ClientOptions } from 'ldapts';
+import { BusyError, Client, type ClientOptions, ResultCodeError, UnavailableError } from 'ldapts';
+import { DirectoryUnavailableError } from '../types.js';
 
 export interface ClientConfig {
   ldapUrls: readonly string[];
@@ -23,29 +24,52 @@ export function transportFor(url: string, mode: LdapTlsMode): 'tls' | 'starttls'
 }
 
 // Node's codes for a server certificate this process doesn't trust.
-const UNTRUSTED_CERT_CODES = new Set([
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'UNABLE_TO_GET_ISSUER_CERT',
-  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-  'CERT_UNTRUSTED',
-  'CERT_HAS_EXPIRED',
-  'ERR_TLS_CERT_ALTNAME_INVALID',
-]);
+// What to do about each kind of certificate failure Node reports.
+const UNTRUSTED_FIX =
+  'Give OpenADUC the CA that issued it (AD_TLS_CA_PATH, see docs/configuration.md), ' +
+  "or for a lab directory turn off 'Reject untrusted certs' knowing the connection can then be intercepted.";
+const CERTIFICATE_PROBLEMS: Record<string, string> = {
+  SELF_SIGNED_CERT_IN_CHAIN: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  DEPTH_ZERO_SELF_SIGNED_CERT: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_GET_ISSUER_CERT: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  CERT_UNTRUSTED: `the domain controller's certificate isn't trusted. ${UNTRUSTED_FIX}`,
+  ERR_TLS_CERT_ALTNAME_INVALID:
+    "the domain controller's certificate doesn't name the host in the LDAP URL. " +
+    'Use the name the certificate was issued for (usually the DC’s fully qualified name), or reissue the certificate with that name.',
+  CERT_HAS_EXPIRED:
+    "the domain controller's certificate has expired. Renew it on the DC (AD CS usually does this automatically; check autoenrollment).",
+  CERT_NOT_YET_VALID:
+    "the domain controller's certificate isn't valid yet. Check the clock on the DC and on this server.",
+};
+
+/** Every error inside `err`: itself, its cause, and an AggregateError's members. */
+function errorsWithin(err: unknown): unknown[] {
+  const found: unknown[] = [];
+  const walk = (e: unknown, depth: number) => {
+    if (e === undefined || e === null || depth > 4) return;
+    found.push(e);
+    if (e instanceof AggregateError) for (const inner of e.errors) walk(inner, depth + 1);
+    if (e instanceof Error) walk(e.cause, depth + 1);
+  };
+  walk(err, 0);
+  return found;
+}
 
 /**
- * When `err` is a TLS failure because the DC's certificate isn't trusted,
- * say so and how to fix it; otherwise null.
+ * When a TLS failure anywhere in `err` (including any one DC of several) is
+ * about the DC's certificate, say what's wrong with it and how to fix it;
+ * otherwise null.
  */
-export function untrustedCertificateMessage(err: unknown): string | null {
-  const code = (err as { code?: unknown } | null)?.code;
-  if (typeof code !== 'string' || !UNTRUSTED_CERT_CODES.has(code)) return null;
-  return (
-    `the domain controller's certificate isn't trusted (${code}). ` +
-    'Give OpenADUC the CA that issued it (AD_TLS_CA_PATH, see docs/configuration.md), ' +
-    "or for a lab directory turn off 'Reject untrusted certs' knowing the connection can then be intercepted."
-  );
+export function certificateProblemMessage(err: unknown): string | null {
+  for (const e of errorsWithin(err)) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === 'string' && CERTIFICATE_PROBLEMS[code]) {
+      return `${CERTIFICATE_PROBLEMS[code]} (${code})`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -80,18 +104,78 @@ function tlsOptionsFor(config: ClientConfig): NonNullable<ClientOptions['tlsOpti
   return tls;
 }
 
+// Node socket and DNS failures.
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+// OpenSSL certificate verification failures, as Node reports them.
+const CERT_ERROR_CODE = /^(ERR_TLS_|ERR_SSL_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_|CERT_)/;
+// ldapts's own timeouts and dropped connections are plain Errors.
+const LDAPTS_CONNECTION_MESSAGE =
+  /^Connection timeout$|Operation timed out$|^Connection closed before message response/;
+
+/**
+ * True when `err` means the server couldn't be reached or talked to:
+ * connection refused, timeout, TLS failure, dropped socket, or the DC
+ * saying it's busy or unavailable. Another domain controller may still
+ * work. Other LDAP results (wrong password, insufficient access, …) are
+ * answers another DC would repeat, and any other exception is a bug here,
+ * not an outage.
+ */
+export function isDirectoryUnreachable(err: unknown): boolean {
+  if (err instanceof BusyError || err instanceof UnavailableError) return true;
+  if (err instanceof ResultCodeError) return false;
+  // Node's multi-address connect reports one error per address tried.
+  if (err instanceof AggregateError) return err.errors.some(isDirectoryUnreachable);
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string' && (NETWORK_ERROR_CODES.has(code) || CERT_ERROR_CODE.test(code))) {
+    return true;
+  }
+  return LDAPTS_CONNECTION_MESSAGE.test(err.message);
+}
+
+/** A readable reason for a connection failure; AggregateError has no message. */
+export function describeConnectionError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: unknown }).code;
+  const inner = err instanceof AggregateError ? err.errors[0] : undefined;
+  return (
+    err.message ||
+    (inner instanceof Error ? inner.message : '') ||
+    (typeof code === 'string' ? code : '') ||
+    err.name
+  );
+}
+
 /**
  * Run `fn` against each configured LDAP URL until one succeeds. Caller is
  * responsible for the bind+unbind inside `fn`. Throws the last error if all
  * servers fail. In StartTLS mode the connection is upgraded before `fn`
  * runs, so no bind ever goes out unencrypted; if the upgrade fails, `fn`
  * isn't called for that server.
+ *
+ * Only a throw moves on to the next server, so `fn` must let unreachable
+ * errors from its bind propagate (see isDirectoryUnreachable) and return,
+ * not throw, anything after it: a write that failed halfway is never
+ * replayed against another DC.
  */
 export async function withFailover<T>(
   config: ClientConfig,
   fn: (client: Client) => Promise<T>,
 ): Promise<T> {
   let lastError: unknown;
+  // Every server's failure, so the error explains all of them (one DC's bad
+  // certificate shouldn't hide behind the next DC being down).
+  const failures: { url: string; err: unknown }[] = [];
   for (const url of config.ldapUrls) {
     const client = createClient(config, url);
     try {
@@ -101,6 +185,7 @@ export async function withFailover<T>(
       return await fn(client);
     } catch (err) {
       lastError = err;
+      failures.push({ url, err });
       // Best-effort tear-down before trying the next URL.
       try {
         await client.unbind();
@@ -108,6 +193,12 @@ export async function withFailover<T>(
         // ignore — likely already disconnected
       }
     }
+  }
+  if (isDirectoryUnreachable(lastError)) {
+    throw new DirectoryUnavailableError(
+      failures.map((f) => `${f.url}: ${describeConnectionError(f.err)}`).join('; '),
+      failures.length === 1 ? lastError : new AggregateError(failures.map((f) => f.err)),
+    );
   }
   throw lastError instanceof Error
     ? lastError

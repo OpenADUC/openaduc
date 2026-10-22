@@ -16,8 +16,8 @@ describe('setup against a DC whose certificate this server does not trust', () =
   let api: TestApi;
 
   beforeAll(async () => {
-    // No CA configured, and the default from .env.example (checks off) not
-    // in play: what a fresh production install looks like.
+    // No CA configured and certificate checks on: what a fresh production
+    // install looks like.
     api = await startApi({ env: { AD_TLS_CA_PATH: '', AD_TLS_REJECT_UNAUTHORIZED: '1' } });
   });
   afterAll(async () => {
@@ -30,6 +30,16 @@ describe('setup against a DC whose certificate this server does not trust', () =
     expect(res.statusCode).toBe(502);
     expect(res.body).toMatch(/certificate/i);
     expect(res.body).toMatch(/AD_TLS_CA_PATH/);
+  });
+
+  it('still says so when the next DC in the list is down', async () => {
+    const res = await api.client().post('/api/setup/initialize', {
+      ...setupBody(true),
+      ldapUrls: [DC.ldapsUrl, 'ldaps://localhost:10637'],
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toMatch(/isn't trusted/);
   });
 });
 
