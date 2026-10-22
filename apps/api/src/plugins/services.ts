@@ -95,7 +95,7 @@ export default fp(async (app) => {
   // this in `onReady` rather than at decorate-time keeps tests that build
   // and tear down the app instance from leaking timers.
   app.addHook('onReady', async () => {
-    sync.start();
+    if (env.SYNC_SCHEDULER_ENABLED) sync.start();
   });
 
   app.addHook('onClose', async () => {
