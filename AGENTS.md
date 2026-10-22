@@ -8,7 +8,7 @@ Run `pnpm check` before pushing; it runs everything CI runs. Git hooks (installe
 
 ## Local directory and API
 
-`pnpm dc:up` starts a seeded Samba AD DC for development and tests (`ldaps://localhost:10636`, base DN `DC=openaduc,DC=test`); `dev/samba-dc/README.md` lists fixture accounts, passwords and how to map roles. Use it instead of building your own DC. The API's health endpoints are `/health/live`, `/health/ready` and `/health/directory`.
+`pnpm dc:up` starts a seeded Samba AD DC for development and tests (`ldaps://localhost:10636`, base DN `DC=openaduc,DC=test`); `dev/samba-dc/README.md` lists fixture accounts, passwords and how to map roles. Use it instead of building your own DC. Route integration tests (`pnpm test:integration`, in `apps/api/test/integration/`) start it automatically; add one for any API route you add or change. The API's health endpoints are `/health/live`, `/health/ready` and `/health/directory`.
 
 ## Agent skills
 

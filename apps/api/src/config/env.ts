@@ -69,6 +69,13 @@ const envSchema = z.object({
   AD_OPERATION_TIMEOUT_MS: z.coerce.number().int().min(1000).default(15000),
 
   BOOTSTRAP_ADMIN_GROUP_DN: z.string().optional(),
+
+  // Run scheduled directory sync tasks. Integration tests turn it off so
+  // background syncs don't race the requests under test.
+  SYNC_SCHEDULER_ENABLED: z
+    .union([z.literal('0'), z.literal('1')])
+    .default('1')
+    .transform((v) => v === '1'),
 });
 
 export type Env = z.infer<typeof envSchema>;

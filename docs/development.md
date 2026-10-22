@@ -73,6 +73,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 | Run everything CI runs                   | `pnpm check`                       |
 | Type-check everything                    | `pnpm typecheck`                   |
 | Run unit tests                           | `pnpm test`                        |
+| Run route integration tests (Docker)     | `pnpm test:integration`            |
 | Lint                                     | `pnpm lint`                        |
 | Format                                   | `pnpm format`                      |
 | Snapshot the dev database                | `scripts/snapshot-db.sh`           |
@@ -82,7 +83,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 - **Commit messages** follow [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`. Scopes are loose; use them when they help.
 - **Comments.** Default to writing none. Add one only when the _why_ is non-obvious — a hidden constraint, a workaround, a subtle invariant. Don't restate what the code already says.
-- **Tests.** Vitest unit tests sit next to the code they cover (`*.test.ts`). There are no route integration or browser end-to-end tests yet; exercise route changes against the bundled Samba DC.
+- **Tests.** Vitest unit tests sit next to the code they cover (`*.test.ts`). Route integration tests live in `apps/api/test/integration/*.int.test.ts` and run the real API, in-process, against a disposable Postgres and the bundled Samba DC (`pnpm test:integration`; needs Docker). New or changed API routes need at least a happy-path integration test. The harness (`test/integration/harness.ts`) gives each test file a fresh database and offers `configureDirectory` (runs setup as `oa.admin` and maps the operator and auditor roles), `client().signIn()` / `.stepUp()`, `readDirectoryUser` to check AD directly, and `reseedDirectory` to restore the DC fixtures. There are no browser end-to-end tests yet.
 - **Schemas.** Cross-app types live in `packages/shared/src/schemas/` as Zod. The API validates request and response bodies against them; the SPA imports the inferred types.
 - **Migrations are forever.** Once a migration is on `main`, never edit it. Write a new one.
 
