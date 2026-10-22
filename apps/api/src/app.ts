@@ -32,7 +32,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
   const app = Fastify({
     logger: buildLoggerOptions(env),
-    disableRequestLogging: false,
     trustProxy: true,
     bodyLimit: 1024 * 1024,
   });
