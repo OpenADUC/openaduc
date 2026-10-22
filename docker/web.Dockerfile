@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.28
 
 FROM node:22-slim AS base
 ENV PNPM_HOME="/pnpm"
