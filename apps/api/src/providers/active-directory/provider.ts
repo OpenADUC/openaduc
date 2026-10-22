@@ -45,7 +45,7 @@ import type {
   WriteContext,
 } from '../types.js';
 import { StepUpBindFailedError } from '../types.js';
-import { type ClientConfig, withFailover } from './client.js';
+import { type ClientConfig, untrustedCertificateMessage, withFailover } from './client.js';
 import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
@@ -248,7 +248,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       return {
         ok: false,
         reason: 'directory_error',
-        errorMessage: err instanceof Error ? err.message : 'directory error',
+        errorMessage:
+          untrustedCertificateMessage(err) ??
+          (err instanceof Error ? err.message : 'directory error'),
       };
     }
   }
@@ -1977,7 +1979,7 @@ function classifyBindError(err: unknown): AuthResult {
     return {
       ok: false,
       reason: 'directory_error',
-      errorMessage: `cannot reach directory: ${message}`,
+      errorMessage: untrustedCertificateMessage(err) ?? `cannot reach directory: ${message}`,
     };
   }
 

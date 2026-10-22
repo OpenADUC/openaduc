@@ -43,10 +43,10 @@ const form = reactive({
   baseDnTouched: !!initial,
   tlsMode: initialMode,
   port: initialPort,
-  // Default OFF: most first-time setups happen against lab DCs with
-  // self-signed certs. Operators can flip it back on once their CA
-  // chain is trusted.
-  rejectUntrusted: initial?.tlsRejectUnauthorized ?? false,
+  // Default ON: without it anyone on the network path can impersonate the
+  // DC and collect every password sent to it. If the DC's certificate
+  // isn't trusted yet, setup says so and how to fix it.
+  rejectUntrusted: initial?.tlsRejectUnauthorized ?? true,
   dcs: initial ? dcsFromUrls(initial.ldapUrls) : ([{ host: '' }] as DcEntry[]),
 });
 

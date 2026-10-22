@@ -472,6 +472,14 @@ onMounted(load);
             d.tlsRejectUnauthorized === false ? 'reject untrusted = off' : 'reject untrusted = on'
           }}
         </dd>
+        <template v-if="d.certificateCheckOff">
+          <dt class="fld-label">Needs attention</dt>
+          <dd class="transport-problem" role="alert">
+            Certificate checks are off, so anyone on the network path could impersonate this domain
+            controller and collect every password sent to it. Give OpenADUC the CA that issued its
+            certificate (AD_TLS_CA_PATH) and turn “Reject untrusted TLS certificates” back on.
+          </dd>
+        </template>
         <template v-if="d.transportProblem">
           <dt class="fld-label">Needs attention</dt>
           <dd class="transport-problem" role="alert">

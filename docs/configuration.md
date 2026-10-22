@@ -57,7 +57,7 @@ These variables only matter on **first boot before the setup wizard has run**. I
 | `AD_BASE_DN`                  | —       | Base DN for searches (e.g. `DC=example,DC=com`).                                                                                                            |
 | `AD_SERVICE_ACCOUNT_UPN`      | —       | UPN of the read/sync service account (e.g. `openaduc-sync@example.com`).                                                                                    |
 | `AD_SERVICE_ACCOUNT_PASSWORD` | —       | Password for the service account. Stored encrypted in the DB once seeded.                                                                                   |
-| `AD_TLS_REJECT_UNAUTHORIZED`  | `1`     | Set to `0` only for local dev with self-signed Samba. **Never** set to `0` in production.                                                                   |
+| `AD_TLS_REJECT_UNAUTHORIZED`  | `1`     | Keep at `1`. For a DC with a private CA set `AD_TLS_CA_PATH` instead; `0` lets anyone on the network path impersonate the DC and collect passwords.         |
 | `AD_TLS_CA_PATH`              | —       | Path inside the API container to a custom CA bundle (PEM) used to validate the LDAPS certificate.                                                           |
 | `AD_OPERATION_TIMEOUT_MS`     | `15000` | Timeout (in ms) for individual LDAP operations. Increase if your DCs are slow or far away.                                                                  |
 | `SYNC_SCHEDULER_ENABLED`      | `1`     | Set to `0` to stop scheduled directory sync tasks in this process (the integration tests do). Manual and setup-time syncs still run.                        |

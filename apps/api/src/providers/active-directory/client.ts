@@ -22,6 +22,32 @@ export function transportFor(url: string, mode: LdapTlsMode): 'tls' | 'starttls'
   return mode === 'starttls' && ldapUrlScheme(url) === 'ldap' ? 'starttls' : 'tls';
 }
 
+// Node's codes for a server certificate this process doesn't trust.
+const UNTRUSTED_CERT_CODES = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/**
+ * When `err` is a TLS failure because the DC's certificate isn't trusted,
+ * say so and how to fix it; otherwise null.
+ */
+export function untrustedCertificateMessage(err: unknown): string | null {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code !== 'string' || !UNTRUSTED_CERT_CODES.has(code)) return null;
+  return (
+    `the domain controller's certificate isn't trusted (${code}). ` +
+    'Give OpenADUC the CA that issued it (AD_TLS_CA_PATH, see docs/configuration.md), ' +
+    "or for a lab directory turn off 'Reject untrusted certs' knowing the connection can then be intercepted."
+  );
+}
+
 /**
  * Build a fresh ldapts Client. Connections are created per-operation rather
  * than pooled — we explicitly want short-lived binds so credentials never live
