@@ -303,6 +303,8 @@ const {
   loading,
   error,
   load,
+  refreshing,
+  refresh,
 } = useDetailRecord<UserDetail>({
   id: () => props.id,
   fetch: async (id) => (await api.users.get(id)).user,
@@ -319,7 +321,6 @@ const {
   onLoaded: () => resetForm(),
 });
 
-const refreshing = ref(false);
 const saving = ref(false);
 const activeTab = ref<TabId>('overview');
 const rawFilter = ref('');
@@ -490,16 +491,9 @@ function onSignInSelect(id: string): void {
   signInDialogOpen.value = true;
 }
 
-async function refreshFromAd(): Promise<void> {
-  // The backend's GET /api/users/:id always live-refreshes against AD before
-  // responding, so reusing `load()` is a sync of just this user.
-  refreshing.value = true;
-  try {
-    await load();
-    toast.add({ severity: 'success', summary: 'Refreshed from directory', life: 2500 });
-  } finally {
-    refreshing.value = false;
-  }
+function refreshFromAd(): Promise<void> {
+  // GET live-refreshes against AD, so a reload is a sync of this one object.
+  return refresh(toast, 'Refreshed from directory');
 }
 
 watch(() => props.id, load);

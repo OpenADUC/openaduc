@@ -22,6 +22,7 @@ import {
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
+import { listFreshness } from '../services/listFreshness.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -113,6 +114,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       ]);
 
       const result: ComputerSearchResponse = {
+        freshness: await listFreshness(app.db, provider.id, 'computers'),
         rows: rows.map((r) => ({
           id: r.id,
           name: r.name,

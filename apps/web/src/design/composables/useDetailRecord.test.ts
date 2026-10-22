@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, h, watch } from 'vue';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { useDetailRecord } from './useDetailRecord.js';
 
 // A detail page reduced to what matters here: it loads the record for its
@@ -53,5 +53,34 @@ describe('a detail page moving between records', () => {
 
     await page.setProps({ id: 'b' });
     expect(page.text()).toBe('Loading…');
+  });
+});
+
+describe('refreshing a detail page', () => {
+  const setup = (fetch: () => Promise<{ id: string }>) =>
+    useDetailRecord({
+      id: () => 'a',
+      fetch,
+      notFoundMessage: 'Not found',
+      failedMessage: 'Failed',
+    });
+
+  it('says so when the refresh fails, instead of claiming success', async () => {
+    const toast = { add: vi.fn() };
+    const detail = setup(async () => {
+      throw new Error('directory unavailable');
+    });
+    await detail.refresh(toast, 'Refreshed');
+    expect(toast.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'directory unavailable' }),
+    );
+  });
+
+  it('confirms a refresh that worked', async () => {
+    const toast = { add: vi.fn() };
+    await setup(async () => ({ id: 'a' })).refresh(toast, 'Refreshed');
+    expect(toast.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: 'Refreshed' }),
+    );
   });
 });

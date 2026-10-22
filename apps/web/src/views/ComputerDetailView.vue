@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { useDetailRecord } from '../design/composables/useDetailRecord.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
@@ -21,12 +21,13 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const toast = useToast();
 
-const refreshing = ref(false);
 const {
   record: computer,
   loading,
   error,
   load,
+  refreshing,
+  refresh,
 } = useDetailRecord<ComputerDetail>({
   id: () => props.id,
   fetch: async (id) => (await api.computers.get(id)).computer,
@@ -34,14 +35,9 @@ const {
   failedMessage: 'Failed to load computer',
 });
 
-async function refreshFromAd(): Promise<void> {
-  refreshing.value = true;
-  try {
-    await load();
-    toast.add({ severity: 'success', summary: 'Refreshed', life: 2000 });
-  } finally {
-    refreshing.value = false;
-  }
+function refreshFromAd(): Promise<void> {
+  // GET live-refreshes against AD, so a reload is a sync of this one object.
+  return refresh(toast, 'Refreshed');
 }
 
 watch(() => props.id, load);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { listFreshnessSchema } from './freshness.js';
 import { recycleBinStatusSchema } from './deletedUser.js';
 
 // `z.coerce.boolean()` calls JS `Boolean(v)` which returns true for any
@@ -260,6 +261,7 @@ export const userSearchResponseSchema = z.object({
   total: z.number().int(),
   page: z.number().int(),
   pageSize: z.number().int(),
+  freshness: listFreshnessSchema,
 });
 export type UserSearchResponse = z.infer<typeof userSearchResponseSchema>;
 

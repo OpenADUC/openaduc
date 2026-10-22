@@ -8,6 +8,7 @@
 // refers to it while the new one loads.
 
 import { ref, type Ref } from 'vue';
+import type { ToastServiceMethods } from 'primevue/toastservice';
 import { ApiError } from '../../api/client.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
@@ -51,5 +52,26 @@ export function useDetailRecord<T extends { id: string }>(opts: {
     }
   }
 
-  return { record, loading, error, load };
+  const refreshing = ref(false);
+  /** Load again and toast the outcome; load reports failure through `error`. */
+  async function refresh(toast: Pick<ToastServiceMethods, 'add'>, success: string): Promise<void> {
+    refreshing.value = true;
+    try {
+      await load();
+      if (error.value) {
+        toast.add({
+          severity: 'error',
+          summary: 'Refresh failed',
+          detail: error.value,
+          life: 5000,
+        });
+      } else {
+        toast.add({ severity: 'success', summary: success, life: 2500 });
+      }
+    } finally {
+      refreshing.value = false;
+    }
+  }
+
+  return { record, loading, error, load, refreshing, refresh };
 }

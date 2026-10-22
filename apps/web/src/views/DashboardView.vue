@@ -87,7 +87,11 @@ const syncStatusLabel = computed(() => {
   return 'All tasks healthy';
 });
 
+// Set when the issues list couldn't load: show that, never "Nothing on fire".
+const issuesError = ref<string | null>(null);
+
 async function loadIssues(): Promise<void> {
+  issuesError.value = null;
   try {
     const issues = await api.users.search({
       page: 1,
@@ -100,24 +104,33 @@ async function loadIssues(): Promise<void> {
     });
     issueUsers.value = issues.rows;
     issueTotal.value = issues.total;
-  } catch {
-    /* best-effort — list just stays empty */
+  } catch (err) {
+    issueUsers.value = [];
+    issueTotal.value = 0;
+    issuesError.value = err instanceof Error ? err.message : 'Failed to load';
   }
 }
 
+// Set when a panel couldn't load: show that and a retry, never an empty
+// state that reads as "nothing happened" or "all fine".
+const activityError = ref<string | null>(null);
+const healthError = ref<string | null>(null);
+
 async function loadActivity(): Promise<void> {
-  if (canViewAudit.value) {
-    try {
-      const r = await api.audit.list({ pageSize: 8 });
-      recentEvents.value = r.rows;
-    } catch {
-      /* best-effort */
-    }
+  if (!canViewAudit.value) return;
+  activityError.value = null;
+  try {
+    const r = await api.audit.list({ pageSize: 8 });
+    recentEvents.value = r.rows;
+  } catch (err) {
+    recentEvents.value = [];
+    activityError.value = err instanceof Error ? err.message : 'Failed to load';
   }
 }
 
 async function loadDirectoryHealth(): Promise<void> {
   if (!canConfigure.value) return;
+  healthError.value = null;
   try {
     const r = await api.directories.list();
     // The actor's session is bound to one directory at a time. Pick that
@@ -131,8 +144,8 @@ async function loadDirectoryHealth(): Promise<void> {
     } else {
       directoryTasks.value = [];
     }
-  } catch {
-    /* best-effort — card just won't render */
+  } catch (err) {
+    healthError.value = err instanceof Error ? err.message : 'Failed to load';
   }
 }
 
@@ -200,7 +213,17 @@ onMounted(load);
       <template #actions>
         <!-- Directory health rolled up into one pill; /tasks has the detail. -->
         <button
-          v-if="canConfigure && directory"
+          v-if="canConfigure && healthError"
+          type="button"
+          class="dir-pill"
+          :title="healthError"
+          @click="loadDirectoryHealth"
+        >
+          <span class="dir-pill-dot dir-pill-dot-red" />
+          <span class="dir-pill-label">Couldn't load directory status · Retry</span>
+        </button>
+        <button
+          v-else-if="canConfigure && directory"
           type="button"
           class="dir-pill"
           :title="firstFailingTask?.lastError ?? syncStatusLabel"
@@ -225,13 +248,25 @@ onMounted(load);
     <Card
       title="Accounts needing attention"
       :sub="
-        issueTotal > 0
-          ? `${issueTotal} total · locked, account expired, or password expiring within 24h`
-          : 'all clear'
+        issuesError
+          ? 'unavailable'
+          : issueTotal > 0
+            ? `${issueTotal} total · locked, account expired, or password expiring within 24h`
+            : 'all clear'
       "
     >
       <EmptyState
-        v-if="!loading && issueUsers.length === 0"
+        v-if="issuesError"
+        icon="pi pi-exclamation-triangle"
+        title="Couldn't load accounts needing attention"
+        :message="issuesError"
+      >
+        <template #actions>
+          <Button label="Retry" icon="pi pi-refresh" size="small" @click="loadIssues" />
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="!loading && issueUsers.length === 0"
         icon="pi pi-check-circle"
         title="Nothing on fire"
         message="No active accounts are locked, expired, or expiring in the next 24 hours."
@@ -254,7 +289,17 @@ onMounted(load);
         <Button label="View all" text size="small" @click="router.push('/audit')" />
       </template>
       <EmptyState
-        v-if="!loading && recentEvents.length === 0"
+        v-if="activityError"
+        icon="pi pi-exclamation-triangle"
+        title="Couldn't load recent activity"
+        :message="activityError"
+      >
+        <template #actions>
+          <Button label="Retry" icon="pi pi-refresh" size="small" @click="loadActivity" />
+        </template>
+      </EmptyState>
+      <EmptyState
+        v-else-if="!loading && recentEvents.length === 0"
         icon="pi pi-shield"
         title="No audit events yet"
         message="Activity will appear here as operators sign in and act."

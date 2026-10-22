@@ -28,8 +28,6 @@ const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
 
-const refreshing = ref(false);
-
 // Drives the compact-on-scroll hero. `setHero` is bound to the hero
 // section's :ref. `compact` flips on scroll; `heroHeight` tracks the
 // rendered height so the Members card's sticky head pins flush with
@@ -59,6 +57,8 @@ const {
   loading,
   error,
   load,
+  refreshing,
+  refresh,
 } = useDetailRecord<GroupDetail>({
   id: () => props.id,
   fetch: async (id) => (await api.groups.get(id)).group,
@@ -66,15 +66,9 @@ const {
   failedMessage: 'Failed to load group',
 });
 
-async function refreshFromAd(): Promise<void> {
-  // Same trick as user detail: GET always live-refreshes.
-  refreshing.value = true;
-  try {
-    await load();
-    toast.add({ severity: 'success', summary: 'Refreshed', life: 2000 });
-  } finally {
-    refreshing.value = false;
-  }
+function refreshFromAd(): Promise<void> {
+  // GET live-refreshes against AD, so a reload is a sync of this one object.
+  return refresh(toast, 'Refreshed');
 }
 
 watch(() => props.id, load);

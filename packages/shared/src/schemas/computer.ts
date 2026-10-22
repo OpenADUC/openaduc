@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { listFreshnessSchema } from './freshness.js';
 
 const queryBoolean = z.union([z.boolean(), z.string()]).transform((v, ctx) => {
   if (typeof v === 'boolean') return v;
@@ -60,6 +61,7 @@ export const computerSearchResponseSchema = z.object({
   total: z.number().int(),
   page: z.number().int(),
   pageSize: z.number().int(),
+  freshness: listFreshnessSchema,
 });
 export type ComputerSearchResponse = z.infer<typeof computerSearchResponseSchema>;
 
