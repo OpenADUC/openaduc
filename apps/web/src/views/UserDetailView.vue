@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { latestRequest } from '../design/lib/latestRequest.js';
+import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import Button from 'primevue/button';
@@ -296,9 +298,27 @@ const props = defineProps<{ id: string }>();
 const auth = useAuthStore();
 const toast = useToast();
 
-const user = ref<UserDetail | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
+const {
+  record: user,
+  loading,
+  error,
+  load,
+} = useDetailRecord<UserDetail>({
+  id: () => props.id,
+  fetch: async (id) => (await api.users.get(id)).user,
+  notFoundMessage: 'User not found',
+  failedMessage: 'Failed to load user',
+  // The Overview activity card belongs to the previous user: clear it, and
+  // abandon a request for it still in flight.
+  beforeLoad: () => {
+    activityRequests.begin();
+    activityLoading.value = false;
+    activityLoaded.value = false;
+    activityEvents.value = [];
+  },
+  onLoaded: () => resetForm(),
+});
+
 const refreshing = ref(false);
 const saving = ref(false);
 const activeTab = ref<TabId>('overview');
@@ -468,42 +488,6 @@ const signInDialogEventId = ref<string | null>(null);
 function onSignInSelect(id: string): void {
   signInDialogEventId.value = id;
   signInDialogOpen.value = true;
-}
-
-// Every GET live-refreshes against AD, so responses are slow and can
-// arrive out of order when the operator moves between users. Only the
-// latest one may land, or user B's URL could show (and act on) user A.
-const userRequests = latestRequest();
-
-async function load(): Promise<void> {
-  const isCurrent = userRequests.begin();
-  loading.value = true;
-  error.value = null;
-  // Switching to another user: drop the previous one at once, so nothing
-  // on screen (or any action) refers to them while the new one loads.
-  if (user.value && user.value.id !== props.id) user.value = null;
-  // Stale activity cache from a previous user — clear so the Overview card
-  // re-fetches against the new user on next load. A request still in
-  // flight for the previous user is abandoned.
-  activityRequests.begin();
-  activityLoading.value = false;
-  activityLoaded.value = false;
-  activityEvents.value = [];
-  try {
-    const resp = await api.users.get(props.id);
-    if (!isCurrent()) return;
-    user.value = resp.user;
-    resetForm();
-  } catch (err) {
-    if (!isCurrent()) return;
-    if (err instanceof ApiError && err.status === 404) {
-      error.value = 'User not found';
-    } else {
-      error.value = err instanceof Error ? err.message : 'Failed to load user';
-    }
-  } finally {
-    if (isCurrent()) loading.value = false;
-  }
 }
 
 async function refreshFromAd(): Promise<void> {
@@ -1264,9 +1248,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   <div class="page-inner detail-page" :style="{ '--detail-sticky-offset': `${heroHeight}px` }">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <div v-if="!user && loading" class="detail-loading" role="status">
-      <i class="pi pi-spin pi-spinner" aria-hidden="true" /> Loading user…
-    </div>
+    <DetailLoading v-if="!user && loading">Loading user…</DetailLoading>
     <div v-if="user" class="detail-stack">
       <!-- Hero. Two-column layout: avatar + identity + identifier line +
            launchers + DN, with a compact meta strip on the right. Actions
@@ -3434,13 +3416,5 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
 .mfa-method-list .pi-lock {
   color: var(--text-3);
   font-size: 11px;
-}
-.detail-loading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 48px 0;
-  justify-content: center;
-  color: var(--text-2);
 }
 </style>
