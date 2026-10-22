@@ -280,6 +280,15 @@ export class SyncTaskService {
       .where('task_key', '=', taskKey)
       .where('last_status', '=', 'running')
       .execute();
+    // Close the history rows the crashed or stuck run left open, or run
+    // history shows them as running forever.
+    await this.db
+      .updateTable('directory_sync_task_runs')
+      .set({ status: 'failed', error: reason, finished_at: new Date() })
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', taskKey)
+      .where('status', '=', 'running')
+      .execute();
   }
 
   /**

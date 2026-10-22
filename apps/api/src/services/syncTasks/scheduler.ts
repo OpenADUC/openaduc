@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyBaseLogger } from 'fastify';
-import type { Kysely } from 'kysely';
+import { type Kysely, sql } from 'kysely';
 import type { DB } from '../../db/types.js';
 import type { DirectoryConfigService } from '../directoryConfig.js';
 import type { ProviderFactory } from '../../providers/registry.js';
@@ -20,6 +20,9 @@ import type { EntraRunnerRuntime, SyncTaskKey } from './types.js';
  * onboarding wizard can surface a per-step pass/fail summary instead of
  * polling the sync-task table.
  */
+/** First key of the per-directory sync advisory lock (the second is the directory id). */
+export const SYNC_LOCK_CLASS = 0x0ad0;
+
 export interface RunOnceResult {
   ok: boolean;
   error?: string;
@@ -301,7 +304,32 @@ export class SyncTaskScheduler {
     return new Map([...candidates].map(([k, v]) => [k, v.taskKey]));
   }
 
+  /**
+   * Run a task while holding a per-directory Postgres advisory lock, so two
+   * API processes (replicas, or old and new during a rolling deploy) never
+   * run tasks for the same directory at once. The in-memory sets below only
+   * cover this process.
+   */
   private async runTask(providerId: number, taskKey: SyncTaskKey): Promise<RunOnceResult> {
+    return this.db.connection().execute(async (conn) => {
+      const lock = await sql<{ ok: boolean }>`
+        select pg_try_advisory_lock(${SYNC_LOCK_CLASS}, ${providerId}) as ok
+      `.execute(conn);
+      if (!lock.rows[0]?.ok) {
+        return {
+          ok: false,
+          error: 'another OpenADUC process is running a task for this directory',
+        };
+      }
+      try {
+        return await this.runTaskInProcess(providerId, taskKey);
+      } finally {
+        await sql`select pg_advisory_unlock(${SYNC_LOCK_CLASS}, ${providerId})`.execute(conn);
+      }
+    });
+  }
+
+  private async runTaskInProcess(providerId: number, taskKey: SyncTaskKey): Promise<RunOnceResult> {
     const inFlightKey = this.inFlightKey(providerId, taskKey);
     if (this.inFlight.has(inFlightKey)) {
       return { ok: false, error: 'task already running for this directory' };
