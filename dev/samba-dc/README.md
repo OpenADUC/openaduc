@@ -43,7 +43,7 @@ Groups live in `OU=Groups`. `Engineering` is nested inside `All Staff`. Domain p
 
 `OpenADUC Operators` has inherited full control over `OU=OpenADUC Test`, so `oa.operator` can unlock, reset, disable, edit and move fixture users. `oa.auditor` has no write rights in AD. `oa.admin` is a Domain Admin.
 
-`pnpm dc:seed` puts stateful fixtures back: Dave is locked again, Carol disabled, Erin's password expired. Objects you create are left alone; `pnpm dc:down && pnpm dc:up` gives a pristine domain.
+`pnpm dc:seed` puts stateful fixtures back: Dave is locked again, Carol disabled, Erin's password expired, and every other fixture account unlocked (wrong-password tests would otherwise lock them for good). Objects you create are left alone; `pnpm dc:down && pnpm dc:up` gives a pristine domain.
 
 ## Using it with the app
 
