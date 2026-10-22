@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { ldapTransportProblem } from './ldapTransport.js';
+import {
+  type DirectoryConnection,
+  ldapTransportProblem,
+  rebindRequiredReason,
+} from './ldapTransport.js';
 
 describe('ldapTransportProblem', () => {
   it('accepts ldaps:// URLs in LDAPS mode', () => {
@@ -30,5 +34,35 @@ describe('ldapTransportProblem', () => {
 
   it('requires at least one URL', () => {
     expect(ldapTransportProblem([], 'ldaps')).not.toBeNull();
+  });
+});
+
+describe('rebindRequiredReason', () => {
+  const before: DirectoryConnection = {
+    ldapUrls: ['ldaps://dc1:636'],
+    tlsMode: 'ldaps',
+    tlsRejectUnauthorized: true,
+    syncBindUpn: 'svc@corp.example',
+  };
+
+  it('is null when nothing the password is sent to changes', () => {
+    expect(rebindRequiredReason(before, { ...before })).toBeNull();
+    expect(rebindRequiredReason(before, { ...before, syncBindUpn: 'SVC@corp.example' })).toBeNull();
+    expect(rebindRequiredReason(before, { ...before, syncBindUpn: null })).toBeNull();
+  });
+
+  it('asks for the password when the connection changes', () => {
+    expect(rebindRequiredReason(before, { ...before, ldapUrls: ['ldaps://evil:636'] })).toMatch(
+      /Re-enter/,
+    );
+    expect(rebindRequiredReason(before, { ...before, tlsRejectUnauthorized: false })).toMatch(
+      /Re-enter/,
+    );
+  });
+
+  it('asks for the new account’s password when the account changes', () => {
+    expect(rebindRequiredReason(before, { ...before, syncBindUpn: 'other@corp.example' })).toMatch(
+      /new service account/,
+    );
   });
 });
