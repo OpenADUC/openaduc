@@ -28,8 +28,9 @@ export default fp(async (app) => {
   app.decorate('pgPool', pool);
   app.decorate('db', db);
 
+  // Kysely's PostgresDialect ends the pool it was given; ending it again
+  // throws, which made every graceful shutdown exit non-zero.
   app.addHook('onClose', async () => {
     await db.destroy();
-    await pool.end();
   });
 });
