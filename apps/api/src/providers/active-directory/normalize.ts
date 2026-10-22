@@ -336,6 +336,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     // Constructed by AD from the effective policy (domain or PSO). Never-
     // expires and must-change both come back as sentinels, which map to null.
     passwordExpiresAt: filetimeToDate(asString(entry['msDS-UserPasswordExpiryTimeComputed'])),
+    passwordExpiryComputed: entry['msDS-UserPasswordExpiryTimeComputed'] !== undefined,
     passwordMustChange: asString(entry.pwdLastSet) === '0',
     accountExpiresAt: filetimeToDate(asString(entry.accountExpires)),
     lastLogonAt: filetimeToDate(asString(entry.lastLogonTimestamp)),

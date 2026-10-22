@@ -72,6 +72,8 @@ describe('password expiry', () => {
     const { runEntraPasswordExpiryNotify } =
       await import('../../src/services/syncTasks/runners/entraPasswordExpiryNotify.js');
     const sendAdminMessage = vi.fn(async () => ({ ok: true as const }));
+    // The notifier reads only the fields given below; `as never` stands in
+    // for the rest of the provider and Entra runtime it never touches.
     const result = await runEntraPasswordExpiryNotify({
       db: api.app.db,
       providerId: api.directoryId!,
@@ -92,5 +94,33 @@ describe('password expiry', () => {
     expect(result.stats?.candidates).toBeGreaterThan(0);
     const titles = sendAdminMessage.mock.calls.map((c) => (c as unknown[])[1]);
     expect(JSON.stringify(titles)).toContain('Alice');
+  });
+
+  it('honours a fine-grained policy that never expires, not the domain maximum', async () => {
+    sambaTool(
+      'domain',
+      'passwordsettings',
+      'pso',
+      'create',
+      'oa-never-expires',
+      '1',
+      '--max-pwd-age=0',
+    );
+    sambaTool('domain', 'passwordsettings', 'pso', 'apply', 'oa-never-expires', 'bob.baker');
+    try {
+      expect((await api.app.services.sync.runOnce(api.directoryId!, 'users.full')).ok).toBe(true);
+      const bob = await cached('bob.baker');
+      expect(bob.password_expiry_computed).toBe(true);
+      expect(bob.password_expires_at).toBeNull();
+
+      const operator = api.client();
+      await operator.signIn(api, 'oa.operator');
+      const res = await operator.get('/api/users?q=bob.baker');
+      expect(res.json<{ rows: { passwordExpiresAt: string | null }[] }>().rows[0]).toMatchObject({
+        passwordExpiresAt: null,
+      });
+    } finally {
+      sambaTool('domain', 'passwordsettings', 'pso', 'delete', 'oa-never-expires');
+    }
   });
 });
