@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { LDAP_TLS_MODES, ldapTransportProblem } from '@openaduc/shared';
+import {
+  LDAP_TLS_MODES,
+  type LdapTlsMode,
+  ldapTransportProblem,
+  rebindRequiredReason,
+} from '@openaduc/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { BadRequest, NotFound, Unauthorized } from '../plugins/errorHandler.js';
@@ -254,21 +259,30 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
       }
 
       // Syncs send the stored service-account password to whatever these
-      // settings point at, and every sign-in sends an operator's. Changing
-      // them needs that password re-entered and a working bind first.
+      // settings point at, as whoever they name, and every sign-in sends an
+      // operator's. Changing them needs that password typed in and a
+      // working bind first.
       const effectiveTlsCheck = (v: boolean | null) => v ?? env.AD_TLS_REJECT_UNAUTHORIZED;
-      const connectionChanged =
-        (body.ldapUrls !== undefined &&
-          JSON.stringify(body.ldapUrls) !== JSON.stringify(before.ldapUrls)) ||
-        (body.tlsMode !== undefined && body.tlsMode !== before.tlsMode) ||
-        (body.tlsRejectUnauthorized !== undefined &&
-          body.tlsRejectUnauthorized !== effectiveTlsCheck(before.tlsRejectUnauthorized));
-      if (connectionChanged) {
-        if (!body.syncBindPassword) {
-          throw BadRequest(
-            "Re-enter the service account password to change how OpenADUC connects to this domain. It's checked against the new settings before they're saved.",
-          );
-        }
+      const connectionOf = (d: {
+        ldapUrls: readonly string[];
+        tlsMode: LdapTlsMode;
+        tlsRejectUnauthorized: boolean | null;
+        syncBindUpn: string | null;
+      }) => ({ ...d, tlsRejectUnauthorized: effectiveTlsCheck(d.tlsRejectUnauthorized) });
+      const rebindReason = rebindRequiredReason(
+        connectionOf(before),
+        connectionOf({
+          ldapUrls: body.ldapUrls ?? before.ldapUrls,
+          tlsMode: body.tlsMode ?? before.tlsMode,
+          tlsRejectUnauthorized:
+            body.tlsRejectUnauthorized === undefined
+              ? before.tlsRejectUnauthorized
+              : body.tlsRejectUnauthorized,
+          syncBindUpn: body.syncBindUpn === undefined ? before.syncBindUpn : body.syncBindUpn,
+        }),
+      );
+      if (rebindReason) {
+        if (!body.syncBindPassword) throw BadRequest(rebindReason);
         const syncBindUpn = body.syncBindUpn ?? before.syncBindUpn;
         if (!syncBindUpn) {
           throw BadRequest('Set a service account before changing how this domain is reached.');
@@ -306,7 +320,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
           metadata: {
             changedFields,
             syncSecretRotated: body.syncBindPassword !== undefined,
-            ...(connectionChanged ? { connectionVerified: true } : {}),
+            ...(rebindReason ? { connectionVerified: true } : {}),
           },
           before: {
             ldapUrls: before.ldapUrls,

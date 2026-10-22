@@ -32,3 +32,38 @@ export function ldapTransportProblem(urls: readonly string[], mode: LdapTlsMode)
   }
   return null;
 }
+
+/** What a directory's service account is sent to, and as whom. */
+export interface DirectoryConnection {
+  ldapUrls: readonly string[];
+  tlsMode: LdapTlsMode;
+  /** Effective value: the directory's own setting, else the server default. */
+  tlsRejectUnauthorized: boolean;
+  syncBindUpn: string | null;
+}
+
+/**
+ * Why saving `next` over `before` needs the service-account password typed
+ * in (and checked with a bind) first, or null when it doesn't. Syncs send
+ * the stored password to wherever these settings point, as whoever they
+ * name, so neither may change on the stored password alone.
+ */
+export function rebindRequiredReason(
+  before: DirectoryConnection,
+  next: DirectoryConnection,
+): string | null {
+  const connectionChanged =
+    JSON.stringify(next.ldapUrls) !== JSON.stringify(before.ldapUrls) ||
+    next.tlsMode !== before.tlsMode ||
+    next.tlsRejectUnauthorized !== before.tlsRejectUnauthorized;
+  if (connectionChanged) {
+    return "Re-enter the service account password to change how OpenADUC connects to this domain. It's checked against the new settings before they're saved.";
+  }
+  const accountChanged =
+    next.syncBindUpn !== null &&
+    next.syncBindUpn.toLowerCase() !== (before.syncBindUpn ?? '').toLowerCase();
+  if (accountChanged) {
+    return "Enter the new service account's password. It's checked against the domain before it's saved.";
+  }
+  return null;
+}

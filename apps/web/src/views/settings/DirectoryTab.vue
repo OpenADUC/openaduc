@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { type LdapTlsMode, ldapTransportProblem } from '@openaduc/shared';
+import { type LdapTlsMode, ldapTransportProblem, rebindRequiredReason } from '@openaduc/shared';
 import LdapTlsModeField from '../../design/primitives/LdapTlsModeField.vue';
 import { defaultLdapPort, ldapUrlFor } from '../../design/lib/ldap.js';
 
@@ -260,14 +260,24 @@ watch(
 
 // Changing where or how the domain is reached needs the service-account
 // password re-entered: the API binds with it before saving.
-const editConnectionChanged = computed(() => {
+// Why the stored service-account password can't be reused for this edit
+// (null when it can); the API applies the same rule.
+const editRebindReason = computed(() => {
   const before = editTarget.value;
-  if (!before) return false;
-  const urls = editForm.dcs.map((d) => editLdapUrl(d.host)).filter(Boolean);
-  return (
-    JSON.stringify(urls) !== JSON.stringify(before.ldapUrls) ||
-    editForm.tlsMode !== before.tlsMode ||
-    editForm.rejectUntrusted !== (before.tlsRejectUnauthorized ?? true)
+  if (!before) return null;
+  return rebindRequiredReason(
+    {
+      ldapUrls: before.ldapUrls,
+      tlsMode: before.tlsMode,
+      tlsRejectUnauthorized: before.tlsRejectUnauthorized ?? true,
+      syncBindUpn: before.syncBindUpn,
+    },
+    {
+      ldapUrls: editForm.dcs.map((d) => editLdapUrl(d.host)).filter(Boolean),
+      tlsMode: editForm.tlsMode,
+      tlsRejectUnauthorized: editForm.rejectUntrusted,
+      syncBindUpn: composeSyncUpn(editForm.syncBindUsername, before.domain) || null,
+    },
   );
 });
 
@@ -337,9 +347,8 @@ async function submitEdit(): Promise<void> {
     patch.syncBindPassword = editForm.syncBindPassword;
   }
 
-  if (editConnectionChanged.value && !editForm.syncBindPassword) {
-    editError.value =
-      "Re-enter the service account password to change how OpenADUC connects to this domain. It's checked against the new settings before they're saved.";
+  if (editRebindReason.value && !editForm.syncBindPassword) {
+    editError.value = editRebindReason.value;
     return;
   }
 
@@ -720,8 +729,8 @@ onMounted(load);
             input-class="w-full"
             class="w-full"
             :placeholder="
-              editConnectionChanged
-                ? 'Required to change connection settings'
+              editRebindReason
+                ? 'Required for this change'
                 : editTarget?.hasSyncBindPassword
                   ? 'Leave blank to keep stored password'
                   : ''

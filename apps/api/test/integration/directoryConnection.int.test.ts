@@ -73,6 +73,40 @@ describe('changing how a directory connects', () => {
     const res = await patch({ displayName: 'Test domain' });
     expect(res.statusCode).toBe(200);
   });
+
+  it('switching the service account needs that account’s password and a bind', async () => {
+    const storedUpn = async () =>
+      (
+        await api.app.db
+          .selectFrom('directory_providers')
+          .select('sync_bind_upn')
+          .executeTakeFirstOrThrow()
+      ).sync_bind_upn;
+    const original = await storedUpn();
+
+    const noPassword = await patch({ syncBindUpn: `oa.auditor@${DC.domain}` });
+    expect(noPassword.statusCode).toBe(400);
+    expect(noPassword.body).toMatch(/new service account/);
+
+    const wrongPassword = await patch({
+      syncBindUpn: `oa.auditor@${DC.domain}`,
+      syncBindPassword: 'not-the-password',
+    });
+    expect(wrongPassword.statusCode).toBe(400);
+    expect(await storedUpn()).toBe(original);
+
+    const ok = await patch({
+      syncBindUpn: `oa.auditor@${DC.domain}`,
+      syncBindPassword: DC.password,
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(await storedUpn()).toBe(`oa.auditor@${DC.domain}`);
+
+    // Put the real service account back for the tests below.
+    expect((await patch({ syncBindUpn: original, syncBindPassword: DC.password })).statusCode).toBe(
+      200,
+    );
+  });
 });
 
 describe('testing the stored service-account credentials', () => {
