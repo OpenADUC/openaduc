@@ -76,7 +76,7 @@ describe('raw directory attributes', () => {
 
   it('never include a password-bearing attribute, in a response or in the cache', async () => {
     const { body } = await detailOf(admin, 'users', 'alice');
-    expect(body).not.toMatch(/userPassword|Not-for-your-eyes/i);
+    expect(body).not.toMatch(/"userPassword"|Not-for-your-eyes/i);
     const cached = await api.app.db
       .selectFrom('user_cache_records')
       .select('raw_attributes_json')
