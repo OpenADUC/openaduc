@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  csvRow,
   groupMembershipChangeSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
@@ -25,22 +26,6 @@ import { auditContextFromRequest, withAudit } from '../services/auditContext.js'
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 
 const idParamSchema = z.object({ id: z.guid() });
-
-// ---- CSV helpers --------------------------------------------------------
-//
-// Minimal RFC 4180 quoting: wrap in double quotes when the value contains
-// quote, comma, or newline; double up internal quotes. Null/undefined render
-// empty.
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const s = value instanceof Date ? value.toISOString() : String(value);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function csvRow(cells: unknown[]): string {
-  return cells.map(csvCell).join(',');
-}
 
 const CSV_COLUMNS = [
   'objectGuid',
