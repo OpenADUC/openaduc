@@ -27,6 +27,11 @@ export interface DirectoryUser {
   mobile: string | null;
   title: string | null;
   department: string | null;
+  /**
+   * physicalDeliveryOfficeName. Typed because it's kept out of
+   * rawAttributes; only full reads carry it.
+   */
+  office?: string | null;
   managerDn: string | null;
   enabled: boolean;
   locked: boolean;
