@@ -40,6 +40,14 @@ describe('the client IP comes from the proxy, not from the client', () => {
     expect(statuses).toContain(429);
   });
 
+  it('those failures back off sign-in for the real address, not the spoofed ones', async () => {
+    // Runs after the test above, which failed five times as no.such.user.
+    const backoff = api.app.services.loginBackoff;
+    const upn = 'no.such.user@openaduc.test';
+    expect(backoff.check(REAL_CLIENT, upn)).toMatchObject({ locked: true });
+    expect(backoff.check('198.51.100.0', upn)).toEqual({ locked: false });
+  });
+
   it('audit rows record the real client address', async () => {
     await viaProxy('198.51.100.200').post('/api/auth/login', {
       directoryId: api.directoryId,
