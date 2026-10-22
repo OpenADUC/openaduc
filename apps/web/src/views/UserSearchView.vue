@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { runBulk } from '../design/lib/bulk.js';
+import { useBulkActions } from '../design/composables/useBulkActions.js';
 import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
@@ -385,81 +385,24 @@ function exportCsv(): void {
 }
 
 // ---- Bulk actions ---------------------------------------------------------
-type BulkAction = 'disable' | 'enable' | 'unlock';
-const pendingBulkAction = ref<BulkAction | null>(null);
-const bulkRunning = ref(false);
-const bulkProgress = ref<{
-  done: number;
-  total: number;
-  failures: { id: string; error: string }[];
-}>({
-  done: 0,
-  total: 0,
-  failures: [],
-});
 const canBulkDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
 const canBulkUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 
-// Errors from the last bulk run, per row, shown under the name until the
-// next run. The failed rows stay selected so the operator can retry.
-const bulkErrors = ref(new Map<string, string>());
-
-// Disabling locks people out, so it asks first; unlock and enable don't.
-const confirmDisableOpen = ref(false);
+const {
+  pendingBulkAction,
+  bulkRunning,
+  bulkProgress,
+  bulkErrors,
+  confirmDisableOpen,
+  requestBulk,
+  startBulk,
+} = useBulkActions({
+  selectedIds,
+  run: { disable: api.users.disable, enable: api.users.enable, unlock: api.users.unlock },
+  toast,
+  reload: load,
+});
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
-
-function requestBulk(action: BulkAction): void {
-  if (selectedIds.value.size === 0) return;
-  if (action === 'disable') confirmDisableOpen.value = true;
-  else void startBulk(action);
-}
-
-async function startBulk(action: BulkAction): Promise<void> {
-  if (selectedIds.value.size === 0) return;
-  confirmDisableOpen.value = false;
-  pendingBulkAction.value = action;
-  const ids = Array.from(selectedIds.value);
-  bulkRunning.value = true;
-  bulkErrors.value = new Map();
-  bulkProgress.value = { done: 0, total: ids.length, failures: [] };
-  try {
-    const call =
-      action === 'disable'
-        ? api.users.disable
-        : action === 'enable'
-          ? api.users.enable
-          : api.users.unlock;
-    const result = await runBulk(
-      ids,
-      (id) => call(id),
-      (done) => (bulkProgress.value = { ...bulkProgress.value, done }),
-    );
-    bulkProgress.value = { ...bulkProgress.value, failures: result.failures };
-    const succeeded = result.succeeded.length;
-    if (result.failures.length === 0) {
-      const verb = action === 'disable' ? 'Disabled' : action === 'enable' ? 'Enabled' : 'Unlocked';
-      toast.add({
-        severity: 'success',
-        summary: `${verb} ${succeeded} ${succeeded === 1 ? 'account' : 'accounts'}`,
-        life: 4000,
-      });
-      clearSelection();
-    } else {
-      toast.add({
-        severity: 'warn',
-        summary: `${succeeded} succeeded, ${result.failures.length} failed`,
-        detail: 'The failed accounts are still selected, with the reason under each name.',
-        life: 8000,
-      });
-      selectedIds.value = new Set(result.failures.map((f) => f.id));
-      bulkErrors.value = new Map(result.failures.map((f) => [f.id, f.error]));
-    }
-    await load();
-  } finally {
-    bulkRunning.value = false;
-    pendingBulkAction.value = null;
-  }
-}
 
 // Delete runs in its own dialog (preflight, typed confirmation, progress)
 // rather than through startBulk. Only disabled accounts can be deleted, so
