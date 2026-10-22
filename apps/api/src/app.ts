@@ -21,7 +21,7 @@ import { registerAuditRoutes } from './routes/audit.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerDirectoryRoutes } from './routes/directories.js';
 import { registerEntraIntegrationRoutes } from './routes/entraIntegrations.js';
-import { registerSettingsRoutes } from './routes/settings.js';
+import { registerRoleMappingRoutes, registerSettingsRoutes } from './routes/settings.js';
 import { registerGroupRoutes } from './routes/groups.js';
 import { registerComputerRoutes } from './routes/computers.js';
 import { registerDeletedComputerRoutes } from './routes/deletedComputers.js';
@@ -32,21 +32,19 @@ export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
   const app = Fastify({
     logger: buildLoggerOptions(env),
-    trustProxy: true,
+    // Trust only the configured proxy hops: anything further left in
+    // X-Forwarded-For was written by the client and would let it pick its
+    // own IP for rate limits, login backoff and the audit log.
+    // `hop` counts from the socket peer (0) outwards.
+    trustProxy: (_address: string, hop: number) => hop < env.TRUST_PROXY_HOPS,
     bodyLimit: 1024 * 1024,
   });
 
   await app.register(sensible);
-  // CSP starts out report-only so deployment-specific violations surface in
-  // logs without breaking the SPA. Flip to enforce by setting
-  // `reportOnly: false` here once the report stream is clean for one release.
-  // Note: the SPA itself is served from nginx in production — the canonical
-  // CSP for the app belongs there. This API CSP is a defense-in-depth layer
-  // for any HTML the API itself returns (currently: error pages from the
-  // helmet/sensible defaults).
+  // The API returns JSON, so its CSP allows nothing. The SPA's own policy
+  // is set by nginx (docker/nginx.conf), which serves it.
   await app.register(helmet, {
     contentSecurityPolicy: {
-      reportOnly: true,
       directives: {
         defaultSrc: ["'none'"],
         baseUri: ["'none'"],
@@ -89,6 +87,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerDirectoryRoutes(app);
   await registerEntraIntegrationRoutes(app);
   await registerSettingsRoutes(app);
+  await registerRoleMappingRoutes(app);
   await registerGroupRoutes(app);
   await registerComputerRoutes(app);
   await registerDeletedComputerRoutes(app);

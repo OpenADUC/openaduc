@@ -130,7 +130,7 @@ async function ensureSetupChecked(): Promise<void> {
   if (setupChecked) return;
   try {
     const status = await api.setup.status();
-    setupNeeded = !status.onboardingCompletedAt;
+    setupNeeded = !status.onboardingComplete;
   } catch {
     // If the status endpoint fails, assume setup is needed so the user lands
     // somewhere actionable rather than seeing a broken login page.

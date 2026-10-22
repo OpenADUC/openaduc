@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'kysely';
+import {
+  ROLE_MEMBERS_SHOWN,
+  ROLES,
+  rolesResponseSchema,
+  rolesUpdateRequestSchema,
+  type Role,
+  type RoleMapping,
+  type RolesResponse,
+} from '@openaduc/shared';
 import { z } from 'zod';
-import { BadRequest } from '../plugins/errorHandler.js';
+import { BadRequest, Conflict } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 
 // Settings exposed to the operator UI. Not every app_settings row is here —
@@ -157,6 +167,178 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       }
 
       return { ok: true, updated: validated.map((u) => u.key) };
+    },
+  });
+}
+
+// ---- Role mapping ----------------------------------------------------------
+//
+// Each OpenADUC role (admin, operator, auditor) is granted to the direct
+// members of one AD group, stored as authz.<role>_group_dn.
+
+const roleKey = (role: Role) => `authz.${role}_group_dn`;
+
+export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<void> {
+  async function currentMapping(): Promise<Record<Role, string | null>> {
+    const rows = await app.db
+      .selectFrom('app_settings')
+      .select(['key', 'value_json'])
+      .where(
+        'key',
+        'in',
+        ROLES.map((r) => roleKey(r)),
+      )
+      .execute();
+    const byKey = new Map(rows.map((r) => [r.key, r.value_json as string | null]));
+    return Object.fromEntries(ROLES.map((r) => [r, byKey.get(roleKey(r)) ?? null])) as Record<
+      Role,
+      string | null
+    >;
+  }
+
+  // Roles go to direct members only, so every count and check here
+  // ignores memberships that come through nested groups.
+  async function findGroup(providerId: number, dn: string) {
+    return app.db
+      .selectFrom('group_cache_records as g')
+      .select((eb) => [
+        'g.object_guid',
+        'g.name',
+        'g.distinguished_name',
+        eb
+          .selectFrom('user_group_memberships as m')
+          .select((m) => m.fn.countAll<string>().as('n'))
+          .whereRef('m.group_object_guid', '=', 'g.object_guid')
+          .whereRef('m.provider_id', '=', 'g.provider_id')
+          .where('m.direct', '=', true)
+          .as('member_count'),
+      ])
+      .where('g.provider_id', '=', providerId)
+      .where('g.deleted_at', 'is', null)
+      .where(sql<string>`lower(g.distinguished_name)`, '=', dn.toLowerCase())
+      .executeTakeFirst();
+  }
+
+  async function directMembers(providerId: number, groupGuid: string) {
+    const rows = await app.db
+      .selectFrom('user_group_memberships as m')
+      .innerJoin('user_cache_records as u', (j) =>
+        j
+          .onRef('u.object_guid', '=', 'm.user_object_guid')
+          .onRef('u.provider_id', '=', 'm.provider_id'),
+      )
+      .select(['u.object_guid', 'u.display_name', 'u.sam_account_name'])
+      .where('m.provider_id', '=', providerId)
+      .where('m.group_object_guid', '=', groupGuid)
+      .where('m.direct', '=', true)
+      .where('u.deleted_at', 'is', null)
+      .orderBy(sql`lower(coalesce(u.display_name, u.sam_account_name))`)
+      .limit(ROLE_MEMBERS_SHOWN)
+      .execute();
+    return rows.map((r) => ({
+      id: r.object_guid,
+      displayName: r.display_name,
+      samAccountName: r.sam_account_name ?? '',
+    }));
+  }
+
+  async function isDirectMember(providerId: number, groupGuid: string, userGuid: string) {
+    return !!(await app.db
+      .selectFrom('user_group_memberships')
+      .select('user_object_guid')
+      .where('provider_id', '=', providerId)
+      .where('group_object_guid', '=', groupGuid)
+      .where('user_object_guid', '=', userGuid)
+      .where('direct', '=', true)
+      .executeTakeFirst());
+  }
+
+  // ---- GET /api/settings/roles -------------------------------------------
+  app.get('/api/settings/roles', {
+    preHandler: app.requireCapability('configure:security'),
+    handler: async (req): Promise<RolesResponse> => {
+      const mapping = await currentMapping();
+      const providerId = req.actor!.session.directoryId;
+      const roles = {} as Record<Role, RoleMapping>;
+      for (const role of ROLES) {
+        const dn = mapping[role];
+        const group = dn ? await findGroup(providerId, dn) : undefined;
+        roles[role] = {
+          groupDn: dn,
+          groupName: group?.name ?? null,
+          memberCount: group ? Number(group.member_count ?? 0) : null,
+          members: group ? await directMembers(providerId, group.object_guid) : [],
+        };
+      }
+      return rolesResponseSchema.parse({ roles });
+    },
+  });
+
+  // ---- PUT /api/settings/roles -------------------------------------------
+  // Body: any of { admin, operator, auditor } as a group DN, or null to
+  // unassign. Takes effect at each operator's next sign-in or step-up.
+  app.put('/api/settings/roles', {
+    preHandler: [app.requireCapability('configure:security'), app.requireStepUp],
+    handler: async (req) => {
+      const body = rolesUpdateRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      const providerId = actor.session.directoryId;
+      const before = await currentMapping();
+      const after = { ...before };
+      for (const role of ROLES) {
+        const dn = body[role];
+        if (dn === undefined) continue;
+        if (dn !== null && !(await findGroup(providerId, dn))) {
+          throw BadRequest(`"${dn}" is not a group in this directory (or it hasn't synced yet)`);
+        }
+        after[role] = dn;
+      }
+
+      // Moving or clearing the admin role can lock the current admin out.
+      const newAdmin = after.admin;
+      if ((newAdmin ?? '').toLowerCase() !== (before.admin ?? '').toLowerCase()) {
+        const group = newAdmin ? await findGroup(providerId, newAdmin) : undefined;
+        const keepsAdmin = group
+          ? await isDirectMember(providerId, group.object_guid, actor.session.actorUserId)
+          : false;
+        if (!keepsAdmin && !body.confirmAdminChange) {
+          throw Conflict(
+            newAdmin
+              ? "You aren't a direct member of that group, so you'd lose admin rights at your next sign-in. Confirm to go ahead."
+              : 'With no admin group, nobody (you included) gets admin rights at their next sign-in. Confirm to go ahead.',
+          );
+        }
+      }
+
+      await app.db.transaction().execute(async (trx) => {
+        for (const role of ROLES) {
+          if (after[role] === before[role]) continue;
+          const change = {
+            value_json: JSON.stringify(after[role]),
+            updated_by_actor_id: actor.session.actorUserId,
+            updated_at: new Date(),
+          };
+          await trx
+            .insertInto('app_settings')
+            .values({ key: roleKey(role), ...change })
+            .onConflict((oc) => oc.column('key').doUpdateSet(change))
+            .execute();
+        }
+      });
+      for (const role of ROLES) app.services.settings.invalidate(roleKey(role));
+
+      await app.services.audit.recordEvent({
+        ...auditContextFromRequest(req),
+        action: 'settings.roles.update',
+        result: 'success',
+        actorAuthMethod: 'ad-password',
+        providerId,
+        targetType: 'config',
+        targetId: 'roles',
+        before,
+        after,
+      });
+      return { ok: true };
     },
   });
 }
