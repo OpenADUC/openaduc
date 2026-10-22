@@ -11,13 +11,17 @@ This document is a high-level summary. Implementation details are in [`apps/api/
 
 ## Authentication
 
-Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash, no local password store outside the recovery account.
+Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash and no local password store.
 
-The recovery account, created during the first-run wizard, exists so an operator can recover access if the AD link is broken (DC outage, expired service account, mis-configured group). It uses Argon2id-hashed credentials and is intended as a break-glass route only.
+Every failed sign-in gets the same answer, whatever AD said (unknown user, wrong password, locked, disabled, expired, or no OpenADUC role), and directory outages don't reveal hosts or error text. The specific reason is recorded in the audit log. Step-up failures follow the same rule.
+
+There is no local break-glass account yet: if every domain controller is unreachable, or no one is left in a role group, nobody can sign in until that's fixed in AD.
 
 ## Sessions
 
-Successful sign-in mints an `admin_sessions` row and a signed cookie. The session stores a **snapshot** of the operator's capabilities at sign-in — role changes do not take effect until the next login. This is deliberate: it makes sessions auditable and prevents a quietly-revoked role from leaving an active session with elevated rights.
+Successful sign-in mints an `admin_sessions` row and a signed cookie. The session stores a **snapshot** of the operator's capabilities, resolved from their AD group memberships at sign-in.
+
+Every step-up re-reads those memberships from the fresh bind and replaces the snapshot. An operator removed from a role group loses that role's capabilities at their next step-up, and one left with no role is signed out. Stepping up never extends the session's absolute expiry. The worst case for a removed operator is therefore: write access until their current elevated session expires (`STEP_UP_TTL_MINUTES`), and read access until the session itself ends (idle or absolute timeout below). To cut access immediately, disable the AD account: binds then fail, so they can't step up again.
 
 Two timeouts apply, both configurable:
 

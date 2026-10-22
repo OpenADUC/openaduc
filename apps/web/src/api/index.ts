@@ -18,6 +18,7 @@ import type {
   GroupPolicyListResponse,
   GroupSearchQuery,
   GroupSearchResponse,
+  LdapTlsMode,
   LoginRequest,
   MeResponse,
   OuContentsResponse,
@@ -75,7 +76,11 @@ export interface DirectorySummary {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: string;
+  tlsMode: LdapTlsMode;
+  /** Why the URLs don't fit the TLS mode (saved before that was checked), or null. */
+  transportProblem: string | null;
+  /** The DC's certificate isn't verified, so the connection can be intercepted. */
+  certificateCheckOff: boolean;
   tlsRejectUnauthorized: boolean | null;
   configured: boolean;
   // Sync service-account credentials — nullable when sync hasn't been
@@ -100,7 +105,7 @@ export interface DirectoryPatch {
   domain?: string;
   baseDn?: string;
   ldapUrls?: string[];
-  tlsMode?: 'ldaps' | 'starttls' | 'plain';
+  tlsMode?: LdapTlsMode;
   tlsRejectUnauthorized?: boolean;
   operationTimeoutMs?: number;
   // Sync service-account credentials. `syncBindUpn = null` clears the
@@ -227,7 +232,7 @@ export interface SetupExistingDirectory {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: string;
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized: boolean | null;
   syncBindUpn: string | null;
 }
@@ -288,7 +293,7 @@ export interface DirectoryAdminBody {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: 'ldaps' | 'starttls' | 'plain';
+  tlsMode: LdapTlsMode;
   adminUsername: string;
   adminPassword: string;
   tlsRejectUnauthorized?: boolean;
