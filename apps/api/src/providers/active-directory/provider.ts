@@ -2075,8 +2075,8 @@ function classifyBindError(err: unknown): AuthResult {
  * below for the strict version used by restoreDeletedUser.
  */
 function escapeRdnValue(value: string): string {
-  // eslint-disable-next-line no-control-regex -- NUL is intentionally escaped per RFC 4514 §2.4
-  return value.replace(/[,+<>;"=\\ ]/g, (m) => `\\${m}`);
+  // NUL (written as \0, never a raw byte) is intentionally escaped per RFC 4514 §2.4
+  return value.replace(/[,+<>;"=\\\0]/g, (m) => `\\${m}`);
 }
 
 /**

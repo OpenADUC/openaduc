@@ -41,6 +41,14 @@ export function reseedDirectory(): void {
   if (r.status !== 0) throw new Error(`dc:seed failed:\n${r.stdout}\n${r.stderr}`);
 }
 
+/** Run samba-tool inside the dev DC (e.g. to change domain password policy). */
+export function sambaTool(...args: string[]): void {
+  const r = spawnSync('docker', ['exec', 'openaduc-dc-dc-1', 'samba-tool', ...args], {
+    encoding: 'utf8',
+  });
+  if (r.status !== 0) throw new Error(`samba-tool ${args.join(' ')} failed:\n${r.stderr}`);
+}
+
 /** Read a user straight from the DC as the service account, bypassing the API. */
 export async function readDirectoryUser(
   samAccountName: string,
@@ -98,6 +106,46 @@ export async function setGroupMember(
       )
         throw err;
     }
+  } finally {
+    await client.unbind();
+  }
+}
+
+/** Run `fn` with an LDAP client bound as the domain Administrator. */
+export async function asAdministrator<T>(fn: (client: LdapClient) => Promise<T>): Promise<T> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    return await fn(client);
+  } finally {
+    await client.unbind();
+  }
+}
+
+/** Replace one attribute on a user, as the domain Administrator. */
+export async function setUserAttribute(
+  samAccountName: string,
+  attribute: string,
+  values: string[],
+): Promise<void> {
+  const client = new LdapClient({ url: DC.ldapsUrl, tlsOptions: { ca: readFileSync(DC.caPath) } });
+  try {
+    await client.bind(`Administrator@${DC.domain}`, DC.administratorPassword);
+    const { searchEntries } = await client.search(DC.baseDn, {
+      scope: 'sub',
+      filter: `(sAMAccountName=${samAccountName})`,
+      attributes: ['distinguishedName'],
+    });
+    const dn = searchEntries[0]?.dn;
+    if (!dn) throw new Error(`no such user: ${samAccountName}`);
+    const { Change, Attribute } = await import('ldapts');
+    await client.modify(
+      dn,
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type: attribute, values }),
+      }),
+    );
   } finally {
     await client.unbind();
   }
