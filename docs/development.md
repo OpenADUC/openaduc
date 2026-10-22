@@ -70,6 +70,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 | Apply pending migrations                 | `pnpm migrate:latest`              |
 | Roll back the last migration batch       | `pnpm migrate:rollback`            |
 | Generate a new migration                 | `pnpm migrate:make <name>`         |
+| Run everything CI runs                   | `pnpm check`                       |
 | Type-check everything                    | `pnpm typecheck`                   |
 | Run unit tests                           | `pnpm test`                        |
 | Run route integration tests (Docker)     | `pnpm test:integration`            |
@@ -107,7 +108,7 @@ group includes `typescript-eslint` so the parser and lint rules update together.
 
 1. Branch from `main` (`git checkout -b feat/short-description`).
 2. Make your change. Keep commits reviewable; rebase to clean up before opening the PR.
-3. Run `pnpm typecheck && pnpm lint && pnpm test` locally.
+3. Run `pnpm check` locally. It runs what CI runs: format check, the control-character check, typecheck, lint, tests and build. The pre-commit hook formats staged files with Prettier, so formatting rarely fails here.
 4. Open the PR against `main`. The template asks for a summary, screenshots if UI-touching, and a test plan.
 5. CI runs the same checks. PRs need a green build and one approval before merge.
 

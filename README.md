@@ -98,6 +98,8 @@ OpenADUC sits in front of Active Directory and writes to it on behalf of operato
 - [Cloudflare Access](https://www.cloudflare.com/zero-trust/products/access/), [Pomerium](https://www.pomerium.com/), or [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) backed by an MFA-capable IdP.
 - [Microsoft Entra Application Proxy](https://learn.microsoft.com/entra/identity/app-proxy/) with Conditional Access — a natural fit if you already run Entra ID.
 
+With a proxy in front of the bundled web container, set `TRUST_PROXY_HOPS=2` so sign-in rate limits and the audit log see the real client address (see [configuration](docs/configuration.md)).
+
 This is defence in depth, not SSO replacement: the proxy enforces MFA at the network boundary, and operators then sign in to OpenADUC with their AD credentials. OpenADUC does not (yet) consume proxy-asserted identity headers.
 
 ### What OpenADUC does and does not provide
