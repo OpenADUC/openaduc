@@ -44,6 +44,47 @@ describe('first-run setup', () => {
   });
 });
 
+describe('first-run setup with an admin group already configured', () => {
+  let api: TestApi;
+
+  beforeAll(async () => {
+    api = await startApi();
+    // Any non-default group will do; Operators keeps oa.admin out of it.
+    await api.app.db
+      .updateTable('app_settings')
+      .set({ value_json: JSON.stringify(DC.groups.operators) })
+      .where('key', '=', 'authz.admin_group_dn')
+      .execute();
+    api.app.services.settings.invalidate('authz.admin_group_dn');
+  });
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const adminGroupSetting = async () =>
+    (
+      await api.app.db
+        .selectFrom('app_settings')
+        .select('value_json')
+        .where('key', '=', 'authz.admin_group_dn')
+        .executeTakeFirstOrThrow()
+    ).value_json;
+
+  it('refuses a Domain Admin outside that group, and names the group', async () => {
+    const res = await api.client().post('/api/setup/initialize', initializeBody('oa.admin'));
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain('OpenADUC Operators');
+  });
+
+  it('accepts a member of that group and keeps the setting', async () => {
+    const res = await api.client().post('/api/setup/initialize', initializeBody('oa.operator'));
+
+    expect(res.statusCode).toBe(200);
+    expect(await adminGroupSetting()).toBe(DC.groups.operators);
+  });
+});
+
 describe('after setup', () => {
   let api: TestApi;
 
@@ -97,6 +138,14 @@ describe('the later setup steps', () => {
       password: DC.password,
     });
     expect(res.statusCode).toBe(403);
+  });
+
+  it('do not show the directory to a signed-in operator who is not an admin', async () => {
+    const operator = api.client();
+    await operator.signIn(api, 'oa.operator');
+
+    const res = await operator.get('/api/setup/status');
+    expect(res.json<{ existingDirectory: unknown }>().existingDirectory).toBeNull();
   });
 
   it('reject cross-site requests that ride the admin’s session', async () => {

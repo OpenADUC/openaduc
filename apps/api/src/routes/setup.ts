@@ -153,9 +153,14 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
     const directories = await app.services.directoryConfig.listAll();
     const onboardingCompletedAt = await readOnboardingCompletedAt();
     // The directory's details are only for the admin finishing setup: never
-    // for anonymous callers, and not at all once setup is done.
+    // for anyone else, and not at all once setup is done.
+    const isSetupAdmin =
+      !!req.actor &&
+      app.services.authorization.has(req.actor.session.capabilities, 'configure:directory');
     const firstConfigured =
-      !onboardingCompletedAt && req.actor ? (directories.find((d) => d.configured) ?? null) : null;
+      !onboardingCompletedAt && isSetupAdmin
+        ? (directories.find((d) => d.configured) ?? null)
+        : null;
     return {
       configured: directories.some((d) => d.configured),
       hasServiceAccount: firstConfigured
@@ -238,17 +243,17 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // Setup grants full admin, so it needs proof of admin authority in AD:
-      // membership of the admin group (BOOTSTRAP_ADMIN_GROUP_DN, else
-      // Domain Admins). Checked before anything is saved.
+      // direct membership of the admin group. That is the group already
+      // configured (setting, else BOOTSTRAP_ADMIN_GROUP_DN) or, when none is,
+      // Domain Admins. Checked before anything is saved.
       const groupDns = auth.groupDns ?? auth.user.memberOfDns;
       const domainAdminsDn = `CN=Domain Admins,CN=Users,${domainRootFromBaseDn(body.baseDn)}`;
-      const qualifiesViaBootstrap = (
-        await app.services.authorization.resolveCapabilities(groupDns)
-      ).includes('configure:directory');
-      const inDomainAdmins = groupDns.some(
-        (dn) => dn.toLowerCase() === domainAdminsDn.toLowerCase(),
-      );
-      if (!qualifiesViaBootstrap && !inDomainAdmins) {
+      const configuredAdminGroup =
+        (await app.services.settings.get<string | null>('authz.admin_group_dn', null)) ||
+        env.BOOTSTRAP_ADMIN_GROUP_DN ||
+        null;
+      const adminGroup = configuredAdminGroup ?? domainAdminsDn;
+      if (!groupDns.some((dn) => dn.toLowerCase() === adminGroup.toLowerCase())) {
         await app.services.audit
           .recordEvent({
             ...baseAudit,
@@ -259,9 +264,8 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             metadata: { domain: body.domain, adminUsername: body.adminUsername },
           })
           .catch(() => undefined);
-        const group = env.BOOTSTRAP_ADMIN_GROUP_DN || domainAdminsDn;
         throw Forbidden(
-          `To finish setup, sign in with an account that is a direct member of ${group}. ` +
+          `To finish setup, sign in with an account that is a direct member of ${adminGroup}. ` +
             `That group's members become OpenADUC administrators.`,
         );
       }
@@ -275,7 +279,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           );
         }
         const row = await app.services.directoryConfig.create(toProviderInput(body));
-        if (!qualifiesViaBootstrap) {
+        if (!configuredAdminGroup) {
           await app.db
             .updateTable('app_settings')
             .set({ value_json: JSON.stringify(domainAdminsDn) })
