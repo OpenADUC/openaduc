@@ -39,6 +39,14 @@ export function reseedDirectory(): void {
   if (r.status !== 0) throw new Error(`dc:seed failed:\n${r.stdout}\n${r.stderr}`);
 }
 
+/** Run samba-tool inside the dev DC (e.g. to change domain password policy). */
+export function sambaTool(...args: string[]): void {
+  const r = spawnSync('docker', ['exec', 'openaduc-dc-dc-1', 'samba-tool', ...args], {
+    encoding: 'utf8',
+  });
+  if (r.status !== 0) throw new Error(`samba-tool ${args.join(' ')} failed:\n${r.stderr}`);
+}
+
 /** Read a user straight from the DC as the service account, bypassing the API. */
 export async function readDirectoryUser(
   samAccountName: string,
