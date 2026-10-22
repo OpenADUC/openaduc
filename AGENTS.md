@@ -2,6 +2,10 @@ OpenADUC: a self-hosted web replacement for Active Directory Users and Computers
 
 Stage: live
 
+## Checks
+
+Run `pnpm check` before pushing; it runs everything CI runs. Git hooks (installed by `pnpm install`) format staged files and reject `Co-Authored-By: Claude` trailers: don't add AI co-author trailers to commits.
+
 ## Agent skills
 
 ### Issue tracker
