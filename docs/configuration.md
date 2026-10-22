@@ -41,10 +41,10 @@ These can be overridden per-deployment via the **app_settings** table (settings 
 
 ## Database
 
-| Variable            | Default | Description                                                                          |
-| ------------------- | ------- | ------------------------------------------------------------------------------------ |
-| `DATABASE_POOL_MIN` | `2`     | Minimum idle Postgres connections.                                                   |
-| `DATABASE_POOL_MAX` | `10`    | Maximum Postgres connections. Bump if you see pool exhaustion under heavy sync load. |
+| Variable            | Default | Description                                                                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_POOL_MIN` | `2`     | Minimum idle Postgres connections.                                                                                                                      |
+| `DATABASE_POOL_MAX` | `10`    | Maximum Postgres connections for queries. Sync tasks hold one more each, from a separate pool of the same size, so a process can open up to twice this. |
 
 ## Active Directory connection
 

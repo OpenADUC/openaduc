@@ -66,6 +66,50 @@ describe('two processes', () => {
   });
 });
 
+describe('two runs in one process', () => {
+  let api: TestApi;
+
+  beforeAll(async () => {
+    api = await startApi();
+    await configureDirectory(api);
+  });
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  it('the second is turned away as already running here', async () => {
+    const [a, b] = await Promise.all([
+      api.app.services.sync.runOnce(api.directoryId!, 'users.delta'),
+      api.app.services.sync.runOnce(api.directoryId!, 'groups.delta'),
+    ]);
+    const refused = [a, b].filter((r) => !r.ok);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.error).toMatch(/another task is running/);
+  });
+});
+
+describe('a database pool with one connection', () => {
+  let api: TestApi;
+
+  beforeAll(async () => {
+    // The directory lock is held for the whole task; if it came out of the
+    // pool the task's own queries use, N tasks on an N-connection pool
+    // would wait on each other forever. One connection is the smallest N.
+    process.env.DATABASE_POOL_MAX = '1';
+    api = await startApi();
+  });
+  afterAll(async () => {
+    delete process.env.DATABASE_POOL_MAX;
+    await api?.close();
+  });
+
+  it('still runs sync tasks', { timeout: 30_000 }, async () => {
+    await configureDirectory(api);
+    const result = await api.app.services.sync.runOnce(api.directoryId!, 'users.delta');
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('stuck runs', () => {
   let api: TestApi;
 
