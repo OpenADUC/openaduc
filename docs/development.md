@@ -6,8 +6,8 @@ This guide is for working on OpenADUC itself — running the stack from source, 
 
 - **Node.js 22.18 or newer in the Node 22 release line** (`.nvmrc` selects Node 22; `nvm install && nvm use` installs and selects its latest patch). graphile-worker 0.18 and the Babel 8 parser that vue-router 5.4 pulls in require at least 22.18, and `.npmrc` sets `engine-strict`, so older patches fail `pnpm install`.
 - **pnpm 10** (`corepack enable && corepack prepare pnpm@10 --activate` is the easy path).
-- **Docker** with Compose v2 — used for Postgres and (optionally) a local Samba AD-DC container.
-- **A directory to talk to.** Either a real test AD (preferred), or the bundled dev Samba container (see below). Pointing dev at a production DC is a bad idea.
+- **Docker** with Compose v2, for Postgres and the development Samba AD DC.
+- **A directory to talk to.** The bundled Samba DC (`pnpm dc:up`, see below) or a real test AD. Pointing dev at a production DC is a bad idea.
 
 ## First-time setup
 
@@ -37,22 +37,22 @@ Open `http://localhost:5173` and step through the first-run wizard.
 
 You need an LDAPS-reachable directory to develop against. Two options:
 
-**Real test AD (preferred).** A throwaway Windows Server VM running AD DS, on a subnet your dev machine can route to. This is the most faithful target. Point the setup wizard at its LDAPS URL and base DN.
+**Bundled Samba AD DC (quickest).** `pnpm dc:up` starts a seeded Samba domain controller on `ldaps://localhost:10636` with operators for each role, a disabled user, a locked-out user, nested groups and computers. [`dev/samba-dc/README.md`](../dev/samba-dc/README.md) lists the fixtures, their passwords and how to point the setup wizard at it. `pnpm dc:down` deletes it.
 
-**Containerized Samba AD-DC.** `docker-compose.dev.yml` ships with a `samba-ad-dc` service block, **commented out**. Getting a Samba domain controller stable in a container (image choice, env vars, TLS bootstrap, hostname resolution) is image-specific and finicky enough that we don't ship a one-click recipe. Uncomment the block, pick a samba-domain image you trust, and adapt — or use a real AD VM.
+**Real test AD (most faithful).** A throwaway Windows Server VM running AD DS, on a subnet your dev machine can route to. Samba covers most of what OpenADUC touches, but check AD-specific behaviour (LAPS, Exchange attributes, the Recycle Bin, fine-grained password policies) against real AD. Point the setup wizard at its LDAPS URL and base DN.
 
-When you have a directory reachable, configure these in `.env` before first boot:
+To configure the directory from `.env` instead of the wizard, set these before first boot:
 
 ```env
-AD_LDAP_URLS=ldaps://your-dc.example.local:636
-AD_DOMAIN=example.local
-AD_BASE_DN=DC=example,DC=local
-AD_SERVICE_ACCOUNT_UPN=openaduc-sync@example.local
-AD_SERVICE_ACCOUNT_PASSWORD=<the SA password>
-AD_TLS_REJECT_UNAUTHORIZED=0   # only for self-signed dev certs
+AD_LDAP_URLS=ldaps://localhost:10636
+AD_DOMAIN=openaduc.test
+AD_BASE_DN=DC=openaduc,DC=test
+AD_SERVICE_ACCOUNT_UPN=svc-openaduc@openaduc.test
+AD_SERVICE_ACCOUNT_PASSWORD=OpenADUC-dev-User1
+AD_TLS_CA_PATH=/absolute/path/to/dev/samba-dc/.generated/ca.pem
 ```
 
-`AD_TLS_REJECT_UNAUTHORIZED=0` is acceptable for a self-signed local DC; **never** set it for production.
+For a real AD, use its LDAPS URL, base DN and service account, and its CA. `AD_TLS_REJECT_UNAUTHORIZED=0` skips certificate checks; avoid it even in development now that the bundled DC ships a CA, and **never** set it in production.
 
 To bring up the dev stack with hot reload and exposed Postgres:
 
@@ -82,7 +82,7 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 - **Commit messages** follow [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`. Scopes are loose; use them when they help.
 - **Comments.** Default to writing none. Add one only when the _why_ is non-obvious — a hidden constraint, a workaround, a subtle invariant. Don't restate what the code already says.
-- **Tests.** Vitest for unit tests, Playwright for end-to-end. New API routes need at least a happy-path integration test that hits the real Postgres.
+- **Tests.** Vitest unit tests sit next to the code they cover (`*.test.ts`). There are no route integration or browser end-to-end tests yet; exercise route changes against the bundled Samba DC.
 - **Schemas.** Cross-app types live in `packages/shared/src/schemas/` as Zod. The API validates request and response bodies against them; the SPA imports the inferred types.
 - **Migrations are forever.** Once a migration is on `main`, never edit it. Write a new one.
 

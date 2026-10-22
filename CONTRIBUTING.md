@@ -27,7 +27,7 @@ Full instructions, including local Samba AD setup and per-package test commands,
 
 1. **Branch from `main`.** Use a short descriptive branch name (`fix/locked-count-refresh`, `feat/bulk-disable`).
 2. **Keep PRs focused.** One logical change per PR. If you're touching unrelated nits along the way, split them out.
-3. **Add or update tests** for behavior you change. The API uses Vitest; the web app uses Vitest + Playwright. Untested behavior changes will be asked for tests on review.
+3. **Add or update tests** for behavior you change. Both apps use Vitest. Untested behavior changes will be asked for tests on review.
 4. **Run the checks locally before pushing:**
    ```bash
    pnpm check

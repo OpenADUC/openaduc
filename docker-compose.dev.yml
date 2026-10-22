@@ -5,9 +5,8 @@
 #     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #
 # Adds source mounts (so api/web hot-reload on save) and exposes the
-# Postgres port for direct psql access. The samba-ad-dc service is
-# commented out; uncomment if you want a throwaway local AD to develop
-# against (see docs/development.md).
+# Postgres port for direct psql access. For a local directory, run
+# `pnpm dc:up` (see dev/samba-dc/README.md).
 
 services:
   postgres:
@@ -31,29 +30,3 @@ services:
       - ./packages/shared:/app/packages/shared
       - /app/node_modules
       - /app/apps/web/node_modules
-
-  # Local Samba AD-DC for development. NOT hardened, NOT for production.
-  # Pinning a known-working domain image is fiddly (image, env vars, TLS
-  # bootstrap, hostname resolution all matter). Uncomment and adjust to
-  # your preferred image once you have one working in your environment.
-  #
-  # samba-ad-dc:
-  #   image: nowsci/samba-domain:latest
-  #   hostname: dc1
-  #   environment:
-  #     DOMAIN: EXAMPLE.COM
-  #     DOMAINPASS: 'ChangeMe!Strong1'
-  #     INSECURELDAP: 'false'
-  #   ports:
-  #     - '389:389'
-  #     - '636:636'
-  #   cap_add:
-  #     - NET_ADMIN
-  #     - SYS_NICE
-  #   volumes:
-  #     - samba-data:/var/lib/samba
-  #     - samba-config:/etc/samba/external
-
-# volumes:
-#   samba-data:
-#   samba-config:

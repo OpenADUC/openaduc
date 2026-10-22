@@ -8,8 +8,8 @@
 # Each service uses an image tag with a local-build fallback, so the
 # stack works whether you pull pre-built images or build from source.
 #
-# For local development with hot reload and a Samba AD-DC, also include
-# the dev overlay:
+# For local development with hot reload, also include the dev overlay
+# (`pnpm dc:up` starts a development Samba AD DC separately):
 #
 #     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 #

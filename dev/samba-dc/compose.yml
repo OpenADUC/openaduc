@@ -1,0 +1,33 @@
+# Development-only Samba AD DC. Started and seeded by `pnpm dc:up`; see
+# README.md in this directory. Bound to 127.0.0.1 because the fixture
+# passwords are public.
+name: openaduc-dc
+
+services:
+  dc:
+    build: .
+    image: openaduc/dev-samba-dc
+    hostname: dc1
+    domainname: openaduc.test
+    ports:
+      - '127.0.0.1:${DC_LDAP_PORT:-10389}:389'
+      - '127.0.0.1:${DC_LDAPS_PORT:-10636}:636'
+    volumes:
+      - samba-data:/var/lib/samba
+      - ./.generated:/export
+      # Mounted rather than baked in, so `pnpm dc:seed` runs the current
+      # fixtures without an image rebuild.
+      - ./seed.sh:/usr/local/bin/seed.sh:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'LDAPTLS_CACERT=/export/ca.pem ldapsearch -H ldaps://localhost -x -b "" -s base defaultNamingContext >/dev/null',
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+volumes:
+  samba-data:

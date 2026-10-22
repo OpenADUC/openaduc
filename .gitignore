@@ -53,3 +53,6 @@ docs/superpowers/
 *.claude
 *.vscode
 
+
+# Dev Samba DC: generated CA certificate
+dev/samba-dc/.generated/
