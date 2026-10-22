@@ -12,7 +12,7 @@ import {
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 
-const idParamSchema = z.object({ id: z.string().uuid() });
+const idParamSchema = z.object({ id: z.guid() });
 
 /**
  * Group Policy routes — read-only, cache-backed.

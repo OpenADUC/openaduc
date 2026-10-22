@@ -12,7 +12,7 @@ import {
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 
-const idParamSchema = z.object({ id: z.string().uuid() });
+const idParamSchema = z.object({ id: z.guid() });
 
 export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/groups (cache search) ----------------------------------

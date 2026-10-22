@@ -172,7 +172,7 @@ export const userDetailSchema = userSummarySchema.extend({
   // (objectGUID, photos, etc.) stripped at the provider layer. Each value is
   // a string or string[] in practice, but the schema is loose because AD
   // doesn't constrain the set we'll see across customer directories.
-  rawAttributes: z.record(z.unknown()),
+  rawAttributes: z.record(z.string(), z.unknown()),
 });
 export type UserDetail = z.infer<typeof userDetailSchema>;
 
@@ -200,7 +200,7 @@ export const userSearchQuerySchema = z.object({
   // Filter to direct members of this group (objectGUID). Multiple instances
   // of the param mean "AND" — must be in every listed group.
   inGroupId: z
-    .union([z.string().uuid(), z.array(z.string().uuid())])
+    .union([z.guid(), z.array(z.guid())])
     .optional()
     .transform((v) => (v === undefined ? undefined : Array.isArray(v) ? v : [v])),
   // Case-insensitive department match. Exact equality, not substring — the
@@ -209,7 +209,7 @@ export const userSearchQuerySchema = z.object({
   department: z.string().max(256).optional(),
   // Filter by manager (objectGUID of the manager user). The cache stores
   // manager_dn but the route resolves the GUID → DN before querying.
-  managerId: z.string().uuid().optional(),
+  managerId: z.guid().optional(),
   page: z.coerce.number().int().min(1).default(1),
   // Cap raised to 50_000 so the web client can load the full dataset in
   // one request and filter/sort entirely in the browser. Mirrors the
@@ -263,7 +263,7 @@ export const resetPasswordRequestSchema = z.object({
 export type ResetPasswordRequest = z.infer<typeof resetPasswordRequestSchema>;
 
 export const groupMembershipChangeSchema = z.object({
-  groupId: z.string().uuid(),
+  groupId: z.guid(),
 });
 export type GroupMembershipChangeRequest = z.infer<typeof groupMembershipChangeSchema>;
 

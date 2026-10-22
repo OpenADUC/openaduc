@@ -80,7 +80,7 @@ export type SignInEventsResponse = z.infer<typeof signInEventsResponseSchema>;
 // authenticationDetails with timestamps and step requirements, etc.).
 export const signInEventDetailSchema = signInEventSchema.extend({
   /** Full Graph payload of fields not promoted to columns. */
-  detail: z.record(z.unknown()),
+  detail: z.record(z.string(), z.unknown()),
   fetchedAt: z.string(),
 });
 export type SignInEventDetail = z.infer<typeof signInEventDetailSchema>;

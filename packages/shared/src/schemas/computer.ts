@@ -89,7 +89,7 @@ export const computerDetailSchema = computerSummarySchema.extend({
     cachedAt: z.string().nullable(),
     isStale: z.boolean(),
   }),
-  rawAttributes: z.record(z.unknown()),
+  rawAttributes: z.record(z.string(), z.unknown()),
 });
 export type ComputerDetail = z.infer<typeof computerDetailSchema>;
 
@@ -124,6 +124,6 @@ export const deletedComputerSearchResponseSchema = z.object({
 export type DeletedComputerSearchResponse = z.infer<typeof deletedComputerSearchResponseSchema>;
 
 export const deletedComputerDetailSchema = deletedComputerSummarySchema.extend({
-  rawAttributes: z.record(z.unknown()),
+  rawAttributes: z.record(z.string(), z.unknown()),
 });
 export type DeletedComputerDetail = z.infer<typeof deletedComputerDetailSchema>;

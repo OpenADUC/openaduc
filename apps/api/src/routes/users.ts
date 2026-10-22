@@ -17,7 +17,7 @@ import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import type { DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 
-const idParamSchema = z.object({ id: z.string().uuid() });
+const idParamSchema = z.object({ id: z.guid() });
 
 // ---- CSV helpers --------------------------------------------------------
 //

@@ -33,7 +33,7 @@ const envSchema = z.object({
 
   API_HOST: z.string().default('0.0.0.0'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  API_CORS_ORIGIN: z.string().transform(csv).default('http://localhost:5173'),
+  API_CORS_ORIGIN: z.string().transform(csv).prefault('http://localhost:5173'),
 
   SESSION_COOKIE_SECRET: z.string().min(32),
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(1).default(60),

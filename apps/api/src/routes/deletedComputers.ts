@@ -27,7 +27,7 @@ import {
 import { StepUpBindFailedError, type WriteContext } from '../providers/types.js';
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 
-const guidParamSchema = z.object({ guid: z.string().uuid() });
+const guidParamSchema = z.object({ guid: z.guid() });
 
 function ctxFromReq(req: FastifyRequest): WriteContext {
   const actor = req.actor!;
