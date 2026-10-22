@@ -32,7 +32,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
   const app = Fastify({
     logger: buildLoggerOptions(env),
-    trustProxy: true,
+    // Trust only the configured proxy hops: anything further left in
+    // X-Forwarded-For was written by the client and would let it pick its
+    // own IP for rate limits, login backoff and the audit log.
+    // `hop` counts from the socket peer (0) outwards.
+    trustProxy: (_address: string, hop: number) => hop < env.TRUST_PROXY_HOPS,
     bodyLimit: 1024 * 1024,
   });
 
