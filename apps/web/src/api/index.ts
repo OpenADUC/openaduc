@@ -34,8 +34,11 @@ import type {
   SignInEventDetail,
   SignInEventsResponse,
   StepUpRequest,
+  UserDeletePreflightResponse,
+  UserDeleteRequest,
   UserDetail,
   UserMoveRequest,
+  UserRenameRequest,
   UserSearchQuery,
   UserSearchResponse,
   UserUpdateRequest,
@@ -438,6 +441,27 @@ export const api = {
     ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/move`, {
         method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    rename(
+      id: string,
+      body: UserRenameRequest,
+    ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/rename`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    deletePreflight(ids: string[]): Promise<UserDeletePreflightResponse> {
+      return apiFetch('/users/delete-preflight', {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+    },
+    remove(id: string, body: UserDeleteRequest): Promise<{ ok: boolean; treeDelete: boolean }> {
+      return apiFetch(`/users/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
         body: JSON.stringify(body),
       });
     },

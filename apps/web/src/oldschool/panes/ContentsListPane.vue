@@ -265,14 +265,24 @@ function userItems(r: Row): CtxItem[] {
         store.openDialog({ kind: 'move', objectKind: 'user', id: r.id, label: r.name }),
     },
     { kind: 'separator' },
-    {
-      label: 'Delete',
-      disabled: true,
-    },
-    {
-      label: 'Rename',
-      disabled: true,
-    },
+    // Delete is only offered for disabled accounts, which is also what the
+    // server enforces.
+    auth.hasCapability('write:user.delete') && r.disabled
+      ? {
+          label: 'Delete',
+          onSelect: () =>
+            auth.requireEdit(
+              () => store.openDialog({ kind: 'delete-user', id: r.id, label: r.name }),
+              'Deleting a user requires step-up authentication.',
+            ),
+        }
+      : { label: 'Delete', disabled: true },
+    auth.hasCapability('write:user.rename')
+      ? {
+          label: 'Rename',
+          onSelect: () => store.openDialog({ kind: 'rename-user', id: r.id }),
+        }
+      : { label: 'Rename', disabled: true },
     { kind: 'separator' },
     {
       label: 'Properties',

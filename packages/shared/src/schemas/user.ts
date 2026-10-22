@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import { recycleBinStatusSchema } from './deletedUser.js';
 
 // `z.coerce.boolean()` calls JS `Boolean(v)` which returns true for any
 // non-empty string — so `?enabled=false` would coerce to `true` and silently
@@ -319,6 +320,111 @@ export const userUpdateRequestSchema = z.object({
     .refine((p) => Object.keys(p).length > 0, { message: 'patch must contain at least one field' }),
 });
 export type UserUpdateRequest = z.infer<typeof userUpdateRequestSchema>;
+
+// ---- Rename ------------------------------------------------------------
+//
+// A rename touches the identity attributes the general attribute PATCH
+// deliberately leaves out: the RDN (cn, which AD mirrors into `name`),
+// sAMAccountName, userPrincipalName, and the primary SMTP address. They get
+// their own endpoint and capability because they change how the person
+// signs in and where mail is delivered, and because cn needs a modifyDN
+// rather than a modify.
+
+// AD's rules for the pre-Windows 2000 logon name: at most 20 characters,
+// none of " / \ [ ] : ; | = , + * ? < > @, not only dots and spaces, and no
+// trailing dot.
+const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
+export const samAccountNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(20)
+  .refine((v) => !SAM_FORBIDDEN.test(v), {
+    message: 'cannot contain " / \\ [ ] : ; | = , + * ? < > @',
+  })
+  .refine((v) => !/^[. ]+$/.test(v), { message: 'cannot be only dots and spaces' })
+  .refine((v) => !v.endsWith('.'), { message: 'cannot end with a dot' });
+
+export const userPrincipalNameSchema = z
+  .string()
+  .trim()
+  .max(256)
+  .regex(/^[^\s@]+@[^\s@]+$/, { message: 'must look like name@suffix' });
+
+export const userRenameRequestSchema = z
+  .object({
+    givenName: z.string().trim().max(64).nullable().optional(),
+    surname: z.string().trim().max(64).nullable().optional(),
+    displayName: z.string().trim().min(1).max(256).optional(),
+    // The RDN value. AD caps cn at 64 characters.
+    cn: z.string().trim().min(1).max(64).optional(),
+    samAccountName: samAccountNameSchema.optional(),
+    userPrincipalName: userPrincipalNameSchema.optional(),
+    email: z.string().trim().email().max(256).nullable().optional(),
+    // Only consulted when `email` changes on an account that already has
+    // proxyAddresses: the new address becomes the primary SMTP and the old
+    // primary is demoted to an alias (true) or dropped (false). Accounts
+    // without proxyAddresses only get `mail` updated.
+    keepOldEmailAsAlias: z.boolean().default(true),
+  })
+  .strict()
+  .refine((r) => Object.keys(r).some((k) => k !== 'keepOldEmailAsAlias'), {
+    message: 'rename must change at least one field',
+  });
+export type UserRenameRequest = z.input<typeof userRenameRequestSchema>;
+
+// ---- Delete ------------------------------------------------------------
+//
+// Only disabled accounts can be deleted, and never AD's own accounts. The
+// server re-checks both against the live entry immediately before the
+// delete, so a stale list in the browser can't delete someone who was
+// re-enabled in the meantime.
+
+export const userDeleteRequestSchema = z
+  .object({
+    // Must match the account's current sAMAccountName (case-insensitive).
+    // Makes every delete name its target explicitly, so a wrong id in the
+    // URL fails instead of deleting the wrong person.
+    confirmSamAccountName: z.string().min(1).max(256),
+  })
+  .strict();
+export type UserDeleteRequest = z.infer<typeof userDeleteRequestSchema>;
+
+export const userDeleteBlockReasonSchema = z.enum([
+  // Still enabled — disable first.
+  'enabled',
+  // isCriticalSystemObject=TRUE (Guest, krbtgt, DefaultAccount, ...).
+  'critical_system_object',
+  // Well-known RID below 1000 — the accounts AD creates for itself.
+  'builtin_account',
+  // Not in the cache (deleted elsewhere, or the id is wrong).
+  'not_found',
+]);
+export type UserDeleteBlockReason = z.infer<typeof userDeleteBlockReasonSchema>;
+
+export const userDeletePreflightRequestSchema = z
+  .object({ ids: z.array(z.guid()).min(1).max(1000) })
+  .strict();
+export type UserDeletePreflightRequest = z.infer<typeof userDeletePreflightRequestSchema>;
+
+export const userDeletePreflightResponseSchema = z.object({
+  // Null when the operator's bind can't read the Optional Features
+  // container; the UI then says restore may not be possible.
+  recycleBin: recycleBinStatusSchema.nullable(),
+  users: z.array(
+    z.object({
+      id: z.string(),
+      samAccountName: z.string().nullable(),
+      displayName: z.string().nullable(),
+      distinguishedName: z.string().nullable(),
+      enabled: z.boolean().nullable(),
+      // adminCount=1. Deletable, but the dialog flags it.
+      privileged: z.boolean(),
+      blockedReason: userDeleteBlockReasonSchema.nullable(),
+    }),
+  ),
+});
+export type UserDeletePreflightResponse = z.infer<typeof userDeletePreflightResponseSchema>;
 
 // ---- Directory policy --------------------------------------------------
 //

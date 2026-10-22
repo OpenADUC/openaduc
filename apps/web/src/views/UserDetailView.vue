@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { onBeforeRouteLeave } from 'vue-router';
+import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Password from 'primevue/password';
 import Dialog from 'primevue/dialog';
@@ -23,6 +23,8 @@ import Card from '../design/primitives/Card.vue';
 import GroupChip from '../design/primitives/GroupChip.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
+import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
@@ -318,6 +320,8 @@ const canEnableDisable = computed(() => auth.hasCapability('write:user.enableDis
 const canResetPassword = computed(() => auth.hasCapability('write:user.resetPassword'));
 const canManageGroups = computed(() => auth.hasCapability('write:group.membership'));
 const canMove = computed(() => auth.hasCapability('write:user.move'));
+const canRename = computed(() => auth.hasCapability('write:user.rename'));
+const canDelete = computed(() => auth.hasCapability('write:user.delete'));
 // Raw LDAP tab is admin-only — gated by view:raw_attributes (admin role
 // gets all caps, operator/auditor explicitly do not).
 const canViewRaw = computed(() => auth.hasCapability('view:raw_attributes'));
@@ -1079,8 +1083,56 @@ const actionItems = computed<MenuItem[]>(() => {
       command: () => auth.requireEdit(openMoveDialog),
     });
   }
+  if (canRename.value) {
+    items.push({
+      label: 'Rename…',
+      icon: 'pi pi-id-card',
+      disabled: busy,
+      command: () =>
+        auth.requireEdit(() => {
+          renameDialogOpen.value = true;
+        }),
+    });
+  }
+  // Delete is offered only once the account is disabled, which is also
+  // what the server enforces.
+  if (canDelete.value && !u.enabled) {
+    items.push({
+      label: 'Delete…',
+      icon: 'pi pi-trash',
+      class: 'menu-item-danger',
+      disabled: busy,
+      command: () =>
+        auth.requireEdit(() => {
+          deleteDialogOpen.value = true;
+        }),
+    });
+  }
   return items;
 });
+
+// ---- Rename / delete -------------------------------------------------------
+// Both run in their own dialogs; the view only opens them and reacts.
+const router = useRouter();
+const renameDialogOpen = ref(false);
+const deleteDialogOpen = ref(false);
+
+async function onRenamed(): Promise<void> {
+  toast.add({ severity: 'success', summary: 'User renamed', life: 4000 });
+  await load();
+}
+
+function onDeleted(deletedIds: string[]): void {
+  if (!deletedIds.includes(props.id)) return;
+  toast.add({
+    severity: 'success',
+    summary: 'Account deleted',
+    detail: `${user.value?.displayName ?? user.value?.samAccountName ?? 'The account'} was deleted.`,
+    life: 5000,
+  });
+  deleteDialogOpen.value = false;
+  void router.push({ name: 'user-search' });
+}
 
 // Render the user's location as a proper postal address: the city/state/postal
 // code on one line, country on the next. Empty parts are dropped — values are
@@ -2248,6 +2300,14 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       @update:visible="(v) => !v && cancelRemoveGroup()"
       @cancel="cancelRemoveGroup"
       @confirm="confirmRemoveGroup"
+    />
+
+    <RenameUserDialog v-model:visible="renameDialogOpen" :user="user" @renamed="onRenamed" />
+    <DeleteUsersDialog
+      v-if="deleteDialogOpen"
+      v-model:visible="deleteDialogOpen"
+      :ids="[props.id]"
+      @done="onDeleted"
     />
 
     <SignInEventDetailDialog

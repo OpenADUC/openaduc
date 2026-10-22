@@ -22,6 +22,7 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
@@ -447,6 +448,40 @@ async function startBulk(action: BulkAction): Promise<void> {
   }
 }
 
+// Delete runs in its own dialog (preflight, typed confirmation, progress)
+// rather than through startBulk. Only disabled accounts can be deleted, so
+// the button stays off until the selection has one.
+const MAX_DELETE_BATCH = 1000;
+const canBulkDelete = computed(() => auth.hasCapability('write:user.delete'));
+const deleteDialogOpen = ref(false);
+const deleteIds = ref<string[]>([]);
+const selectedDisabledCount = computed(
+  () => rows.value.filter((r) => selectedIds.value.has(r.id) && !r.enabled).length,
+);
+
+function openBulkDelete(): void {
+  const ids = rows.value.filter((r) => selectedIds.value.has(r.id)).map((r) => r.id);
+  if (ids.length > MAX_DELETE_BATCH) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Too many accounts selected',
+      detail: `Select at most ${MAX_DELETE_BATCH.toLocaleString()} accounts to delete at a time.`,
+      life: 6000,
+    });
+    return;
+  }
+  deleteIds.value = ids;
+  deleteDialogOpen.value = true;
+}
+
+async function onBulkDeleted(deletedIds: string[]): Promise<void> {
+  if (deletedIds.length === 0) return;
+  const next = new Set(selectedIds.value);
+  for (const id of deletedIds) next.delete(id);
+  selectedIds.value = next;
+  await load();
+}
+
 const bulkBusyMessage = computed(() => {
   if (!bulkRunning.value) return null;
   return `${bulkProgress.value.done} of ${bulkProgress.value.total} done`;
@@ -702,6 +737,19 @@ onMounted(() => {
             @click="auth.requireEdit(() => startBulk('enable'))"
           />
           <Button
+            v-if="canBulkDelete"
+            label="Delete…"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            size="small"
+            :disabled="bulkRunning || selectedDisabledCount === 0"
+            :title="
+              selectedDisabledCount === 0 ? 'Only disabled accounts can be deleted' : undefined
+            "
+            @click="auth.requireEdit(openBulkDelete)"
+          />
+          <Button
             label="Clear"
             icon="pi pi-times"
             text
@@ -714,6 +762,13 @@ onMounted(() => {
         <span v-if="bulkBusyMessage" class="bulkbar-progress mono">{{ bulkBusyMessage }}</span>
       </div>
     </transition>
+
+    <DeleteUsersDialog
+      v-if="deleteDialogOpen"
+      v-model:visible="deleteDialogOpen"
+      :ids="deleteIds"
+      @done="onBulkDeleted"
+    />
 
     <Drawer
       v-model:visible="drawerOpen"
