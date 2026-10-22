@@ -63,8 +63,11 @@ export async function rebuildMemberships(
   db: Kysely<DB>,
   providerId: number,
 ): Promise<{ count: number }> {
-  await db.deleteFrom('user_group_memberships').where('provider_id', '=', providerId).execute();
-  const result = await sql<{ count: string }>`
+  // One transaction: readers see the old memberships or the new ones,
+  // never an empty table between the delete and the insert.
+  return db.transaction().execute(async (trx) => {
+    await trx.deleteFrom('user_group_memberships').where('provider_id', '=', providerId).execute();
+    const result = await sql<{ count: string }>`
     WITH inserted AS (
       INSERT INTO user_group_memberships (provider_id, user_object_guid, group_object_guid, direct, synced_at)
       SELECT
@@ -93,7 +96,8 @@ export async function rebuildMemberships(
       RETURNING 1
     )
     SELECT COUNT(*)::text AS count FROM inserted
-  `.execute(db);
-  const row = result.rows[0];
-  return { count: row ? Number(row.count) : 0 };
+  `.execute(trx);
+    const row = result.rows[0];
+    return { count: row ? Number(row.count) : 0 };
+  });
 }

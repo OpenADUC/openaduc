@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyBaseLogger } from 'fastify';
 import type { Kysely } from 'kysely';
+import type pg from 'pg';
 import type { DB } from '../../db/types.js';
+import { SYNC_LOCK_CLASS } from '../../lib/advisoryLocks.js';
 import type { DirectoryConfigService } from '../directoryConfig.js';
 import type { ProviderFactory } from '../../providers/registry.js';
 import { TASK_REGISTRY, isKnownTaskKey } from './registry.js';
@@ -20,6 +22,7 @@ import type { EntraRunnerRuntime, SyncTaskKey } from './types.js';
  * onboarding wizard can surface a per-step pass/fail summary instead of
  * polling the sync-task table.
  */
+
 export interface RunOnceResult {
   ok: boolean;
   error?: string;
@@ -46,6 +49,8 @@ export class SyncTaskScheduler {
 
   constructor(
     private readonly db: Kysely<DB>,
+    /** Connections for the per-directory advisory lock only. */
+    private readonly lockPool: pg.Pool,
     private readonly directoryConfig: DirectoryConfigService,
     private readonly providers: ProviderFactory,
     private readonly notifier: NotificationDispatcher,
@@ -301,16 +306,59 @@ export class SyncTaskScheduler {
     return new Map([...candidates].map(([k, v]) => [k, v.taskKey]));
   }
 
+  /**
+   * Run a task while holding a per-directory Postgres advisory lock, so two
+   * API processes (replicas, or old and new during a rolling deploy) never
+   * run tasks for the same directory at once. The in-memory sets checked
+   * first cover this process. The lock's connection comes from the lock
+   * pool, never from the pool the task's queries use.
+   */
   private async runTask(providerId: number, taskKey: SyncTaskKey): Promise<RunOnceResult> {
-    const inFlightKey = this.inFlightKey(providerId, taskKey);
-    if (this.inFlight.has(inFlightKey)) {
+    if (this.inFlight.has(this.inFlightKey(providerId, taskKey))) {
       return { ok: false, error: 'task already running for this directory' };
     }
     if (this.inFlightByDirectory.has(providerId)) {
       return { ok: false, error: 'another task is running for this directory' };
     }
-    this.inFlight.add(inFlightKey);
+    // Claim the directory before the first await, so a second run here is
+    // turned away above rather than at the lock.
+    this.inFlight.add(this.inFlightKey(providerId, taskKey));
     this.inFlightByDirectory.add(providerId);
+    let started = false;
+    try {
+      const conn = await this.lockPool.connect();
+      try {
+        const lock = await conn.query<{ ok: boolean }>(
+          'select pg_try_advisory_lock($1, $2) as ok',
+          [SYNC_LOCK_CLASS, providerId],
+        );
+        if (!lock.rows[0]?.ok) {
+          return {
+            ok: false,
+            error: 'another OpenADUC process is running a task for this directory',
+          };
+        }
+        try {
+          started = true;
+          return await this.runTaskInProcess(providerId, taskKey);
+        } finally {
+          await conn.query('select pg_advisory_unlock($1, $2)', [SYNC_LOCK_CLASS, providerId]);
+        }
+      } finally {
+        conn.release();
+      }
+    } finally {
+      // runTaskInProcess releases the claim itself once it starts.
+      if (!started) {
+        this.inFlight.delete(this.inFlightKey(providerId, taskKey));
+        this.inFlightByDirectory.delete(providerId);
+      }
+    }
+  }
+
+  private async runTaskInProcess(providerId: number, taskKey: SyncTaskKey): Promise<RunOnceResult> {
+    // runTask has claimed the directory; this releases it when done.
+    const inFlightKey = this.inFlightKey(providerId, taskKey);
     // Snapshot whether this run was operator-forced before clearing the
     // flag. The history row records the trigger so a "Run now → failed"
     // is visually distinct from "scheduler picked it up → failed".
