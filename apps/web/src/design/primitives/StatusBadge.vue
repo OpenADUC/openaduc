@@ -37,6 +37,7 @@ const tone = computed(() => {
     case 'pwd-expired':
       return 'red';
     case 'pwd-expiring':
+    case 'pwd-must-change':
       return 'amber';
     case 'disabled':
       return 'muted';

@@ -86,7 +86,7 @@ export interface RunnerContext {
   /** Effective cadence (minutes). Used by tasks like tombstones whose
    *  query window equals the cadence. */
   intervalMinutes: number;
-  /** Used by *.delta runners to compute `modifiedSince`. */
+  /** Start of the most recent successful run; *.delta runners fetch changes since then. */
   lastSuccessfulRunAt: Date | null;
   /**
    * Entra runtime — non-null only for tasks declared with

@@ -71,6 +71,7 @@ export class ProviderFactory {
       name: meta.name,
       baseDn: meta.baseDn,
       ldapUrls: meta.ldapUrls,
+      tlsMode: meta.tlsMode,
       tlsRejectUnauthorized: meta.tlsRejectUnauthorized ?? this.env.AD_TLS_REJECT_UNAUTHORIZED,
       tlsCaPath: this.env.AD_TLS_CA_PATH,
       operationTimeoutMs: this.env.AD_OPERATION_TIMEOUT_MS,

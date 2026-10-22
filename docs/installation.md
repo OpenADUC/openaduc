@@ -56,14 +56,15 @@ The web UI listens on `:8080` inside the `web` container. Map it to a host port 
 
 ## First-run setup wizard
 
-On first visit to the web UI you are taken through a four-step wizard:
+On first visit to the web UI you are taken through the setup wizard:
 
-1. **Recovery account** — create a local username/password used to bootstrap administration before any AD identity has been linked. Save these credentials somewhere safe; this account is your break-glass route back in.
-2. **Directory connection** — LDAPS URL(s), base DN, and a service account UPN/password. The wizard performs a live bind to validate them.
-3. **Authorization bootstrap** — pick an AD security group whose members get the `admin` role. This is what lets your normal AD account sign in with full capabilities.
-4. **Recap & finish** — review choices and commit.
+1. **Domain** — domain name, base DN, domain controllers and connection security (LDAPS, or StartTLS on the LDAP port), then an AD administrator's username and password. The wizard binds as that account to check the connection and signs you in. Members of Domain Admins get the OpenADUC `admin` role.
+2. **Service account** — a read-only AD account for background sync. The wizard binds as it to check the password, then stores it encrypted.
+3. **Policy** — how many days ahead to warn about expiring passwords, and how long without a logon makes an account stale.
+4. **Initial sync** — reads the domain policy, OUs, users, groups, computers and group memberships.
+5. **Done** — background sync tasks are scheduled and you land in the app.
 
-After the wizard finishes, OpenADUC schedules its background sync tasks (delta + periodic full sync of users, groups, computers, OUs) and you can sign in with an AD account.
+There is no local break-glass account: every sign-in is an AD bind.
 
 ## Upgrading
 

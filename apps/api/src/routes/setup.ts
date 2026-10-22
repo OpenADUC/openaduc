@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { meResponseSchema, type Capability } from '@openaduc/shared';
-import { BadRequest, Unauthorized } from '../plugins/errorHandler.js';
+import {
+  LDAP_TLS_MODES,
+  ldapTransportProblem,
+  meResponseSchema,
+  type Capability,
+} from '@openaduc/shared';
+import { BadRequest, Forbidden, Unauthorized } from '../plugins/errorHandler.js';
+import { SETUP_LOCK_KEY, withAdvisoryLock } from '../lib/advisoryLocks.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
@@ -43,7 +49,7 @@ const directoryInputSchema = z.object({
   domain: z.string().trim().min(1).max(255),
   baseDn: z.string().trim().min(1).max(512),
   ldapUrls: z.array(z.string().trim().min(1)).min(1).max(10),
-  tlsMode: z.enum(['ldaps', 'starttls', 'plain']).default('ldaps'),
+  tlsMode: z.enum(LDAP_TLS_MODES).default('ldaps'),
   adminUsername: z.string().trim().min(1).max(256),
   adminPassword: z.string().min(1).max(1024),
   tlsRejectUnauthorized: z.boolean().optional(),
@@ -124,6 +130,9 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
     }
   }
 
+  const withSetupLock = <T>(fn: () => Promise<T>) =>
+    withAdvisoryLock(app.pgLockPool, SETUP_LOCK_KEY, fn);
+
   async function firstConfiguredDirectoryId(): Promise<number | null> {
     const directories = await app.services.directoryConfig.listAll();
     const configured = directories.find((d) => d.configured);
@@ -135,16 +144,25 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // which step is done, what the operator already typed (no secrets), and
   // whether the whole flow has finished. The router consults this to
   // decide whether to keep forcing the operator into /setup.
-  app.get('/api/setup/status', async () => {
+  app.get('/api/setup/status', async (req) => {
     const directories = await app.services.directoryConfig.listAll();
-    const firstConfigured = directories.find((d) => d.configured) ?? null;
     const onboardingCompletedAt = await readOnboardingCompletedAt();
+    // The directory's details are only for the admin finishing setup: never
+    // for anyone else, and not at all once setup is done.
+    const isSetupAdmin =
+      !!req.actor &&
+      app.services.authorization.has(req.actor.session.capabilities, 'configure:directory');
+    const firstConfigured =
+      !onboardingCompletedAt && isSetupAdmin
+        ? (directories.find((d) => d.configured) ?? null)
+        : null;
     return {
-      configured: !!firstConfigured,
+      configured: directories.some((d) => d.configured),
+      onboardingComplete: !!onboardingCompletedAt,
       hasServiceAccount: firstConfigured
         ? !!firstConfigured.syncBindUpn && firstConfigured.hasSyncBindPassword
         : false,
-      onboardingCompletedAt,
+      onboardingCompletedAt: isSetupAdmin ? onboardingCompletedAt : null,
       existingDirectory: firstConfigured
         ? {
             id: firstConfigured.id,
@@ -176,6 +194,8 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         );
       }
       const body: SetupBody = directoryInputSchema.parse(req.body);
+      const transportProblem = ldapTransportProblem(body.ldapUrls, body.tlsMode);
+      if (transportProblem) throw BadRequest(transportProblem);
       const bindUsername = composeBindUpn(body.adminUsername, body.domain);
       const provider = buildEphemeralProvider(
         {
@@ -211,7 +231,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
               detail: auth.errorMessage,
             },
           })
-          .catch(() => undefined);
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
         const detail =
           auth.errorMessage ?? 'could not bind as that admin against the supplied directory';
         if (auth.reason === 'directory_error') {
@@ -220,24 +240,54 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         throw Unauthorized(detail);
       }
 
-      const created = await app.services.directoryConfig.create(toProviderInput(body));
-
+      // Setup grants full admin, so it needs proof of admin authority in AD:
+      // direct membership of the admin group. That is the group already
+      // configured (setting, else BOOTSTRAP_ADMIN_GROUP_DN) or, when none is,
+      // Domain Admins. Checked before anything is saved.
       const groupDns = auth.groupDns ?? auth.user.memberOfDns;
-      let capabilities = await app.services.authorization.resolveCapabilities(groupDns);
-      if (capabilities.length === 0) {
-        const desiredAdminGroupDn = `CN=Domain Admins,CN=Users,${domainRootFromBaseDn(body.baseDn)}`;
-        await app.db
-          .updateTable('app_settings')
-          .set({ value_json: JSON.stringify(desiredAdminGroupDn) })
-          .where('key', '=', 'authz.admin_group_dn')
-          .execute();
-        app.services.settings.invalidate('authz.admin_group_dn');
-        capabilities = await app.services.authorization.resolveCapabilities(groupDns);
+      const domainAdminsDn = `CN=Domain Admins,CN=Users,${domainRootFromBaseDn(body.baseDn)}`;
+      const configuredAdminGroup =
+        (await app.services.settings.get<string | null>('authz.admin_group_dn', null)) ||
+        env.BOOTSTRAP_ADMIN_GROUP_DN ||
+        null;
+      const adminGroup = configuredAdminGroup ?? domainAdminsDn;
+      if (!groupDns.some((dn) => dn.toLowerCase() === adminGroup.toLowerCase())) {
+        await app.services.audit
+          .recordEvent({
+            ...baseAudit,
+            result: 'denied',
+            errorCode: 'not_admin',
+            actorUserId: auth.user.objectGuid,
+            actorDisplayName: auth.user.displayName,
+            metadata: { domain: body.domain, adminUsername: body.adminUsername },
+          })
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
+        throw Forbidden(
+          `To finish setup, sign in with an account that is a direct member of ${adminGroup}. ` +
+            `That group's members become OpenADUC administrators.`,
+        );
       }
-      if (capabilities.length === 0) {
-        const { ROLE_CAPABILITIES } = await import('@openaduc/shared');
-        capabilities = [...ROLE_CAPABILITIES.admin];
-      }
+
+      // Two setups racing past the anyConfigured() check above would each
+      // create a directory and an admin; serialize the check and the write.
+      const created = await withSetupLock(async () => {
+        if (await app.services.directoryConfig.anyConfigured()) {
+          throw BadRequest(
+            'setup is already complete; add additional domains via Settings → Directories',
+          );
+        }
+        const row = await app.services.directoryConfig.create(toProviderInput(body));
+        if (!configuredAdminGroup) {
+          await app.db
+            .updateTable('app_settings')
+            .set({ value_json: JSON.stringify(domainAdminsDn) })
+            .where('key', '=', 'authz.admin_group_dn')
+            .execute();
+          app.services.settings.invalidate('authz.admin_group_dn');
+        }
+        return row;
+      });
+      const capabilities = await app.services.authorization.resolveCapabilities(groupDns);
 
       const { session, cookieToken } = await app.services.sessions.createAdminSession({
         directoryId: created.id,
@@ -284,7 +334,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             tlsMode: created.tlsMode,
           },
         })
-        .catch(() => undefined);
+        .catch((err) => req.log.error({ err }, 'audit insert failed'));
 
       reply.setCookie(SESSION_COOKIE_NAME, cookieToken, {
         ...cookieOptions(),
@@ -314,7 +364,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // The same-account warning is computed and returned (non-blocking) —
   // the wizard surfaces it inline so the operator can choose.
   app.post('/api/setup/service-account', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     handler: async (req) => {
       await ensureOnboardingActive();
@@ -334,7 +384,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           domain: directory.domain,
           baseDn: directory.baseDn,
           ldapUrls: directory.ldapUrls,
-          tlsMode: directory.tlsMode as 'ldaps' | 'starttls' | 'plain',
+          tlsMode: directory.tlsMode,
           ...(directory.tlsRejectUnauthorized !== null
             ? { tlsRejectUnauthorized: directory.tlsRejectUnauthorized }
             : {}),
@@ -366,7 +416,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             errorCode: auth.reason ?? 'unknown',
             metadata: { username: bindUpn, detail: auth.errorMessage },
           })
-          .catch(() => undefined);
+          .catch((err) => req.log.error({ err }, 'audit insert failed'));
         const detail = auth.errorMessage ?? 'service-account bind failed';
         if (auth.reason === 'directory_error') {
           throw app.httpErrors.badGateway(detail);
@@ -387,7 +437,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           actorDisplayName: req.actor!.session.actorDisplayName,
           metadata: { username: bindUpn },
         })
-        .catch(() => undefined);
+        .catch((err) => req.log.error({ err }, 'audit insert failed'));
 
       const adminUpn = req.actor!.session.actorUsername ?? null;
       const sameAsAdmin = !!adminUpn && adminUpn.toLowerCase() === bindUpn.toLowerCase();
@@ -407,7 +457,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // session — making them step up again to set defaults would be
   // theatre.
   app.post('/api/setup/policy', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const body = policySchema.parse(req.body);
@@ -481,7 +531,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // it — even on failure — so a partial onboarding doesn't leave sync
   // permanently disabled.
   app.post('/api/setup/run-initial-sync', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
@@ -539,7 +589,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // response is `{ job: null }` — the wizard treats that as "needs to
   // start" and will POST run-initial-sync.
   app.get('/api/setup/initial-sync-status', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async () => {
       const directoryId = await firstConfiguredDirectoryId();
       if (!directoryId) return { job: null };
@@ -554,7 +604,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // earlier-succeeded tasks untouched, then resume the sequence from the
   // next pending task.
   app.post('/api/setup/retry-task', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();

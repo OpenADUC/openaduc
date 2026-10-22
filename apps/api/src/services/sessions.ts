@@ -46,6 +46,11 @@ export interface CreateSessionInput {
   capabilities: string[];
   sourceIp: string | null;
   userAgent: string | null;
+  /**
+   * Latest the session may live until. Rotations pass the old session's
+   * expiry so re-authenticating never extends a session's absolute lifetime.
+   */
+  notAfter?: Date;
 }
 
 export interface CreatedSession {
@@ -67,7 +72,8 @@ export class SessionsService {
   async createAdminSession(input: CreateSessionInput): Promise<CreatedSession> {
     const absoluteHours = await this.settings.get<number>('session.absolute_timeout_hours', 12);
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + absoluteHours * 60 * 60 * 1000);
+    const fullLifetime = now.getTime() + absoluteHours * 60 * 60 * 1000;
+    const expiresAt = new Date(Math.min(fullLifetime, input.notAfter?.getTime() ?? Infinity));
     const cookieToken = generateToken();
     const tokenHash = hashToken(cookieToken);
 

@@ -36,6 +36,10 @@ const {
   blocked,
   confirmWord,
   confirmed,
+  withChildren,
+  childObjectTotal,
+  childCountUnknown,
+  includeChildren,
   load,
   run,
 } = useUserDeletion();
@@ -133,6 +137,17 @@ const deleteLabel = computed(() => {
               >
                 Privileged
               </span>
+              <span
+                v-if="u.childObjects !== 0"
+                class="du-tag"
+                title="Objects stored inside this account, such as Exchange ActiveSync devices"
+              >
+                {{
+                  u.childObjects === null
+                    ? 'May contain objects'
+                    : `Contains ${u.childObjects} ${u.childObjects === 1 ? 'object' : 'objects'}`
+                }}
+              </span>
               <span class="du-ou">{{ ouOf(u.distinguishedName) }}</span>
             </li>
           </ul>
@@ -149,6 +164,22 @@ const deleteLabel = computed(() => {
             </li>
           </ul>
         </template>
+
+        <label v-if="withChildren.length > 0" class="du-children">
+          <input v-model="includeChildren" type="checkbox" />
+          <span v-if="childCountUnknown">
+            Also delete any objects inside
+            {{ withChildren.length === 1 ? 'this account' : 'these accounts' }} (e.g. Exchange
+            ActiveSync devices). OpenADUC couldn't count them, and they can't be deleted separately
+            from here.
+          </span>
+          <span v-else>
+            Also delete the {{ childObjectTotal }}
+            {{ childObjectTotal === 1 ? 'object' : 'objects' }} inside
+            {{ withChildren.length === 1 ? 'this account' : 'these accounts' }} (e.g. Exchange
+            ActiveSync devices). They can't be deleted separately from here.
+          </span>
+        </label>
 
         <div v-if="eligible.length > 0" class="du-confirm">
           <label for="du-confirm-input">
@@ -297,5 +328,15 @@ const deleteLabel = computed(() => {
 
 .mono {
   font-family: var(--font-mono);
+}
+.du-children {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.du-children input {
+  margin-top: 3px;
 }
 </style>
