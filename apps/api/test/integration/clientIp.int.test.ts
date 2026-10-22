@@ -29,9 +29,10 @@ describe('the client IP comes from the proxy, not from the client', () => {
     for (let i = 0; i < 7; i++) {
       // Each attempt also comes through a different nginx socket, like a
       // multi-worker proxy would.
+      // A nonexistent user, so these failures can't lock out a fixture.
       const res = await viaProxy(`198.51.100.${i}`).post('/api/auth/login', {
         directoryId: api.directoryId,
-        username: 'alice.anders',
+        username: 'no.such.user',
         password: 'not-the-password',
       });
       statuses.push(res.statusCode);
