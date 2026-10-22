@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { readFileSync } from 'node:fs';
-import { Client, type ClientOptions } from 'ldapts';
+import { BusyError, Client, type ClientOptions, ResultCodeError, UnavailableError } from 'ldapts';
 import type { Env } from '../../config/env.js';
+import { DirectoryUnavailableError } from '../types.js';
 
 export interface ClientConfig {
   ldapUrls: readonly string[];
@@ -48,10 +49,67 @@ export function createClient(config: ClientConfig, urlOverride?: string): Client
   return new Client(opts);
 }
 
+// Node socket and DNS failures.
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+// OpenSSL certificate verification failures, as Node reports them.
+const CERT_ERROR_CODE = /^(ERR_TLS_|ERR_SSL_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_|CERT_)/;
+// ldapts's own timeouts and dropped connections are plain Errors.
+const LDAPTS_CONNECTION_MESSAGE =
+  /^Connection timeout$|Operation timed out$|^Connection closed before message response/;
+
+/**
+ * True when `err` means the server couldn't be reached or talked to:
+ * connection refused, timeout, TLS failure, dropped socket, or the DC
+ * saying it's busy or unavailable. Another domain controller may still
+ * work. Other LDAP results (wrong password, insufficient access, …) are
+ * answers another DC would repeat, and any other exception is a bug here,
+ * not an outage.
+ */
+export function isDirectoryUnreachable(err: unknown): boolean {
+  if (err instanceof BusyError || err instanceof UnavailableError) return true;
+  if (err instanceof ResultCodeError) return false;
+  // Node's multi-address connect reports one error per address tried.
+  if (err instanceof AggregateError) return err.errors.some(isDirectoryUnreachable);
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string' && (NETWORK_ERROR_CODES.has(code) || CERT_ERROR_CODE.test(code))) {
+    return true;
+  }
+  return LDAPTS_CONNECTION_MESSAGE.test(err.message);
+}
+
+/** A readable reason for a connection failure; AggregateError has no message. */
+export function describeConnectionError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: unknown }).code;
+  const inner = err instanceof AggregateError ? err.errors[0] : undefined;
+  return (
+    err.message ||
+    (inner instanceof Error ? inner.message : '') ||
+    (typeof code === 'string' ? code : '') ||
+    err.name
+  );
+}
+
 /**
  * Run `fn` against each configured LDAP URL until one succeeds. Caller is
  * responsible for the bind+unbind inside `fn`. Throws the last error if all
  * servers fail.
+ *
+ * Only a throw moves on to the next server, so `fn` must let unreachable
+ * errors from its bind propagate (see isDirectoryUnreachable) and return,
+ * not throw, anything after it: a write that failed halfway is never
+ * replayed against another DC.
  */
 export async function withFailover<T>(
   config: ClientConfig,
@@ -71,6 +129,9 @@ export async function withFailover<T>(
         // ignore — likely already disconnected
       }
     }
+  }
+  if (isDirectoryUnreachable(lastError)) {
+    throw new DirectoryUnavailableError(describeConnectionError(lastError), lastError);
   }
   throw lastError instanceof Error
     ? lastError
