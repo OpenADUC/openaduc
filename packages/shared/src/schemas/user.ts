@@ -27,6 +27,8 @@ export const userSummarySchema = z.object({
   locked: z.boolean(),
   passwordNeverExpires: z.boolean(),
   passwordExpiresAt: z.string().nullable(),
+  // Must change password at next logon (pwdLastSet = 0).
+  passwordMustChange: z.boolean(),
   accountExpiresAt: z.string().nullable(),
   lastLogonAt: z.string().nullable(),
   // AD's `whenChanged` — the most recent attribute modification on the
