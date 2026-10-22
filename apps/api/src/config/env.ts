@@ -16,7 +16,7 @@ const candidates = [
 ];
 for (const p of candidates) {
   if (existsSync(p)) {
-    dotenv.config({ path: p });
+    dotenv.config({ path: p, quiet: true });
     break;
   }
 }
