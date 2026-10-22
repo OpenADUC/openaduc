@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { sql } from 'kysely';
 import { upsertGroup } from '../../groupCache.js';
-import { upsertUser } from '../../userCache.js';
+import { cachedMembersOf, upsertUser } from '../../userCache.js';
 import type { RunnerContext, RunnerResult } from '../types.js';
 
 const OVERLAP_MS = 5 * 60_000;
@@ -64,25 +63,8 @@ async function refreshMembers(ctx: RunnerContext, groupDn: string): Promise<numb
 
   // Cached members no longer in the group: re-read them so their memberOf
   // drops it.
-  const cachedMembers = await ctx.db
-    .selectFrom('user_cache_records')
-    .select('object_guid')
-    .where('provider_id', '=', ctx.providerId)
-    .where('deleted_at', 'is', null)
-    .where(
-      sql<boolean>`exists (
-        select 1 from jsonb_array_elements_text(
-          case jsonb_typeof(raw_attributes_json -> 'memberOf')
-            when 'array' then raw_attributes_json -> 'memberOf'
-            when 'string' then jsonb_build_array(raw_attributes_json -> 'memberOf')
-            else '[]'::jsonb
-          end
-        ) as member_of
-        where lower(member_of) = lower(${groupDn})
-      )`,
-    )
-    .execute();
-  for (const { object_guid } of cachedMembers) {
+  const cachedMembers = await cachedMembersOf(ctx.db, ctx.providerId, groupDn);
+  for (const object_guid of cachedMembers) {
     if (refreshed.has(object_guid)) continue;
     try {
       const user = await ctx.provider.getUser({ kind: 'objectGuid', value: object_guid });

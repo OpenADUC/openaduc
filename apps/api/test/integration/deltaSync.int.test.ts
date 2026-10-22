@@ -45,6 +45,47 @@ describe('delta sync', () => {
     expect(cached.title).toBe('Staff Engineer');
   });
 
+  const lastRunStart = async (task: string) =>
+    (
+      await api.app.db
+        .selectFrom('directory_sync_task_runs')
+        .select('started_at')
+        .where('task_key', '=', task)
+        .where('status', '=', 'succeeded')
+        .orderBy('started_at', 'desc')
+        .executeTakeFirstOrThrow()
+    ).started_at;
+  const fiveMinutesBefore = (d: Date | string) =>
+    new Date(new Date(d).getTime() - 5 * 60_000).toISOString();
+
+  it('anchors on when the last success started, so changes made during it are fetched next time', async () => {
+    await run('users.delta');
+    const started = await lastRunStart('users.delta');
+
+    const next = await run('users.delta');
+    expect(next.modifiedSince).toBe(fiveMinutesBefore(started));
+  });
+
+  it('after failed runs, still fetches everything since the last success', async () => {
+    await run('users.delta');
+    const lastSuccess = await lastRunStart('users.delta');
+    await api.app.db
+      .insertInto('directory_sync_task_runs')
+      .values({
+        provider_id: api.directoryId!,
+        task_key: 'users.delta',
+        status: 'failed',
+        trigger: 'cadence',
+        started_at: new Date(),
+        finished_at: new Date(),
+        error: 'simulated outage',
+      })
+      .execute();
+
+    const next = await run('users.delta');
+    expect(next.modifiedSince).toBe(fiveMinutesBefore(lastSuccess));
+  });
+
   it('picks up a user added to a group, though only the group changed', async () => {
     await run('groups.delta'); // establish a successful run
     await setGroupMember(ENGINEERING, 'erin.evans', true);
@@ -62,5 +103,20 @@ describe('delta sync', () => {
       .where('u.sam_account_name', '=', 'erin.evans')
       .execute();
     expect(memberships.map((m) => m.name)).toContain('Engineering');
+  });
+
+  it('drops a user removed from a group, though only the group changed', async () => {
+    await setGroupMember(ENGINEERING, 'erin.evans', false);
+    await run('groups.delta');
+    await run('memberships.rebuild');
+
+    const memberships = await api.app.db
+      .selectFrom('user_group_memberships as m')
+      .innerJoin('user_cache_records as u', 'u.object_guid', 'm.user_object_guid')
+      .innerJoin('group_cache_records as g', 'g.object_guid', 'm.group_object_guid')
+      .select('g.name')
+      .where('u.sam_account_name', '=', 'erin.evans')
+      .execute();
+    expect(memberships.map((m) => m.name)).not.toContain('Engineering');
   });
 });

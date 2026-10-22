@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { sql } from 'kysely';
-import type { Kysely } from 'kysely';
+import { sql, type Kysely, type RawBuilder } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
@@ -142,4 +141,38 @@ export async function clearLockedExcept(
   if (stillLocked.size > 0) query = query.where(uuidNotIn('object_guid', stillLocked));
   const res = await query.executeTakeFirst();
   return Number(res.numUpdatedRows ?? 0n);
+}
+
+/**
+ * A cached user's memberOf DNs as a jsonb array, from the raw attributes
+ * column `rawColumn` (AD sends one value as a string, several as an array).
+ */
+export function memberOfArray(rawColumn: string): RawBuilder<unknown> {
+  const raw = sql.ref(rawColumn);
+  return sql`CASE
+    WHEN jsonb_typeof(${raw} -> 'memberOf') = 'array' THEN ${raw} -> 'memberOf'
+    WHEN ${raw} ? 'memberOf' THEN jsonb_build_array(${raw} -> 'memberOf')
+    ELSE '[]'::jsonb
+  END`;
+}
+
+/** GUIDs of cached users whose memberOf lists `groupDn`. */
+export async function cachedMembersOf(
+  db: Kysely<DB>,
+  providerId: number,
+  groupDn: string,
+): Promise<string[]> {
+  const rows = await db
+    .selectFrom('user_cache_records')
+    .select('object_guid')
+    .where('provider_id', '=', providerId)
+    .where('deleted_at', 'is', null)
+    .where(
+      sql<boolean>`exists (
+        select 1 from jsonb_array_elements_text(${memberOfArray('raw_attributes_json')}) as member_of
+        where lower(member_of) = lower(${groupDn})
+      )`,
+    )
+    .execute();
+  return rows.map((r) => r.object_guid);
 }
