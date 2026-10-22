@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
+import { DirectoryUnavailableError } from '../providers/active-directory/client.js';
 
 export class AppError extends Error {
   readonly statusCode: number;
@@ -37,6 +38,12 @@ export default fp(async (app) => {
       req.log.info({ issues: err.issues }, 'validation error');
       return reply.status(400).send({
         error: { code: 'validation_error', message: 'Invalid request', issues: err.issues },
+      });
+    }
+    if (err instanceof DirectoryUnavailableError) {
+      req.log.error({ err }, err.message);
+      return reply.status(502).send({
+        error: { code: 'directory_unavailable', message: err.message },
       });
     }
     if (err instanceof AppError) {

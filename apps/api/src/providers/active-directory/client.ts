@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { readFileSync } from 'node:fs';
-import { Client, type ClientOptions } from 'ldapts';
+import { Client, type ClientOptions, ResultCodeError } from 'ldapts';
 import type { Env } from '../../config/env.js';
 
 export interface ClientConfig {
@@ -49,9 +49,45 @@ export function createClient(config: ClientConfig, urlOverride?: string): Client
 }
 
 /**
+ * True when `err` means the server never answered: connection refused,
+ * timeout, TLS failure, dropped socket. Another domain controller may still
+ * work. LDAP result errors (wrong password, insufficient access, …) are
+ * answers, and another DC would give the same one.
+ */
+export function isDirectoryUnreachable(err: unknown): boolean {
+  return !(err instanceof ResultCodeError);
+}
+
+/** Every configured domain controller was unreachable. */
+export class DirectoryUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(`no domain controller reachable: ${describeConnectionError(cause)}`, { cause });
+    this.name = 'DirectoryUnavailableError';
+  }
+}
+
+/** A readable reason for a connection failure; AggregateError has no message. */
+export function describeConnectionError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: unknown }).code;
+  const inner = err instanceof AggregateError ? err.errors[0] : undefined;
+  return (
+    err.message ||
+    (inner instanceof Error ? inner.message : '') ||
+    (typeof code === 'string' ? code : '') ||
+    err.name
+  );
+}
+
+/**
  * Run `fn` against each configured LDAP URL until one succeeds. Caller is
  * responsible for the bind+unbind inside `fn`. Throws the last error if all
  * servers fail.
+ *
+ * Only a throw moves on to the next server, so `fn` must let unreachable
+ * errors from its bind propagate (see isDirectoryUnreachable) and return,
+ * not throw, anything after it: a write that failed halfway is never
+ * replayed against another DC.
  */
 export async function withFailover<T>(
   config: ClientConfig,
@@ -72,6 +108,7 @@ export async function withFailover<T>(
       }
     }
   }
+  if (isDirectoryUnreachable(lastError)) throw new DirectoryUnavailableError(lastError);
   throw lastError instanceof Error
     ? lastError
     : new Error('LDAP operation failed against all configured URLs');
