@@ -157,7 +157,7 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
         lastKnownParent: user.lastKnownParent,
         deletedAt: user.deletedAt ? user.deletedAt.toISOString() : null,
         recycled: user.recycled,
-        rawAttributes: rawAttributesFor(req, user.rawAttributes),
+        rawAttributes: rawAttributesFor(req.actor?.session.capabilities, user.rawAttributes),
       };
       return { user: deletedUserDetailSchema.parse(detail) };
     },

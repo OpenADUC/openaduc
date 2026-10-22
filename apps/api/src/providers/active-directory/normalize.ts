@@ -84,6 +84,11 @@ const SKIP_RAW_ATTRS = new Set<string>([
   'managedObjects',
 ]);
 
+/** True for attributes never kept in rawAttributes: noise and secrets. */
+function omitFromRaw(name: string): boolean {
+  return SKIP_RAW_ATTRS.has(name) || isSecretAttr(name);
+}
+
 // Attribute set for deleted-object reads. Recycle-Bin-enabled domains keep
 // most user attributes around for the deleted-object lifetime; tombstones
 // strip down to a minimal preserved set. Pulling '*' would also work but
@@ -300,7 +305,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -320,6 +325,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     mobile: asString(entry.mobile),
     title: asString(entry.title),
     department: asString(entry.department),
+    office: asString(entry.physicalDeliveryOfficeName),
     managerDn: asString(entry.manager),
     enabled: uac.enabled,
     locked: lockedNow,
@@ -353,7 +359,7 @@ export function normalizeOu(entry: Entry): DirectoryOu {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -440,7 +446,7 @@ export function normalizeDeletedUser(entry: Entry): DirectoryDeletedUser {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -481,7 +487,7 @@ export function normalizeComputer(entry: Entry): DirectoryComputer {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -524,7 +530,7 @@ export function normalizeDeletedComputer(entry: Entry): DirectoryDeletedComputer
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -577,7 +583,7 @@ export function normalizeGroup(entry: Entry): DirectoryGroup {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;
@@ -621,7 +627,7 @@ export function normalizeGroupPolicy(entry: Entry): DirectoryGroupPolicy {
   const raw: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(entry)) {
     if (BINARY_ATTRS.includes(k)) continue;
-    if (SKIP_RAW_ATTRS.has(k) || isSecretAttr(k)) continue;
+    if (omitFromRaw(k)) continue;
     const cleaned = stripBuffers(v);
     if (cleaned === undefined) continue;
     raw[k] = cleaned;

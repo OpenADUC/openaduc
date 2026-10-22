@@ -188,11 +188,9 @@ const allTabs: { id: TabId; label: string }[] = [
   // user object via UserDetail.rawAttributes.
   { id: 'attributes', label: 'Attribute Editor' },
 ];
-// The API only sends the full attribute set with view:raw_attributes.
+// The API sends the attribute set only to callers allowed to see it.
 const tabs = computed(() =>
-  auth.hasCapability('view:raw_attributes')
-    ? allTabs
-    : allTabs.filter((t) => t.id !== 'attributes'),
+  user.value?.rawAttributes ? allTabs : allTabs.filter((t) => t.id !== 'attributes'),
 );
 const activeTab = ref<TabId>('general');
 
@@ -212,7 +210,7 @@ function formatAttrValue(v: unknown): string {
 }
 
 const attributeRows = computed(() => {
-  if (!user.value) return [];
+  if (!user.value?.rawAttributes) return [];
   const all = Object.entries(user.value.rawAttributes);
   const filter = attrFilter.value.trim().toLowerCase();
   return all
@@ -320,12 +318,6 @@ const upnLogonName = computed(() => {
   if (idx === -1) return { local: upn, domain: '' };
   return { local: upn.slice(0, idx), domain: upn.slice(idx) };
 });
-
-function rawAttr(u: UserDetail, key: string): string {
-  const v = (u.rawAttributes as Record<string, unknown>)[key];
-  if (Array.isArray(v)) return v.join('\n');
-  return v == null ? '' : String(v);
-}
 </script>
 
 <template>
@@ -377,7 +369,7 @@ function rawAttr(u: UserDetail, key: string): string {
           <input
             id="office"
             class="os-input"
-            :value="rawAttr(user, 'physicalDeliveryOfficeName')"
+            :value="user.physicalDeliveryOfficeName ?? ''"
             disabled
           />
         </div>
@@ -409,7 +401,7 @@ function rawAttr(u: UserDetail, key: string): string {
             v-model="draft.values.homePostalAddress"
           />
           <label class="label" for="pobox">P.O. Box:</label>
-          <input id="pobox" class="os-input" :value="rawAttr(user, 'postOfficeBox')" disabled />
+          <input id="pobox" class="os-input" :value="user.postOfficeBox ?? ''" disabled />
           <label class="label" for="city">City:</label>
           <input id="city" class="os-input" v-model="draft.values.l" />
           <label class="label" for="state">State/province:</label>
@@ -506,9 +498,9 @@ function rawAttr(u: UserDetail, key: string): string {
           <legend>User profile</legend>
           <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
             <label class="label">Profile path:</label>
-            <input class="os-input" :value="rawAttr(user, 'profilePath')" disabled />
+            <input class="os-input" :value="user.profilePath ?? ''" disabled />
             <label class="label">Logon script:</label>
-            <input class="os-input" :value="rawAttr(user, 'scriptPath')" disabled />
+            <input class="os-input" :value="user.scriptPath ?? ''" disabled />
           </div>
         </fieldset>
         <fieldset class="os-groupbox">
@@ -518,7 +510,7 @@ function rawAttr(u: UserDetail, key: string): string {
             <input
               class="os-input"
               style="margin-left: 8px; flex: 1"
-              :value="rawAttr(user, 'homeDirectory')"
+              :value="user.homeDirectory ?? ''"
               disabled
             />
           </label>
@@ -542,13 +534,13 @@ function rawAttr(u: UserDetail, key: string): string {
             <input class="os-input" v-model="draft.values.homePhone" />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Pager:</label>
-            <input class="os-input" :value="rawAttr(user, 'pager')" disabled />
+            <input class="os-input" :value="user.pager ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Mobile:</label>
             <input class="os-input" v-model="draft.values.mobile" />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Fax:</label>
-            <input class="os-input" :value="rawAttr(user, 'facsimileTelephoneNumber')" disabled />
+            <input class="os-input" :value="user.facsimileTelephoneNumber ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">IP phone:</label>
             <input class="os-input" v-model="draft.values.ipPhone" />
@@ -557,7 +549,7 @@ function rawAttr(u: UserDetail, key: string): string {
         </fieldset>
         <fieldset class="os-groupbox">
           <legend>Notes:</legend>
-          <textarea class="os-textarea" rows="3" :value="rawAttr(user, 'info')" disabled />
+          <textarea class="os-textarea" rows="3" :value="user.info ?? ''" disabled />
         </fieldset>
       </template>
 

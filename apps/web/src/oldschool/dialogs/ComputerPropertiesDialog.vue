@@ -47,10 +47,6 @@ const tabs: { id: TabId; label: string }[] = [
 const tab = ref<TabId>('general');
 
 const title = computed(() => `${computer.value?.name ?? 'Computer'} Properties`);
-function rawAttr(c: ComputerDetail, k: string): string {
-  const v = (c.rawAttributes as Record<string, unknown>)[k];
-  return Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v);
-}
 </script>
 
 <template>
@@ -88,11 +84,11 @@ function rawAttr(c: ComputerDetail, k: string): string {
           <label class="label">DC Type:</label>
           <input
             class="os-input"
-            :value="rawAttr(computer, 'machineRole') || 'Workstation or server'"
+            :value="computer.machineRole || 'Workstation or server'"
             disabled
           />
           <label class="label">Site:</label>
-          <input class="os-input" :value="rawAttr(computer, 'msDS-SiteName')" disabled />
+          <input class="os-input" :value="computer.siteName ?? ''" disabled />
           <label class="label">Description:</label>
           <input class="os-input" :value="computer.description ?? ''" disabled />
         </div>
@@ -109,11 +105,7 @@ function rawAttr(c: ComputerDetail, k: string): string {
           <label class="label">Version:</label>
           <input class="os-input" :value="computer.operatingSystemVersion ?? ''" disabled />
           <label class="label">Service pack:</label>
-          <input
-            class="os-input"
-            :value="rawAttr(computer, 'operatingSystemServicePack')"
-            disabled
-          />
+          <input class="os-input" :value="computer.operatingSystemServicePack ?? ''" disabled />
         </div>
       </template>
 
@@ -175,7 +167,7 @@ function rawAttr(c: ComputerDetail, k: string): string {
         <div class="os-form" style="grid-template-columns: 80px minmax(0, 1fr)">
           <label class="label">Location:</label>
           <div style="display: flex; gap: 6px">
-            <input class="os-input" :value="rawAttr(computer, 'location')" disabled />
+            <input class="os-input" :value="computer.location ?? ''" disabled />
             <button class="os-btn" disabled>Browse…</button>
           </div>
         </div>
