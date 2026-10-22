@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { BadRequest } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
@@ -157,6 +158,159 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       }
 
       return { ok: true, updated: validated.map((u) => u.key) };
+    },
+  });
+}
+
+// ---- Role mapping ----------------------------------------------------------
+//
+// Each OpenADUC role (admin, operator, auditor) is granted to the direct
+// members of one AD group, stored as authz.<role>_group_dn.
+
+const ROLES = ['admin', 'operator', 'auditor'] as const;
+type RoleName = (typeof ROLES)[number];
+const roleKey = (role: RoleName) => `authz.${role}_group_dn`;
+
+const groupDnField = z.string().trim().min(1).max(1024).nullable().optional();
+const rolesPutSchema = z
+  .object({
+    admin: groupDnField,
+    operator: groupDnField,
+    auditor: groupDnField,
+    // Moving the admin role to a group the current admin isn't in would
+    // lock them out at their next sign-in; they have to say they mean it.
+    confirmAdminChange: z.boolean().optional(),
+  })
+  .strict();
+
+export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<void> {
+  async function currentMapping(): Promise<Record<RoleName, string | null>> {
+    const rows = await app.db
+      .selectFrom('app_settings')
+      .select(['key', 'value_json'])
+      .where(
+        'key',
+        'in',
+        ROLES.map((r) => roleKey(r)),
+      )
+      .execute();
+    const byKey = new Map(rows.map((r) => [r.key, r.value_json as string | null]));
+    return Object.fromEntries(ROLES.map((r) => [r, byKey.get(roleKey(r)) ?? null])) as Record<
+      RoleName,
+      string | null
+    >;
+  }
+
+  async function findGroup(providerId: number, dn: string) {
+    return app.db
+      .selectFrom('group_cache_records as g')
+      .select((eb) => [
+        'g.object_guid',
+        'g.name',
+        'g.distinguished_name',
+        eb
+          .selectFrom('user_group_memberships as m')
+          .select((m) => m.fn.countAll<string>().as('n'))
+          .whereRef('m.group_object_guid', '=', 'g.object_guid')
+          .whereRef('m.provider_id', '=', 'g.provider_id')
+          .as('member_count'),
+      ])
+      .where('g.provider_id', '=', providerId)
+      .where('g.deleted_at', 'is', null)
+      .where(sql<string>`lower(g.distinguished_name)`, '=', dn.toLowerCase())
+      .executeTakeFirst();
+  }
+
+  // ---- GET /api/settings/roles -------------------------------------------
+  app.get('/api/settings/roles', {
+    preHandler: app.requireCapability('configure:security'),
+    handler: async (req) => {
+      const mapping = await currentMapping();
+      const providerId = req.actor!.session.directoryId;
+      const roles: Record<
+        string,
+        { groupDn: string | null; groupName: string | null; memberCount: number | null }
+      > = {};
+      for (const role of ROLES) {
+        const dn = mapping[role];
+        const group = dn ? await findGroup(providerId, dn) : undefined;
+        roles[role] = {
+          groupDn: dn,
+          groupName: group?.name ?? null,
+          memberCount: group ? Number(group.member_count ?? 0) : null,
+        };
+      }
+      return { roles };
+    },
+  });
+
+  // ---- PUT /api/settings/roles -------------------------------------------
+  // Body: any of { admin, operator, auditor } as a group DN, or null to
+  // unassign. Takes effect at each operator's next sign-in or step-up.
+  app.put('/api/settings/roles', {
+    preHandler: [app.requireCapability('configure:security'), app.requireStepUp],
+    handler: async (req) => {
+      const body = rolesPutSchema.parse(req.body);
+      const actor = req.actor!;
+      const providerId = actor.session.directoryId;
+      const before = await currentMapping();
+      const after = { ...before };
+      for (const role of ROLES) {
+        const dn = body[role];
+        if (dn === undefined) continue;
+        if (dn !== null && !(await findGroup(providerId, dn))) {
+          throw BadRequest(`"${dn}" is not a group in this directory (or it hasn't synced yet)`);
+        }
+        after[role] = dn;
+      }
+
+      const newAdmin = after.admin;
+      if (newAdmin && newAdmin.toLowerCase() !== (before.admin ?? '').toLowerCase()) {
+        const group = await findGroup(providerId, newAdmin);
+        const isMember = group
+          ? !!(await app.db
+              .selectFrom('user_group_memberships')
+              .select('user_object_guid')
+              .where('provider_id', '=', providerId)
+              .where('group_object_guid', '=', group.object_guid)
+              .where('user_object_guid', '=', actor.session.actorUserId)
+              .executeTakeFirst())
+          : false;
+        if (!isMember && !body.confirmAdminChange) {
+          throw app.httpErrors.conflict(
+            "You aren't a direct member of that group, so you'd lose admin rights at your next sign-in. Confirm to go ahead.",
+          );
+        }
+      }
+
+      await app.db.transaction().execute(async (trx) => {
+        for (const role of ROLES) {
+          if (after[role] === before[role]) continue;
+          await trx
+            .updateTable('app_settings')
+            .set({
+              value_json: JSON.stringify(after[role]),
+              updated_by_actor_id: actor.session.actorUserId,
+              updated_at: new Date(),
+            })
+            .where('key', '=', roleKey(role))
+            .execute();
+        }
+      });
+      for (const role of ROLES) app.services.settings.invalidate(roleKey(role));
+
+      await app.services.audit.recordEvent({
+        ...auditContextFromRequest(req),
+        action: 'settings.roles.update',
+        result: 'success',
+        actorAuthMethod: 'ad-password',
+        providerId,
+        targetType: 'config',
+        targetId: 'roles',
+        before,
+        after,
+      });
+      return { ok: true };
     },
   });
 }

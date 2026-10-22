@@ -7,8 +7,9 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import DirectoryTab from './settings/DirectoryTab.vue';
 import PolicyTab from './settings/PolicyTab.vue';
 import IntegrationsTab from './settings/IntegrationsTab.vue';
+import RolesTab from './settings/RolesTab.vue';
 
-type TabId = 'directory' | 'policy' | 'integrations';
+type TabId = 'directory' | 'roles' | 'policy' | 'integrations';
 
 interface TabSpec {
   id: TabId;
@@ -31,6 +32,7 @@ const allTabs: TabSpec[] = [
     icon: 'pi pi-server',
     capability: 'configure:directory',
   },
+  { id: 'roles', label: 'Roles', icon: 'pi pi-users', capability: 'configure:security' },
   { id: 'policy', label: 'Policy & audit', icon: 'pi pi-shield', capability: 'configure:security' },
   { id: 'integrations', label: 'Entra ID', icon: 'pi pi-share-alt' },
 ];
@@ -81,6 +83,7 @@ function selectTab(id: TabId): void {
 
     <div class="settings-content">
       <DirectoryTab v-if="activeTab === 'directory'" />
+      <RolesTab v-else-if="activeTab === 'roles'" />
       <PolicyTab v-else-if="activeTab === 'policy'" />
       <IntegrationsTab v-else-if="activeTab === 'integrations'" />
     </div>
