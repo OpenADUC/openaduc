@@ -1,0 +1,6 @@
+# Project rule: no AI co-author trailers. Enforced here so it holds for
+# every agent and contributor, not only ones that remember it.
+if grep -qiE '^co-authored-by:.*(claude|anthropic)' "$1"; then
+  echo "commit-msg: remove the 'Co-Authored-By: Claude' trailer (this project doesn't use AI co-author trailers)." >&2
+  exit 1
+fi

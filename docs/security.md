@@ -11,13 +11,17 @@ This document is a high-level summary. Implementation details are in [`apps/api/
 
 ## Authentication
 
-Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash, no local password store outside the recovery account.
+Operators sign in with their Active Directory username and password. The API performs a live LDAPS bind against a domain controller — there is no in-app password hash and no local password store.
 
-The recovery account, created during the first-run wizard, exists so an operator can recover access if the AD link is broken (DC outage, expired service account, mis-configured group). It uses Argon2id-hashed credentials and is intended as a break-glass route only.
+Every failed sign-in gets the same answer, whatever AD said (unknown user, wrong password, locked, disabled, expired, or no OpenADUC role), and directory outages don't reveal hosts or error text. The specific reason is recorded in the audit log. Step-up failures follow the same rule.
+
+There is no local break-glass account yet: if every domain controller is unreachable, or no one is left in a role group, nobody can sign in until that's fixed in AD.
 
 ## Sessions
 
-Successful sign-in mints an `admin_sessions` row and a signed cookie. The session stores a **snapshot** of the operator's capabilities at sign-in — role changes do not take effect until the next login. This is deliberate: it makes sessions auditable and prevents a quietly-revoked role from leaving an active session with elevated rights.
+Successful sign-in mints an `admin_sessions` row and a signed cookie. The session stores a **snapshot** of the operator's capabilities, resolved from their AD group memberships at sign-in.
+
+Every step-up re-reads those memberships from the fresh bind and replaces the snapshot. An operator removed from a role group loses that role's capabilities at their next step-up, and one left with no role is signed out. Stepping up never extends the session's absolute expiry. The worst case for a removed operator is therefore: write access until their current elevated session expires (`STEP_UP_TTL_MINUTES`), and read access until the session itself ends (idle or absolute timeout below). To cut access immediately, disable the AD account: binds then fail, so they can't step up again.
 
 Two timeouts apply, both configurable:
 
@@ -29,6 +33,8 @@ The session cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, and signed with `SES
 ## Capabilities
 
 Authorization is capability-based, not role-based at the call site. Routes declare the capability they need (`app.requireCapability('write:user.resetPassword')`) and the auth plugin checks the actor's snapshot. Roles (`admin`, `operator`, `auditor`) are convenience bundles defined in [`packages/shared/src/capabilities.ts`](../packages/shared/src/capabilities.ts) — adding a role is a config change, not a code change.
+
+Each role is granted to the **direct** members of one AD group; nested membership isn't followed yet. First-run setup grants admin only to a direct member of the admin group: `BOOTSTRAP_ADMIN_GROUP_DN` when set, otherwise Domain Admins. It checks this before anything is saved; whoever reaches a fresh install first can't make themselves admin with an ordinary domain account. The later setup steps require the admin capability, and once setup is done the public status endpoint reveals only that it's done.
 
 The capability set is intentionally fine-grained (`read:user`, `write:user.resetPassword`, `write:user.unlock`, `write:user.attributes`, `write:group.membership`, `configure:directory`, `view:audit`, `view:raw_attributes`, etc.) so that giving someone "the ability to unlock accounts" doesn't also give them "the ability to reset passwords."
 
@@ -74,6 +80,8 @@ Some risks are inherent to writing to AD; OpenADUC mitigates them but cannot eli
 - **Account lockouts via `lockoutTime` writes.** OpenADUC's unlock endpoint zeroes `lockoutTime` rather than incrementing `badPwdCount`. A buggy or malicious caller using raw attribute write would still be capability-gated by `write:user.attributes` and audit-logged.
 - **Password reset replication delay.** A password reset against one DC may take seconds to replicate; the API does not poll for replication. The audit row records which DC was written to.
 - **Service account scope.** The bootstrap service account only needs read for sync. Write capabilities (`User-Force-Change-Password`, `Reset Password`, `Account Restrictions`) should be **delegated on the OUs you intend to manage**, not granted forest-wide. The setup wizard's documentation links walk through the recommended delegations.
+- **Secrets the service account can read.** Sync reads every attribute the service account is allowed to see. If it can read LAPS passwords (legacy `ms-Mcs-AdmPwd` or Windows LAPS), gMSA passwords or BitLocker recovery keys, OpenADUC drops them as they're read: they are never cached, returned by the API or shown. Even so, don't grant the service account those rights.
+- **Raw attributes.** The full attribute set of users, computers, deleted objects and GPOs (the Raw LDAP tab and the old-school Attribute Editor) is returned only to holders of `view:raw_attributes` (admins by default). Other readers get typed fields only, and the raw tabs are hidden.
 - **LDAPS certificate validation.** Production deployments must keep `AD_TLS_REJECT_UNAUTHORIZED=1`. Setting it to `0` (only valid for the local Samba dev container) disables hostname verification and exposes operator credentials to MITM.
 
 ## Reporting a vulnerability

@@ -159,6 +159,7 @@ function issueReason(u: UserSummary): string {
   if (status === 'disabled') return 'Disabled';
   if (status === 'expired') return 'Account expired';
   if (status === 'pwd-expired') return 'Password expired';
+  if (status === 'pwd-must-change') return 'Must change password at next sign-in';
   if (status === 'pwd-expiring') {
     if (!u.passwordExpiresAt) return 'Password expiring soon';
     const days = Math.ceil(

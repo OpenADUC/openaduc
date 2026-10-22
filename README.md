@@ -48,7 +48,7 @@ The numbers below are sized to comfortably cover a directory of up to roughly **
 
 ### Network
 
-- **Outbound TCP/636 (LDAPS)** to your domain controllers — how OpenADUC reads and writes AD. Plain LDAP (389) is not supported.
+- **Outbound TCP/636 (LDAPS)**, or TCP/389 with StartTLS, to your domain controllers — how OpenADUC reads and writes AD. Unencrypted LDAP is not supported.
 - **Inbound TCP/443** for the web UI, terminated by a reverse proxy you provide (nginx, Caddy, Traefik, …). The bundled web container speaks plain HTTP on port 8080 and is not safe to expose without TLS in front.
 - No outbound internet access is required at runtime once the container images are pulled.
 
@@ -98,15 +98,17 @@ OpenADUC sits in front of Active Directory and writes to it on behalf of operato
 - [Cloudflare Access](https://www.cloudflare.com/zero-trust/products/access/), [Pomerium](https://www.pomerium.com/), or [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) backed by an MFA-capable IdP.
 - [Microsoft Entra Application Proxy](https://learn.microsoft.com/entra/identity/app-proxy/) with Conditional Access — a natural fit if you already run Entra ID.
 
+With a proxy in front of the bundled web container, set `TRUST_PROXY_HOPS=2` so sign-in rate limits and the audit log see the real client address (see [configuration](docs/configuration.md)).
+
 This is defence in depth, not SSO replacement: the proxy enforces MFA at the network boundary, and operators then sign in to OpenADUC with their AD credentials. OpenADUC does not (yet) consume proxy-asserted identity headers.
 
 ### What OpenADUC does and does not provide
 
-- **AD-password authentication only — no application-layer MFA today.** Every sign-in performs a live LDAPS bind against your DCs; there is no in-app password store outside the local break-glass recovery account. If you cannot rely on network controls to keep untrusted users out, gate the app with MFA at a proxy.
+- **AD-password authentication only — no application-layer MFA today.** Every sign-in performs a live LDAPS bind against your DCs; there is no in-app password store and no local break-glass account. If you cannot rely on network controls to keep untrusted users out, gate the app with MFA at a proxy.
 - **Step-up re-auth on every write.** Mutating calls require re-entering the AD password; the elevated session is short-lived (default 60 min) and password material lives only in process memory.
 - **Append-only audit log.** Database triggers reject `UPDATE`, `DELETE`, and `TRUNCATE` on `audit_events`; even a compromised app cannot silently rewrite history.
 - **Encrypted secrets at rest.** Service-account passwords, Entra client secrets, and Teams webhooks are AES-256-GCM encrypted with `ENCRYPTION_KEY`. Back this key up alongside your database backups — losing it makes those rows unrecoverable.
-- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy).
+- **No TLS in the box.** The bundled web container speaks plain HTTP on `:8080`; you terminate TLS in front (nginx, Caddy, Traefik, or your IdP proxy). It sends a strict Content-Security-Policy, refuses framing, and adds HSTS when your proxy forwards `X-Forwarded-Proto: https`.
 
 For the threat model, capability list, step-up flow, and AD-specific risks, see [docs/security.md](docs/security.md).
 
@@ -114,7 +116,6 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 
 - Restrict the AD security group that grants `admin` to a small set of accounts that already use MFA at the AD/Entra layer.
 - Delegate the service account's write permissions to **only the OUs OpenADUC manages**, not domain-wide.
-- Use a strong, unique passphrase for the local recovery account and store it offline.
 - Back up `.env` (which holds `ENCRYPTION_KEY` and `SESSION_COOKIE_SECRET`) alongside your database backups.
 - Forward `audit_events` to a SIEM if you need long-term, off-host retention.
 
@@ -138,7 +139,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 | **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                 |
 | **Password policy** | View domain default and fine-grained policies                                                                                                              |
 | **Audit**           | Every write is logged with actor, target, before/after, and step-up status                                                                                 |
-| **Setup wizard**    | First-run flow: directory connection, recovery account, role bootstrap                                                                                     |
+| **Setup wizard**    | First-run flow: directory connection, service account, policy, initial sync                                                                                |
 
 ## Stack
 

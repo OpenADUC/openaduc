@@ -16,7 +16,7 @@ import { useToast } from 'primevue/usetoast';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
 import { ApiError } from '../api/client.js';
-import type { UserSummary } from '@openaduc/shared';
+import { csvRow, type UserSummary } from '@openaduc/shared';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -342,12 +342,7 @@ watch(
 // Generate from filteredRows so the export honors whatever the operator
 // is looking at right now. Replaces the server-side /users/export.csv
 // path; with all rows already in memory there's no reason to re-query.
-function csvEscape(v: unknown): string {
-  if (v == null) return '';
-  const s = String(v);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+// csvRow neutralises formula-like cells, same as the server export.
 
 function exportCsv(): void {
   const cols: { header: string; pick: (r: UserRow) => unknown }[] = [
@@ -363,9 +358,9 @@ function exportCsv(): void {
     { header: 'Title', pick: (r) => r.title ?? '' },
     { header: 'Modified', pick: (r) => r.modifiedAtSource ?? '' },
   ];
-  const lines = [cols.map((c) => csvEscape(c.header)).join(',')];
+  const lines = [csvRow(cols.map((c) => c.header))];
   for (const r of filteredRows.value) {
-    lines.push(cols.map((c) => csvEscape(c.pick(r))).join(','));
+    lines.push(csvRow(cols.map((c) => c.pick(r))));
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
