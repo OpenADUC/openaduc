@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { meResponseSchema, type Capability } from '@openaduc/shared';
-import { BadRequest, Unauthorized } from '../plugins/errorHandler.js';
+import { BadRequest, Forbidden, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
@@ -22,6 +23,8 @@ import { TASK_REGISTRY } from '../services/syncTasks/registry.js';
 // and policy changes go through their normal authenticated routes.
 
 const ONBOARDING_KEY = 'onboarding.completed_at';
+// pg_advisory_lock key serializing first-run setup.
+const SETUP_LOCK_KEY = 0x0add_5e7;
 
 // Tasks the wizard runs once, in priority order, to establish a baseline
 // before turning the periodic scheduler back on. Delta runners need a
@@ -124,6 +127,17 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
     }
   }
 
+  async function withSetupLock<T>(fn: () => Promise<T>): Promise<T> {
+    return app.db.connection().execute(async (conn) => {
+      await sql`select pg_advisory_lock(${SETUP_LOCK_KEY})`.execute(conn);
+      try {
+        return await fn();
+      } finally {
+        await sql`select pg_advisory_unlock(${SETUP_LOCK_KEY})`.execute(conn);
+      }
+    });
+  }
+
   async function firstConfiguredDirectoryId(): Promise<number | null> {
     const directories = await app.services.directoryConfig.listAll();
     const configured = directories.find((d) => d.configured);
@@ -135,12 +149,15 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // which step is done, what the operator already typed (no secrets), and
   // whether the whole flow has finished. The router consults this to
   // decide whether to keep forcing the operator into /setup.
-  app.get('/api/setup/status', async () => {
+  app.get('/api/setup/status', async (req) => {
     const directories = await app.services.directoryConfig.listAll();
-    const firstConfigured = directories.find((d) => d.configured) ?? null;
     const onboardingCompletedAt = await readOnboardingCompletedAt();
+    // The directory's details are only for the admin finishing setup: never
+    // for anonymous callers, and not at all once setup is done.
+    const firstConfigured =
+      !onboardingCompletedAt && req.actor ? (directories.find((d) => d.configured) ?? null) : null;
     return {
-      configured: !!firstConfigured,
+      configured: directories.some((d) => d.configured),
       hasServiceAccount: firstConfigured
         ? !!firstConfigured.syncBindUpn && firstConfigured.hasSyncBindPassword
         : false,
@@ -220,24 +237,55 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         throw Unauthorized(detail);
       }
 
-      const created = await app.services.directoryConfig.create(toProviderInput(body));
-
+      // Setup grants full admin, so it needs proof of admin authority in AD:
+      // membership of the admin group (BOOTSTRAP_ADMIN_GROUP_DN, else
+      // Domain Admins). Checked before anything is saved.
       const groupDns = auth.groupDns ?? auth.user.memberOfDns;
-      let capabilities = await app.services.authorization.resolveCapabilities(groupDns);
-      if (capabilities.length === 0) {
-        const desiredAdminGroupDn = `CN=Domain Admins,CN=Users,${domainRootFromBaseDn(body.baseDn)}`;
-        await app.db
-          .updateTable('app_settings')
-          .set({ value_json: JSON.stringify(desiredAdminGroupDn) })
-          .where('key', '=', 'authz.admin_group_dn')
-          .execute();
-        app.services.settings.invalidate('authz.admin_group_dn');
-        capabilities = await app.services.authorization.resolveCapabilities(groupDns);
+      const domainAdminsDn = `CN=Domain Admins,CN=Users,${domainRootFromBaseDn(body.baseDn)}`;
+      const qualifiesViaBootstrap = (
+        await app.services.authorization.resolveCapabilities(groupDns)
+      ).includes('configure:directory');
+      const inDomainAdmins = groupDns.some(
+        (dn) => dn.toLowerCase() === domainAdminsDn.toLowerCase(),
+      );
+      if (!qualifiesViaBootstrap && !inDomainAdmins) {
+        await app.services.audit
+          .recordEvent({
+            ...baseAudit,
+            result: 'denied',
+            errorCode: 'not_admin',
+            actorUserId: auth.user.objectGuid,
+            actorDisplayName: auth.user.displayName,
+            metadata: { domain: body.domain, adminUsername: body.adminUsername },
+          })
+          .catch(() => undefined);
+        const group = env.BOOTSTRAP_ADMIN_GROUP_DN || domainAdminsDn;
+        throw Forbidden(
+          `To finish setup, sign in with an account that is a direct member of ${group}. ` +
+            `That group's members become OpenADUC administrators.`,
+        );
       }
-      if (capabilities.length === 0) {
-        const { ROLE_CAPABILITIES } = await import('@openaduc/shared');
-        capabilities = [...ROLE_CAPABILITIES.admin];
-      }
+
+      // Two setups racing past the anyConfigured() check above would each
+      // create a directory and an admin; serialize the check and the write.
+      const created = await withSetupLock(async () => {
+        if (await app.services.directoryConfig.anyConfigured()) {
+          throw BadRequest(
+            'setup is already complete; add additional domains via Settings → Directories',
+          );
+        }
+        const row = await app.services.directoryConfig.create(toProviderInput(body));
+        if (!qualifiesViaBootstrap) {
+          await app.db
+            .updateTable('app_settings')
+            .set({ value_json: JSON.stringify(domainAdminsDn) })
+            .where('key', '=', 'authz.admin_group_dn')
+            .execute();
+          app.services.settings.invalidate('authz.admin_group_dn');
+        }
+        return row;
+      });
+      const capabilities = await app.services.authorization.resolveCapabilities(groupDns);
 
       const { session, cookieToken } = await app.services.sessions.createAdminSession({
         directoryId: created.id,
@@ -314,7 +362,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // The same-account warning is computed and returned (non-blocking) —
   // the wizard surfaces it inline so the operator can choose.
   app.post('/api/setup/service-account', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     handler: async (req) => {
       await ensureOnboardingActive();
@@ -407,7 +455,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // session — making them step up again to set defaults would be
   // theatre.
   app.post('/api/setup/policy', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const body = policySchema.parse(req.body);
@@ -481,7 +529,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // it — even on failure — so a partial onboarding doesn't leave sync
   // permanently disabled.
   app.post('/api/setup/run-initial-sync', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
@@ -539,7 +587,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // response is `{ job: null }` — the wizard treats that as "needs to
   // start" and will POST run-initial-sync.
   app.get('/api/setup/initial-sync-status', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async () => {
       const directoryId = await firstConfiguredDirectoryId();
       if (!directoryId) return { job: null };
@@ -554,7 +602,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // earlier-succeeded tasks untouched, then resume the sequence from the
   // next pending task.
   app.post('/api/setup/retry-task', {
-    preHandler: app.requireAuth,
+    preHandler: app.requireCapability('configure:directory'),
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
