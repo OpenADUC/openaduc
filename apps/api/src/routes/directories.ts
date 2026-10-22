@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { LDAP_TLS_MODES, ldapTransportProblem } from '@openaduc/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { BadRequest, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
@@ -27,7 +28,7 @@ const directoryCreateSchema = z.object({
   domain: z.string().trim().min(1).max(255),
   baseDn: z.string().trim().min(1).max(512),
   ldapUrls: z.array(z.string().trim().min(1)).min(1).max(10),
-  tlsMode: z.enum(['ldaps', 'starttls', 'plain']).default('ldaps'),
+  tlsMode: z.enum(LDAP_TLS_MODES).default('ldaps'),
   adminUsername: z.string().trim().min(1).max(256),
   adminPassword: z.string().min(1).max(1024),
   tlsRejectUnauthorized: z.boolean().optional(),
@@ -40,7 +41,7 @@ const directoryPatchFields = {
   domain: z.string().trim().min(1).max(255).optional(),
   baseDn: z.string().trim().min(1).max(512).optional(),
   ldapUrls: z.array(z.string().trim().min(1)).min(1).max(10).optional(),
-  tlsMode: z.enum(['ldaps', 'starttls', 'plain']).optional(),
+  tlsMode: z.enum(LDAP_TLS_MODES).optional(),
   tlsRejectUnauthorized: z.boolean().optional(),
   operationTimeoutMs: z.coerce.number().int().min(1000).max(120000).optional(),
   // Sync service account. Empty strings clear the stored values.
@@ -131,6 +132,8 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
     handler: async (req) => {
       const body = directoryCreateSchema.parse(req.body);
+      const transportProblem = ldapTransportProblem(body.ldapUrls, body.tlsMode);
+      if (transportProblem) throw BadRequest(transportProblem);
       // Same UPN normalization as setup — accept any AD-friendly form, send
       // `user@<domain>` to the bind.
       const bindUsername = composeBindUpn(body.adminUsername, body.domain);
@@ -214,8 +217,12 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
       const before = await app.services.directoryConfig.getById(id);
       if (!before) throw NotFound('directory not found');
 
-      if (body.tlsMode === 'plain' && before.tlsMode !== 'plain') {
-        req.log.warn({ id }, 'directory TLS mode being downgraded to plain');
+      if (body.ldapUrls !== undefined || body.tlsMode !== undefined) {
+        const transportProblem = ldapTransportProblem(
+          body.ldapUrls ?? before.ldapUrls,
+          body.tlsMode ?? before.tlsMode,
+        );
+        if (transportProblem) throw BadRequest(transportProblem);
       }
 
       const updated = await app.services.directoryConfig.update(id, compactPatch(body));
@@ -293,7 +300,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
           domain: directory.domain,
           baseDn: directory.baseDn,
           ldapUrls: directory.ldapUrls,
-          tlsMode: directory.tlsMode as 'ldaps' | 'starttls' | 'plain',
+          tlsMode: directory.tlsMode,
           bindUpn: body.syncBindUpn,
           bindPassword: password,
           tlsRejectUnauthorized,

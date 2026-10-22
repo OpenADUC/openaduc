@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { meResponseSchema, type Capability } from '@openaduc/shared';
+import {
+  LDAP_TLS_MODES,
+  ldapTransportProblem,
+  meResponseSchema,
+  type Capability,
+} from '@openaduc/shared';
 import { BadRequest, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
@@ -43,7 +48,7 @@ const directoryInputSchema = z.object({
   domain: z.string().trim().min(1).max(255),
   baseDn: z.string().trim().min(1).max(512),
   ldapUrls: z.array(z.string().trim().min(1)).min(1).max(10),
-  tlsMode: z.enum(['ldaps', 'starttls', 'plain']).default('ldaps'),
+  tlsMode: z.enum(LDAP_TLS_MODES).default('ldaps'),
   adminUsername: z.string().trim().min(1).max(256),
   adminPassword: z.string().min(1).max(1024),
   tlsRejectUnauthorized: z.boolean().optional(),
@@ -176,6 +181,8 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         );
       }
       const body: SetupBody = directoryInputSchema.parse(req.body);
+      const transportProblem = ldapTransportProblem(body.ldapUrls, body.tlsMode);
+      if (transportProblem) throw BadRequest(transportProblem);
       const bindUsername = composeBindUpn(body.adminUsername, body.domain);
       const provider = buildEphemeralProvider(
         {
@@ -334,7 +341,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           domain: directory.domain,
           baseDn: directory.baseDn,
           ldapUrls: directory.ldapUrls,
-          tlsMode: directory.tlsMode as 'ldaps' | 'starttls' | 'plain',
+          tlsMode: directory.tlsMode,
           ...(directory.tlsRejectUnauthorized !== null
             ? { tlsRejectUnauthorized: directory.tlsRejectUnauthorized }
             : {}),

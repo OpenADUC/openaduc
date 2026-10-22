@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { LDAP_TLS_MODES, type LdapTlsMode, ldapTransportProblem } from '@openaduc/shared';
 import type { Kysely } from 'kysely';
 import type { Env } from '../config/env.js';
 import type { DB } from '../db/types.js';
@@ -19,7 +20,13 @@ export interface DirectoryProviderSummary {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: string;
+  tlsMode: LdapTlsMode;
+  /**
+   * Why the URLs don't fit the TLS mode (e.g. ldap:// under LDAPS), or null.
+   * Saves are validated, so this flags rows from before that check. Such a
+   * directory still connects with TLS (see transportFor) but should be fixed.
+   */
+  transportProblem: string | null;
   /**
    * Per-directory TLS hardening setting. False = accept self-signed certs
    * (lab / on-prem dev DCs). The env var is the global default; this
@@ -43,7 +50,7 @@ export interface DirectoryProviderInput {
   domain: string;
   baseDn: string;
   ldapUrls: string[];
-  tlsMode: 'ldaps' | 'starttls' | 'plain';
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized?: boolean;
   operationTimeoutMs?: number;
   /** Background-sync service-account UPN. Optional. */
@@ -73,6 +80,7 @@ export function buildEphemeralProvider(
     name: input.name,
     baseDn: input.baseDn,
     ldapUrls: input.ldapUrls,
+    tlsMode: input.tlsMode,
     tlsRejectUnauthorized: input.tlsRejectUnauthorized ?? fallbacks.tlsRejectUnauthorized,
     tlsCaPath: fallbacks.tlsCaPath,
     operationTimeoutMs: input.operationTimeoutMs ?? fallbacks.operationTimeoutMs,
@@ -274,7 +282,8 @@ function rowToSummary(row: {
     domain: row.domain_name,
     baseDn: row.base_dn,
     ldapUrls: row.ldap_urls,
-    tlsMode: row.tls_mode,
+    tlsMode: parseTlsMode(row.tls_mode),
+    transportProblem: ldapTransportProblem(row.ldap_urls, parseTlsMode(row.tls_mode)),
     tlsRejectUnauthorized: parseTlsRejectUnauthorized(row.config_json),
     configured: row.configured,
     syncBindUpn: row.sync_bind_upn ?? null,
@@ -282,4 +291,10 @@ function rowToSummary(row: {
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };
+}
+
+// Unknown stored values are treated as LDAPS, the strictest mode: an
+// ldap:// URL then refuses to connect rather than binding in cleartext.
+function parseTlsMode(value: string): LdapTlsMode {
+  return (LDAP_TLS_MODES as readonly string[]).includes(value) ? (value as LdapTlsMode) : 'ldaps';
 }

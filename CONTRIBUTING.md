@@ -65,7 +65,7 @@ Common types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `polish`. Scop
 ## What we're unlikely to merge
 
 - Changes that broaden the production-use grant in [LICENSE](LICENSE) (the BSL terms are deliberate).
-- Plain-LDAP (port 389) support — OpenADUC is LDAPS-only by design.
+- Unencrypted LDAP. Binds and writes always go over TLS: LDAPS, or StartTLS on port 389.
 - Direct DC access without going through the directory provider abstraction.
 - New runtime dependencies for trivial functionality.
 

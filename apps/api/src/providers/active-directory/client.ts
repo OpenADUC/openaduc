@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { readFileSync } from 'node:fs';
+import { type LdapTlsMode, ldapUrlScheme } from '@openaduc/shared';
 import { BusyError, Client, type ClientOptions, ResultCodeError, UnavailableError } from 'ldapts';
-import type { Env } from '../../config/env.js';
 import { DirectoryUnavailableError } from '../types.js';
 
 export interface ClientConfig {
   ldapUrls: readonly string[];
+  tlsMode: LdapTlsMode;
   tlsRejectUnauthorized: boolean;
   tlsCaPath?: string | undefined;
   operationTimeoutMs: number;
 }
 
-export function clientConfigFromEnv(env: Env): ClientConfig {
-  const config: ClientConfig = {
-    ldapUrls: env.AD_LDAP_URLS,
-    tlsRejectUnauthorized: env.AD_TLS_REJECT_UNAUTHORIZED,
-    operationTimeoutMs: env.AD_OPERATION_TIMEOUT_MS,
-  };
-  if (env.AD_TLS_CA_PATH) {
-    config.tlsCaPath = env.AD_TLS_CA_PATH;
-  }
-  return config;
+/**
+ * How a connection to `url` starts. ldaps:// is TLS from the first byte;
+ * ldap:// in StartTLS mode is upgraded before any bind. ldap:// under LDAPS
+ * also means TLS from the first byte on that port: saves no longer allow
+ * it, but older directories (e.g. ldap://dc:636) have always connected that
+ * way and keep working. Nothing is ever sent in cleartext.
+ */
+export function transportFor(url: string, mode: LdapTlsMode): 'tls' | 'starttls' {
+  return mode === 'starttls' && ldapUrlScheme(url) === 'ldap' ? 'starttls' : 'tls';
 }
 
 /**
@@ -39,14 +39,20 @@ export function createClient(config: ClientConfig, urlOverride?: string): Client
     url,
     timeout: config.operationTimeoutMs,
     connectTimeout: config.operationTimeoutMs,
-    tlsOptions: {
-      rejectUnauthorized: config.tlsRejectUnauthorized,
-    },
   };
-  if (config.tlsCaPath && opts.tlsOptions) {
-    opts.tlsOptions.ca = readFileSync(config.tlsCaPath);
-  }
+  // ldapts opens TLS immediately whenever tlsOptions is set, even for
+  // ldap:// URLs, so pass it only when the connection should start as TLS.
+  // StartTLS connections get their options at upgrade time instead.
+  if (transportFor(url, config.tlsMode) === 'tls') opts.tlsOptions = tlsOptionsFor(config);
   return new Client(opts);
+}
+
+function tlsOptionsFor(config: ClientConfig): NonNullable<ClientOptions['tlsOptions']> {
+  const tls: NonNullable<ClientOptions['tlsOptions']> = {
+    rejectUnauthorized: config.tlsRejectUnauthorized,
+  };
+  if (config.tlsCaPath) tls.ca = readFileSync(config.tlsCaPath);
+  return tls;
 }
 
 // Node socket and DNS failures.
@@ -104,7 +110,9 @@ export function describeConnectionError(err: unknown): string {
 /**
  * Run `fn` against each configured LDAP URL until one succeeds. Caller is
  * responsible for the bind+unbind inside `fn`. Throws the last error if all
- * servers fail.
+ * servers fail. In StartTLS mode the connection is upgraded before `fn`
+ * runs, so no bind ever goes out unencrypted; if the upgrade fails, `fn`
+ * isn't called for that server.
  *
  * Only a throw moves on to the next server, so `fn` must let unreachable
  * errors from its bind propagate (see isDirectoryUnreachable) and return,
@@ -119,6 +127,9 @@ export async function withFailover<T>(
   for (const url of config.ldapUrls) {
     const client = createClient(config, url);
     try {
+      if (transportFor(url, config.tlsMode) === 'starttls') {
+        await client.startTLS(tlsOptionsFor(config));
+      }
       return await fn(client);
     } catch (err) {
       lastError = err;
