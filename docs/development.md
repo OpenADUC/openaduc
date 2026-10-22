@@ -4,7 +4,7 @@ This guide is for working on OpenADUC itself — running the stack from source, 
 
 ## Prerequisites
 
-- **Node.js 22.13 or newer in the Node 22 release line** (`.nvmrc` selects Node 22; `nvm install && nvm use` installs and selects its latest patch). ESLint 10 requires at least 22.13.
+- **Node.js 22.18 or newer in the Node 22 release line** (`.nvmrc` selects Node 22; `nvm install && nvm use` installs and selects its latest patch). graphile-worker 0.18 and the Babel 8 parser that vue-router 5.4 pulls in require at least 22.18, and `.npmrc` sets `engine-strict`, so older patches fail `pnpm install`.
 - **pnpm 10** (`corepack enable && corepack prepare pnpm@10 --activate` is the easy path).
 - **Docker** with Compose v2 — used for Postgres and (optionally) a local Samba AD-DC container.
 - **A directory to talk to.** Either a real test AD (preferred), or the bundled dev Samba container (see below). Pointing dev at a production DC is a bad idea.
