@@ -1,5 +1,8 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { latestRequest } from '../design/lib/latestRequest.js';
+import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import Button from 'primevue/button';
@@ -295,9 +298,27 @@ const props = defineProps<{ id: string }>();
 const auth = useAuthStore();
 const toast = useToast();
 
-const user = ref<UserDetail | null>(null);
-const loading = ref(false);
-const error = ref<string | null>(null);
+const {
+  record: user,
+  loading,
+  error,
+  load,
+} = useDetailRecord<UserDetail>({
+  id: () => props.id,
+  fetch: async (id) => (await api.users.get(id)).user,
+  notFoundMessage: 'User not found',
+  failedMessage: 'Failed to load user',
+  // The Overview activity card belongs to the previous user: clear it, and
+  // abandon a request for it still in flight.
+  beforeLoad: () => {
+    activityRequests.begin();
+    activityLoading.value = false;
+    activityLoaded.value = false;
+    activityEvents.value = [];
+  },
+  onLoaded: () => resetForm(),
+});
+
 const refreshing = ref(false);
 const saving = ref(false);
 const activeTab = ref<TabId>('overview');
@@ -334,18 +355,25 @@ const activityLoading = ref(false);
 const activityLoaded = ref(false);
 const activityError = ref<string | null>(null);
 
+const activityRequests = latestRequest();
+
 async function loadActivity(): Promise<void> {
   if (!user.value || activityLoading.value) return;
+  const isCurrent = activityRequests.begin();
+  const forUserId = user.value.id;
   activityLoading.value = true;
   activityError.value = null;
   try {
-    const r = await api.users.activity(user.value.id, 10);
+    const r = await api.users.activity(forUserId, 10);
+    // Ignore if the operator has moved on to another user meanwhile.
+    if (!isCurrent() || user.value?.id !== forUserId) return;
     activityEvents.value = r.rows;
     activityLoaded.value = true;
   } catch (err) {
+    if (!isCurrent()) return;
     activityError.value = err instanceof Error ? err.message : 'Failed to load activity';
   } finally {
-    activityLoading.value = false;
+    if (isCurrent()) activityLoading.value = false;
   }
 }
 
@@ -460,28 +488,6 @@ const signInDialogEventId = ref<string | null>(null);
 function onSignInSelect(id: string): void {
   signInDialogEventId.value = id;
   signInDialogOpen.value = true;
-}
-
-async function load(): Promise<void> {
-  loading.value = true;
-  error.value = null;
-  // Stale activity cache from a previous user — clear so the Overview card
-  // re-fetches against the new user on next load.
-  activityLoaded.value = false;
-  activityEvents.value = [];
-  try {
-    const resp = await api.users.get(props.id);
-    user.value = resp.user;
-    resetForm();
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      error.value = 'User not found';
-    } else {
-      error.value = err instanceof Error ? err.message : 'Failed to load user';
-    }
-  } finally {
-    loading.value = false;
-  }
 }
 
 async function refreshFromAd(): Promise<void> {
@@ -1242,6 +1248,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   <div class="page-inner detail-page" :style="{ '--detail-sticky-offset': `${heroHeight}px` }">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
+    <DetailLoading v-if="!user && loading">Loading user…</DetailLoading>
     <div v-if="user" class="detail-stack">
       <!-- Hero. Two-column layout: avatar + identity + identifier line +
            launchers + DN, with a compact meta strip on the right. Actions

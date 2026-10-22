@@ -1,5 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable, { type DataTableRowClickEvent } from 'primevue/datatable';
@@ -26,10 +28,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
 
-const group = ref<GroupDetail | null>(null);
-const loading = ref(false);
 const refreshing = ref(false);
-const error = ref<string | null>(null);
 
 // Drives the compact-on-scroll hero. `setHero` is bound to the hero
 // section's :ref. `compact` flips on scroll; `heroHeight` tracks the
@@ -55,22 +54,17 @@ const busyMemberId = ref<string | null>(null);
 const canManage = computed(() => auth.hasCapability('write:group.membership'));
 const memberCount = computed(() => group.value?.members.length ?? 0);
 
-async function load(): Promise<void> {
-  loading.value = true;
-  error.value = null;
-  try {
-    const r = await api.groups.get(props.id);
-    group.value = r.group;
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      error.value = 'Group not found';
-    } else {
-      error.value = err instanceof Error ? err.message : 'Failed to load group';
-    }
-  } finally {
-    loading.value = false;
-  }
-}
+const {
+  record: group,
+  loading,
+  error,
+  load,
+} = useDetailRecord<GroupDetail>({
+  id: () => props.id,
+  fetch: async (id) => (await api.groups.get(id)).group,
+  notFoundMessage: 'Group not found',
+  failedMessage: 'Failed to load group',
+});
 
 async function refreshFromAd(): Promise<void> {
   // Same trick as user detail: GET always live-refreshes.
@@ -236,6 +230,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   >
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
+    <DetailLoading v-if="!group && loading">Loading group…</DetailLoading>
     <div v-if="group" class="detail-stack">
       <!-- Hero. Mirrors the User detail layout: avatar (rounded square so
            a group reads as a different class of thing than a person at a
