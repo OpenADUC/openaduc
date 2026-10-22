@@ -49,7 +49,7 @@ export async function markOusStale(
     SET stale_at = ${now}
     WHERE provider_id = ${providerId}
       AND stale_at IS NULL
-      AND lower(distinguished_name) NOT IN (${sql.join(Array.from(seenDnsLower))})
+      AND lower(distinguished_name) <> ALL(${Array.from(seenDnsLower)}::text[])
   `.execute(db);
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { upsertUser } from '../../userCache.js';
+import { markUsersStale, upsertUser } from '../../userCache.js';
 import { shouldMarkStale } from './fullCrawl.js';
 import type { RunnerContext, RunnerResult } from '../types.js';
 
@@ -31,7 +31,7 @@ export async function runUsersFull(ctx: RunnerContext): Promise<RunnerResult> {
   // staleness badge; not deleted — sync_jobs / tombstones owns deletes).
   const crawl = { found: count, written: seen.size, lastError };
   if (await shouldMarkStale(ctx, { kind: 'users', table: 'user_cache_records', ...crawl })) {
-    await markUnseenUsersStale(ctx, seen);
+    await markUsersStale(ctx.db, ctx.providerId, seen);
   }
 
   return {
@@ -39,24 +39,4 @@ export async function runUsersFull(ctx: RunnerContext): Promise<RunnerResult> {
     stats: { usersSeen: count, usersStaleScanned: seen.size },
     triggers: ['memberships.rebuild'],
   };
-}
-
-async function markUnseenUsersStale(ctx: RunnerContext, seen: Set<string>): Promise<void> {
-  const now = new Date().toISOString();
-  if (seen.size === 0) {
-    await ctx.db
-      .updateTable('user_cache_records')
-      .set({ stale_at: now })
-      .where('provider_id', '=', ctx.providerId)
-      .where('stale_at', 'is', null)
-      .execute();
-    return;
-  }
-  await ctx.db
-    .updateTable('user_cache_records')
-    .set({ stale_at: now })
-    .where('provider_id', '=', ctx.providerId)
-    .where('stale_at', 'is', null)
-    .where('object_guid', 'not in', Array.from(seen))
-    .execute();
 }

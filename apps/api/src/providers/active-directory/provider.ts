@@ -1927,19 +1927,28 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     pageSize: number,
     map: (e: Entry) => T,
   ): AsyncIterable<T> {
-    // ldapts paged search returns all entries together (it manages the
-    // cookie internally). For very large directories a true streaming API
-    // would help; for MVP scale (low tens of thousands) batching is fine.
-    yield* await this.withServiceBind(async (client) => {
-      const { searchEntries } = await client.search(this.config.baseDn, {
+    // Yield each page as it arrives, so memory is bounded by the page size
+    // rather than the directory size (users carry photos). Failover happens
+    // only while connecting: a search that breaks midway isn't restarted on
+    // another DC, which would repeat entries.
+    const client = await withFailover(this.clientConfig, async (c) => {
+      await c.bind(this.config.serviceAccountUpn, this.config.serviceAccountPassword);
+      return c;
+    });
+    try {
+      const pages = client.searchPaginated(this.config.baseDn, {
         scope: 'sub',
         filter,
         attributes,
         explicitBufferAttributes: BINARY_ATTRS,
         paged: { pageSize },
       });
-      return searchEntries.map(map);
-    });
+      for await (const page of pages) {
+        for (const entry of page.searchEntries) yield map(entry);
+      }
+    } finally {
+      await client.unbind().catch(() => undefined);
+    }
   }
 }
 

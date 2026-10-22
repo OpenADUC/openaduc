@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { RunnerContext, RunnerResult } from '../types.js';
+import { uuidNotIn } from '../../../lib/sqlSets.js';
 
 /**
  * High-frequency lockout poller. Runs every 5 min by default.
@@ -53,7 +54,7 @@ export async function runUsersLocked(ctx: RunnerContext): Promise<RunnerResult> 
       .set({ locked: false, live_refreshed_at: now })
       .where('provider_id', '=', ctx.providerId)
       .where('locked', '=', true)
-      .where('object_guid', 'not in', Array.from(seenGuids))
+      .where(uuidNotIn('object_guid', seenGuids))
       .executeTakeFirst();
     cleared = Number(res.numUpdatedRows ?? 0n);
   }
