@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, HTTPMethods, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { Client as LdapClient } from 'ldapts';
 import pg from 'pg';
-import { inject } from 'vitest';
+import { inject, vi } from 'vitest';
 import { TEMPLATE_DB } from './globalSetup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,8 @@ const ORIGIN = 'http://localhost:5173';
 
 export const DC = {
   ldapsUrl: `ldaps://localhost:${process.env.DC_LDAPS_PORT ?? '10636'}`,
+  /** Plain LDAP port; the DC refuses simple binds on it unless StartTLS ran first. */
+  ldapUrl: `ldap://localhost:${process.env.DC_LDAP_PORT ?? '10389'}`,
   caPath: path.join(dcDir, '.generated', 'ca.pem'),
   domain: 'openaduc.test',
   baseDn: 'DC=openaduc,DC=test',
@@ -70,8 +72,8 @@ let instanceCounter = 0;
 
 /**
  * Build the API against a fresh database cloned from the migrated template.
- * Call once per test file (beforeAll); each file runs in its own module
- * graph, so env and caches don't leak between files.
+ * Usually called once per test file (beforeAll); call it again for a
+ * second, independent instance (e.g. to run setup twice).
  */
 export async function startApi(): Promise<TestApi> {
   const adminUrl = inject('adminDatabaseUrl');
@@ -82,7 +84,7 @@ export async function startApi(): Promise<TestApi> {
 
   Object.assign(process.env, {
     NODE_ENV: 'test',
-    LOG_LEVEL: 'fatal',
+    LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? 'fatal',
     DATABASE_URL: dbUrl.toString(),
     DATABASE_POOL_MIN: '0',
     SESSION_COOKIE_SECRET: 'integration-test-cookie-secret-0123456789abcdef',
@@ -101,6 +103,9 @@ export async function startApi(): Promise<TestApi> {
     BOOTSTRAP_ADMIN_GROUP_DN: '',
   });
 
+  // Fresh module graph so this instance reads the env set above (loadEnv
+  // memoizes) even when a file starts more than one API.
+  vi.resetModules();
   const { buildApp } = await import('../../src/app.js');
   const app = await buildApp();
   await app.ready();
@@ -132,13 +137,18 @@ async function withAdmin<T>(url: string, fn: (c: pg.Client) => Promise<T>): Prom
  * account, policy, initial sync), then map the operator and auditor roles to
  * the fixture groups. Leaves the admin client signed in and stepped up.
  */
-export async function configureDirectory(api: TestApi): Promise<TestClient> {
+export async function configureDirectory(
+  api: TestApi,
+  connection: { ldapUrls: string[]; tlsMode: 'ldaps' | 'starttls' } = {
+    ldapUrls: [DC.ldapsUrl],
+    tlsMode: 'ldaps',
+  },
+): Promise<TestClient> {
   const admin = api.client();
   const init = await admin.post('/api/setup/initialize', {
     domain: DC.domain,
     baseDn: DC.baseDn,
-    ldapUrls: [DC.ldapsUrl],
-    tlsMode: 'ldaps',
+    ...connection,
     adminUsername: 'oa.admin',
     adminPassword: DC.password,
   });
