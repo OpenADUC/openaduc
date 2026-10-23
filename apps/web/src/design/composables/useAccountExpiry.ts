@@ -23,7 +23,9 @@ export type ExpiryFailure = WriteFailure<ExpiryRun>;
  * Set when a user's account expires, or that it never does. The operator
  * picks the last day it works; `onSet` gets the offer of Undo, which puts
  * the previous expiry back the same way. A failed write stays in
- * `failure` until it's retried, dismissed or the next load.
+ * `failure` until it's retried, dismissed or the next load; with
+ * `failuresPerAccount`, each account's stays in `failureOn(id)` until a
+ * load or write of that account.
  */
 export function useAccountExpiry(options: {
   onSet: (
@@ -32,6 +34,7 @@ export function useAccountExpiry(options: {
     offer: UndoOffer,
   ) => void | Promise<void>;
   onFailed?: (failure: ExpiryFailure) => void | Promise<void>;
+  failuresPerAccount?: boolean;
 }) {
   const account = ref<ExpirySubject | null>(null);
   const never = ref(false);
@@ -46,6 +49,7 @@ export function useAccountExpiry(options: {
     key: ({ account: a }) => a.id,
     onDone: ({ account: a, expiresAt }, offer) => options.onSet(a, expiresAt, offer),
     onFailed: options.onFailed,
+    failuresPerKey: options.failuresPerAccount,
   });
   const submitting = computed(
     () => (account.value ? writes.runningOn(account.value.id) : null) !== null,
@@ -66,7 +70,7 @@ export function useAccountExpiry(options: {
     const current = subject.accountExpiresAt;
     never.value = current === null;
     endOf.value = current && Date.parse(current) > Date.now() ? lastDayOf(current) : null;
-    writes.dismiss();
+    writes.dismissOn(subject.id);
   }
 
   function submit(): void {
@@ -82,9 +86,12 @@ export function useAccountExpiry(options: {
     ready,
     submitting,
     failure: writes.failure,
+    failureOn: writes.failureOn,
     load,
     submit,
     retry: writes.retry,
     dismiss: writes.dismiss,
+    retryOn: writes.retryOn,
+    dismissOn: writes.dismissOn,
   };
 }
