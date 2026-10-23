@@ -2,6 +2,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import Dialog from 'primevue/dialog';
+import ToggleSwitch from 'primevue/toggleswitch';
+import { useThemeStore } from '../stores/useTheme.js';
 import { SHORTCUT_KEYS } from '../lib/shortcutKeys.js';
 import {
   SHORTCUT_SECTIONS,
@@ -14,6 +16,7 @@ import {
 // listens for them, and `?` lists them.
 
 const open = ref(false);
+const theme = useThemeStore();
 
 useShortcuts(() => [
   {
@@ -48,6 +51,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
     <p id="shortcut-sheet-note" class="sheet-note">
       Shortcuts on this page. They don’t work while you’re typing in a field.
     </p>
+    <div class="sheet-switch">
+      <ToggleSwitch v-model="theme.singleKeyShortcuts" input-id="single-key-shortcuts" />
+      <label for="single-key-shortcuts">Single-key shortcuts</label>
+    </div>
+    <p v-if="!theme.singleKeyShortcuts" class="sheet-note" role="status">
+      Off in this browser: these keys, ? included, do nothing. Turn them back on under Appearance.
+    </p>
     <section v-for="sec in sections" :key="sec.title" class="sheet-section">
       <h3 class="sheet-title">{{ sec.title }}</h3>
       <dl class="sheet-list">
@@ -75,6 +85,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onShortcutKey));
   margin: 0 0 12px;
   font-size: 12.5px;
   color: var(--text-3);
+}
+
+.sheet-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--text);
 }
 
 .sheet-section + .sheet-section {

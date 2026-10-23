@@ -98,6 +98,9 @@ interface PersistedShape {
   // Active Directory Users and Computers MMC look-and-feel instead of the
   // modern views. See apps/web/src/oldschool/.
   oldSchool?: boolean;
+  // Single-key shortcuts (/, j, k, u, ?…). WCAG 2.1.4: they can get in the
+  // way of speech input, so the operator can turn them off.
+  singleKeyShortcuts?: boolean;
 }
 
 function readPersisted(): PersistedShape {
@@ -127,6 +130,7 @@ export const useThemeStore = defineStore('theme', () => {
   const accent = ref<AccentName>(persisted.accent ?? 'cyan');
   const sidebarCollapsed = ref<boolean>(persisted.sidebarCollapsed ?? false);
   const oldSchool = ref<boolean>(persisted.oldSchool ?? false);
+  const singleKeyShortcuts = ref<boolean>(persisted.singleKeyShortcuts ?? true);
 
   // Resolve tokens for the *active* mode — light gets the darker
   // shades, dark gets the bright ones. Same accent name, two palettes.
@@ -171,6 +175,7 @@ export const useThemeStore = defineStore('theme', () => {
       accent: accent.value,
       sidebarCollapsed: sidebarCollapsed.value,
       oldSchool: oldSchool.value,
+      singleKeyShortcuts: singleKeyShortcuts.value,
     });
   });
 
@@ -202,6 +207,7 @@ export const useThemeStore = defineStore('theme', () => {
     accent,
     sidebarCollapsed,
     oldSchool,
+    singleKeyShortcuts,
     accentTokens,
     listRowHeight,
     setMode,

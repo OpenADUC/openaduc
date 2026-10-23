@@ -105,6 +105,31 @@ const accentNames = Object.keys(ACCENTS) as AccentName[];
 
     <div class="settings-divider" />
 
+    <div class="settings-row">
+      <div class="settings-label">
+        <label class="setting-name" for="appearance-single-key-shortcuts">
+          Single-key shortcuts
+        </label>
+        <div class="setting-sub">
+          Keys such as / and j on lists, u or e on a user’s page, and ? for the list of them. Turn
+          them off if they get in the way, for example of speech input.
+        </div>
+      </div>
+      <div class="settings-control toggle-control">
+        <label class="switch" :class="{ on: theme.singleKeyShortcuts }">
+          <input
+            id="appearance-single-key-shortcuts"
+            v-model="theme.singleKeyShortcuts"
+            type="checkbox"
+            role="switch"
+          />
+          <span class="track"><span class="thumb" /></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-divider" />
+
     <div class="settings-row old-school-row">
       <div class="settings-label">
         <div class="setting-name">Old School</div>
