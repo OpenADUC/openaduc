@@ -25,6 +25,7 @@ import { auditContextFromRequest, withAudit } from '../services/auditContext.js'
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import { changeMembership } from './groupMembership.js';
+import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -1316,23 +1317,6 @@ async function toggleEnabled(
   }
   await app.services.userLiveRefresh.refresh(provider, id);
   return { ok: true, before: result.before, after: result.after };
-}
-
-/**
- * Build the write-context object the AD provider expects. The bind password
- * comes from the in-process credential cache (populated by step-up). The
- * non-null assertions are safe because these routes require step-up.
- */
-function ctx(
-  actor: NonNullable<import('fastify').FastifyRequest['actor']>,
-  req: import('fastify').FastifyRequest,
-): { actorUserId: string; actorUsername: string; actorPassword: string; correlationId: string } {
-  return {
-    actorUserId: actor.session.actorUserId,
-    actorUsername: actor.session.actorUsername!,
-    actorPassword: actor.elevatedPassword!,
-    correlationId: req.correlationId,
-  };
 }
 
 function dateOrNull(v: Date | string | null): string | null {

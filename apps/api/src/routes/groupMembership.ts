@@ -3,9 +3,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { groupMembershipChangeSchema } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import type { DirectoryObjectIdentifier, WriteContext } from '../providers/types.js';
+import type { DirectoryObjectIdentifier } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { reconcileNestedGroups, upsertGroup } from '../services/groupCache.js';
+import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -49,12 +50,7 @@ export async function changeMembership(
     .executeTakeFirst();
   if (!groupRow) throw NotFound('group not found');
 
-  const writeCtx: WriteContext = {
-    actorUserId: actor.session.actorUserId,
-    actorUsername: actor.session.actorUsername,
-    actorPassword: actor.elevatedPassword!,
-    correlationId: req.correlationId,
-  };
+  const writeCtx = ctx(actor, req);
   const result = await withAudit(
     app.services.audit,
     {
