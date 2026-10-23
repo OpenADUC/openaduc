@@ -22,6 +22,7 @@ import type { ObjectAction, ObjectPageTab } from './_detail/objectPage';
 import type { ActionFailure } from '../design/lib/actionFailure.js';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useMoveDialog } from './_detail/useMoveDialog';
+import { SHORTCUT_KEYS } from '../design/lib/shortcutKeys.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -162,7 +163,7 @@ const actions = computed<ObjectAction[]>(() => {
           label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
           icon: 'pi-ban',
           capability: 'write:computer.enableDisable',
-          shortcut: 'e',
+          shortcut: SHORTCUT_KEYS.computer.enableDisable,
           unavailable,
           danger: true,
           disabled: busy.value,
@@ -172,7 +173,7 @@ const actions = computed<ObjectAction[]>(() => {
           label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
           icon: 'pi-check',
           capability: 'write:computer.enableDisable',
-          shortcut: 'e',
+          shortcut: SHORTCUT_KEYS.computer.enableDisable,
           disabled: busy.value,
           run: () => runAccountAction('enable', c),
         },
@@ -180,7 +181,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: c && resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
       icon: 'pi-refresh',
       capability: 'write:computer.resetAccount',
-      shortcut: 'r',
+      shortcut: SHORTCUT_KEYS.computer.resetAccount,
       unavailable,
       danger: true,
       disabled: busy.value,
@@ -190,7 +191,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:computer.move',
-      shortcut: 'm',
+      shortcut: SHORTCUT_KEYS.computer.move,
       unavailable,
       disabled: busy.value,
       run: openMoveDialog,

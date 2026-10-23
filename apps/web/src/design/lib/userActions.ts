@@ -2,6 +2,7 @@
 // The actions on a user's account wherever they're offered, the user's page
 // and quick search, so they're named and gated the same way.
 import type { Capability } from '@openaduc/shared';
+import { SHORTCUT_KEYS } from './shortcutKeys.js';
 
 export type UserAction = 'unlock' | 'reset-password' | 'enable' | 'disable';
 
@@ -22,21 +23,21 @@ export const USER_ACTIONS: Record<UserAction, UserActionInfo> = {
     running: 'Unlocking…',
     icon: 'pi-unlock',
     capability: 'write:user.unlock',
-    shortcut: 'u',
+    shortcut: SHORTCUT_KEYS.user.unlock,
   },
   'reset-password': {
     label: 'Reset password…',
     icon: 'pi-key',
     capability: 'write:user.resetPassword',
     danger: true,
-    shortcut: 'r',
+    shortcut: SHORTCUT_KEYS.user.resetPassword,
   },
   enable: {
     label: 'Enable account',
     running: 'Enabling…',
     icon: 'pi-check',
     capability: 'write:user.enableDisable',
-    shortcut: 'e',
+    shortcut: SHORTCUT_KEYS.user.enableDisable,
   },
   disable: {
     label: 'Disable account',
@@ -44,7 +45,7 @@ export const USER_ACTIONS: Record<UserAction, UserActionInfo> = {
     icon: 'pi-ban',
     capability: 'write:user.enableDisable',
     danger: true,
-    shortcut: 'e',
+    shortcut: SHORTCUT_KEYS.user.enableDisable,
   },
 };
 
