@@ -518,6 +518,19 @@ export const api = {
     get(id: string): Promise<{ group: GroupDetail }> {
       return apiFetch(`/groups/${encodeURIComponent(id)}`);
     },
+    /** Nest group `id` in `groupId`: the group counterpart of `users.addGroup`. */
+    addGroup(id: string, body: { groupId: string }): Promise<{ ok: boolean }> {
+      return apiFetch(`/groups/${encodeURIComponent(id)}/groups`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    removeGroup(id: string, body: { groupId: string }): Promise<{ ok: boolean }> {
+      return apiFetch(`/groups/${encodeURIComponent(id)}/groups`, {
+        method: 'DELETE',
+        body: JSON.stringify(body),
+      });
+    },
   },
   groupPolicies: {
     list(): Promise<GroupPolicyListResponse> {

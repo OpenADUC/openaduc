@@ -18,16 +18,35 @@ const NOT_ELEVATED: ElevatedSessionState = {
 
 const addGroup = vi.fn();
 const removeGroup = vi.fn();
+const nestGroup = vi.fn();
+const unnestGroup = vi.fn();
 const stepUp = vi.fn(async () => ({ elevated: ELEVATED }));
 vi.mock('../../api/index.js', () => ({
-  api: { users: { addGroup, removeGroup }, auth: { stepUp } },
+  api: {
+    users: { addGroup, removeGroup },
+    groups: { addGroup: nestGroup, removeGroup: unnestGroup },
+    auth: { stepUp },
+  },
 }));
 
 const { membershipChangeText, membershipDoneText, membershipOf, useGroupMembership } =
   await import('./useGroupMembership.js');
 const { useAuthStore } = await import('../../stores/auth.js');
 
-const janeInSales = { userId: 'u1', userLabel: 'Jane Doe', groupId: 'g1', groupLabel: 'Sales' };
+const janeInSales = {
+  memberKind: 'user',
+  memberId: 'u1',
+  memberLabel: 'Jane Doe',
+  groupId: 'g1',
+  groupLabel: 'Sales',
+} as const;
+const engineeringInSales = {
+  memberKind: 'group',
+  memberId: 'g9',
+  memberLabel: 'Engineering',
+  groupId: 'g1',
+  groupLabel: 'Sales',
+} as const;
 
 function setup(elevated = ELEVATED) {
   setActivePinia(createPinia());
@@ -44,13 +63,16 @@ describe('useGroupMembership', () => {
     vi.clearAllMocks();
     addGroup.mockResolvedValue({ ok: true });
     removeGroup.mockResolvedValue({ ok: true });
+    nestGroup.mockResolvedValue({ ok: true });
+    unnestGroup.mockResolvedValue({ ok: true });
   });
 
   it('labels a membership with the first name each side has', () => {
     const group = { id: 'g1', name: '', samAccountName: null, distinguishedName: 'CN=Sales' };
     expect(membershipOf({ id: 'u1', displayName: null, samAccountName: 'jdoe' }, group)).toEqual({
-      userId: 'u1',
-      userLabel: 'jdoe',
+      memberKind: 'user',
+      memberId: 'u1',
+      memberLabel: 'jdoe',
       groupId: 'g1',
       groupLabel: 'CN=Sales',
     });
@@ -59,7 +81,39 @@ describe('useGroupMembership', () => {
         { id: 'u1', displayName: 'Jane Doe', samAccountName: 'jdoe' },
         { ...group, samAccountName: 'sales' },
       ),
-    ).toMatchObject({ userLabel: 'Jane Doe', groupLabel: 'sales' });
+    ).toMatchObject({ memberLabel: 'Jane Doe', groupLabel: 'sales' });
+  });
+
+  it('labels a nested group by its name', () => {
+    const sales = { id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales' };
+    const engineering = {
+      kind: 'group' as const,
+      id: 'g9',
+      name: null,
+      samAccountName: 'eng',
+      distinguishedName: 'CN=Engineering',
+    };
+    expect(membershipOf(engineering, sales)).toEqual({
+      memberKind: 'group',
+      memberId: 'g9',
+      memberLabel: 'eng',
+      groupId: 'g1',
+      groupLabel: 'Sales',
+    });
+  });
+
+  it('nests a group in a group, and Undo takes it out again', async () => {
+    const { membership, onChanged } = setup();
+
+    membership.add(engineeringInSales);
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(nestGroup).toHaveBeenCalledWith('g9', { groupId: 'g1' });
+    expect(addGroup).not.toHaveBeenCalled();
+    expect(membershipDoneText('add', engineeringInSales)).toBe('Added Engineering to Sales');
+
+    (onChanged.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    expect(unnestGroup).toHaveBeenCalledWith('g9', { groupId: 'g1' });
   });
 
   it('adds the user to the group', async () => {
