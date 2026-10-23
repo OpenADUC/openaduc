@@ -17,6 +17,8 @@ import {
   useUserAttributeEdit,
   type UserAttribute,
 } from '../../design/composables/useUserAttributeEdit.js';
+import { useAccountActions } from '../../design/composables/useAccountActions.js';
+import { useGroupMembership } from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
 import type { UserDetail } from '@openaduc/shared';
 
@@ -176,84 +178,80 @@ const attributeRows = computed(() => {
 });
 
 // --- Apply ----------------------------------------------------------
-interface ApplyIntent {
-  close: boolean;
-  unlock: boolean;
-}
+// Apply saves the attributes, then unlocks if asked, then reloads.
+let attributesApplied = false;
+const { run: runAccountAction } = useAccountActions<UserDetail>({
+  onDone: () => undefined,
+  onFailed: async (_action, _u, message) => {
+    toast.add({
+      severity: 'error',
+      summary: attributesApplied
+        ? 'Changes applied, but the account was not unlocked.'
+        : 'Unlock failed',
+      detail: message,
+      life: 6000,
+    });
+    if (attributesApplied) store.bumpData();
+  },
+});
 
 function apply(close: boolean): void {
-  if (!user.value) return;
+  const u = user.value;
+  if (!u) return;
   if (!dirty.value) {
     if (close) emit('close');
     return;
   }
-  const intent: ApplyIntent = { close, unlock: doUnlock.value && user.value.locked };
-  if (attributesDirty.value) saveAttributes(() => finishApply(intent, true));
-  else
-    auth.requireStepUp(
-      () => finishApply(intent, false),
-      'Updating a user requires step-up authentication.',
-    );
-}
-
-async function finishApply(intent: ApplyIntent, attributesSaved: boolean): Promise<void> {
-  if (intent.unlock) {
-    try {
-      await api.users.unlock(props.id);
-    } catch (e) {
-      if (auth.retryAfterStepUp(e, () => finishApply(intent, attributesSaved))) return;
-      toast.add({
-        severity: 'error',
-        summary: attributesSaved
-          ? 'Changes applied, but the account was not unlocked.'
-          : 'Unlock failed',
-        detail: e instanceof ApiError ? e.message : (e as Error).message,
-        life: 6000,
-      });
-      if (attributesSaved) {
-        store.bumpData();
-        await load();
-      }
-      return;
-    }
-  }
-  toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
-  store.bumpData();
-  await load();
-  if (intent.close) emit('close');
+  attributesApplied = false;
+  const unlock = doUnlock.value && u.locked;
+  const applied = (): void => {
+    toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
+    store.bumpData();
+    if (close) emit('close');
+  };
+  const unlockThenApplied = (): void => {
+    if (unlock) runAccountAction('unlock', u, applied);
+    else applied();
+  };
+  if (attributesDirty.value) {
+    saveAttributes(() => {
+      attributesApplied = true;
+      unlockThenApplied();
+    });
+  } else unlockThenApplied();
 }
 
 // --- Member Of helpers -----------------------------------------------
-const memberOfPending = ref<string | null>(null);
-function removeMembership(groupId: string, groupName: string): void {
+const memberOfSelected = ref<string | null>(null);
+const selectedMembership = computed(
+  () => user.value?.groupMemberships.find((g) => g.id === memberOfSelected.value) ?? null,
+);
+const { pending: membershipPending, remove: removeMembership } = useGroupMembership({
+  onChanged: (_change, m) => {
+    toast.add({ severity: 'success', summary: `Removed from ${m.groupLabel}.`, life: 2500 });
+    store.bumpData();
+  },
+  onFailed: (_change, _m, message) =>
+    toast.add({ severity: 'error', summary: 'Remove failed', detail: message, life: 5000 }),
+});
+
+function confirmRemoveMembership(): void {
+  const u = user.value;
+  const g = selectedMembership.value;
+  if (!u || !g) return;
+  const membership = {
+    userId: u.id,
+    userLabel: u.displayName ?? u.samAccountName,
+    groupId: g.id,
+    groupLabel: g.name || g.distinguishedName,
+  };
   store.openDialog({
     kind: 'confirm',
-    title: 'Multiple Names Found',
-    message: `Remove ${user.value?.displayName ?? user.value?.samAccountName} from "${groupName}"?`,
+    title: 'Active Directory Domain Services',
+    message: `Remove ${membership.userLabel} from "${membership.groupLabel}"?`,
     okLabel: 'Yes',
     destructive: false,
-    onOk: () => {
-      const apply = async (): Promise<void> => {
-        memberOfPending.value = groupId;
-        try {
-          await api.users.removeGroup(props.id, { groupId });
-          toast.add({ severity: 'success', summary: `Removed from ${groupName}.`, life: 2500 });
-          await load();
-          store.bumpData();
-        } catch (e) {
-          if (auth.retryAfterStepUp(e, apply)) return;
-          toast.add({
-            severity: 'error',
-            summary: 'Remove failed',
-            detail: e instanceof ApiError ? e.message : (e as Error).message,
-            life: 5000,
-          });
-        } finally {
-          memberOfPending.value = null;
-        }
-      };
-      auth.requireStepUp(apply, 'Removing a group membership requires step-up authentication.');
-    },
+    onOk: () => removeMembership(membership),
   });
 }
 function openAddGroup(): void {
@@ -653,8 +651,8 @@ const upnLogonName = computed(() => {
             v-for="g in user.groupMemberships"
             :key="g.id"
             class="os-listbox-row"
-            :class="{ selected: memberOfPending === g.id }"
-            @click="memberOfPending = g.id"
+            :class="{ selected: memberOfSelected === g.id }"
+            @click="memberOfSelected = g.id"
           >
             <WinIcon name="group" :size="14" />
             <span style="flex: 1">{{ g.name }}</span>
@@ -666,13 +664,13 @@ const upnLogonName = computed(() => {
           <button
             class="os-btn"
             type="button"
-            :disabled="!memberOfPending"
-            @click="
-              () => {
-                const g = user!.groupMemberships.find((x) => x.id === memberOfPending);
-                if (g) removeMembership(g.id, g.name);
-              }
+            :disabled="!selectedMembership?.direct || membershipPending !== null"
+            :title="
+              selectedMembership && !selectedMembership.direct
+                ? 'Membership comes from a nested group'
+                : undefined
             "
+            @click="confirmRemoveMembership"
           >
             Remove
           </button>
