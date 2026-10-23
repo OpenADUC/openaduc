@@ -45,6 +45,13 @@ import { useMoveDialog } from './_detail/useMoveDialog';
 import { useExpiryDialog } from './_detail/useExpiryDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
+import {
+  USER_ACTIONS,
+  USER_ACTION_ORDER,
+  fitsUser,
+  userActionLabel,
+  type UserAction,
+} from '../design/lib/userActions.js';
 import { useSignInFixes } from '../design/composables/useSignInFixes.js';
 import {
   membershipChangeText,
@@ -756,38 +763,23 @@ const actions = computed<ObjectAction[]>(() => {
   // the operator can't double-fire.
   const busy =
     accountActionRunning.value !== null || moveSubmitting.value || expirySubmitting.value;
+  const userAction = (action: UserAction, run: () => void): ObjectAction => {
+    const info = USER_ACTIONS[action];
+    return {
+      label: userActionLabel(action, accountActionRunning.value),
+      icon: info.icon,
+      capability: info.capability,
+      available: fitsUser(action, u),
+      ...(info.danger ? { danger: true } : {}),
+      // Reset password runs in its dialog.
+      ...(info.running ? { disabled: busy } : {}),
+      run,
+    };
+  };
   return [
-    {
-      label: accountActionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
-      icon: 'pi-unlock',
-      capability: 'write:user.unlock',
-      available: u.locked,
-      disabled: busy,
-      run: () => runOnUser('unlock'),
-    },
-    {
-      label: 'Reset password…',
-      icon: 'pi-key',
-      capability: 'write:user.resetPassword',
-      danger: true,
-      run: openResetDialog,
-    },
-    u.enabled
-      ? {
-          label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
-          icon: 'pi-ban',
-          capability: 'write:user.enableDisable',
-          danger: true,
-          disabled: busy,
-          run: () => runOnUser('disable'),
-        }
-      : {
-          label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
-          icon: 'pi-check',
-          capability: 'write:user.enableDisable',
-          disabled: busy,
-          run: () => runOnUser('enable'),
-        },
+    ...USER_ACTION_ORDER.map((a) =>
+      userAction(a, a === 'reset-password' ? openResetDialog : () => runOnUser(a)),
+    ),
     {
       label: expirySubmitting.value ? 'Saving expiry…' : 'Account expiry…',
       icon: 'pi-calendar',
