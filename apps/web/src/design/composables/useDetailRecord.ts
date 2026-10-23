@@ -10,6 +10,7 @@
 import { ref, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
 import { ApiError } from '../../api/client.js';
+import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
 export interface DetailRecordOptions<T> {
@@ -46,9 +47,7 @@ export function useDetailRecord<T extends { id: string }>(opts: DetailRecordOpti
       error.value =
         err instanceof ApiError && err.status === 404
           ? opts.notFoundMessage
-          : err instanceof Error
-            ? err.message
-            : opts.failedMessage;
+          : errorMessage(err, opts.failedMessage);
     } finally {
       if (isCurrent()) loading.value = false;
     }

@@ -5,7 +5,7 @@
 import { ref } from 'vue';
 import type { DirectoryOu } from '@openaduc/shared';
 import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
+import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
 export function useOuTree() {
@@ -22,7 +22,7 @@ export function useOuTree() {
       const resp = await api.ous.list();
       if (isCurrent()) ous.value = resp.ous;
     } catch (err) {
-      if (isCurrent()) error.value = err instanceof ApiError ? err.message : 'failed to load OUs';
+      if (isCurrent()) error.value = errorMessage(err, 'Failed to load OUs');
     } finally {
       if (isCurrent()) loading.value = false;
     }

@@ -16,8 +16,8 @@ import {
   type UserRenameRequest,
 } from '@openaduc/shared';
 import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { errorMessage } from '../lib/errorMessage.js';
 
 export const DERIVED_FIELDS: readonly RenameField[] = [
   'displayName',
@@ -125,7 +125,7 @@ export function useUserRename(options: { onRenamed: () => void | Promise<void> }
       await options.onRenamed();
     } catch (err) {
       if (auth.retryAfterStepUp(err, commit)) return;
-      error.value = err instanceof ApiError ? err.message : String(err);
+      error.value = errorMessage(err, 'Rename failed');
     } finally {
       submitting.value = false;
     }

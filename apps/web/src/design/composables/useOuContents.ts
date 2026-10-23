@@ -6,7 +6,7 @@
 import { ref } from 'vue';
 import type { OuContentsResponse } from '@openaduc/shared';
 import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
+import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
 const empty = (): OuContentsResponse => ({
@@ -33,7 +33,7 @@ export function useOuContents() {
     } catch (err) {
       if (!isCurrent()) return;
       contents.value = empty();
-      error.value = err instanceof ApiError ? err.message : 'failed to load OU contents';
+      error.value = errorMessage(err, 'Failed to load OU contents');
     } finally {
       if (isCurrent()) loading.value = false;
     }
