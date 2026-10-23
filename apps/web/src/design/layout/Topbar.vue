@@ -88,14 +88,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
 
     <div class="tb-actions">
       <ThemeToggle />
-      <button
-        type="button"
-        class="tb-icon"
-        title="Notifications (coming soon)"
-        aria-label="Notifications"
-      >
-        <i class="pi pi-bell" />
-      </button>
     </div>
   </header>
 </template>
@@ -153,25 +145,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
   flex-shrink: 0;
 }
 
-.tb-icon {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  color: var(--text-2);
-  font-size: 14px;
-}
-
-.tb-icon:hover {
-  background: var(--hover);
-  color: var(--text);
-  border-color: var(--border);
-}
-
 @media (max-width: 767.98px) {
   .crumbs {
     display: none;
@@ -184,10 +157,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
   .ds-topbar {
     padding: 0 10px;
     gap: 8px;
-  }
-
-  .tb-icon[title*='Notifications'] {
-    display: none;
   }
 }
 </style>
