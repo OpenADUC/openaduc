@@ -51,6 +51,16 @@ describe('resetting a locked-out user’s password', () => {
     reseedDirectory();
   });
 
+  it('offers the domain’s password policy to check a new password against', async () => {
+    const res = await operator.get(`/api/directories/${api.directoryId}/policy`);
+
+    expect(res.json<{ policy: unknown }>().policy).toMatchObject({
+      minPwdLength: 7,
+      complexityRequired: true,
+      pwdHistoryLength: 24,
+    });
+  });
+
   it('needs the unlock capability too when asked to unlock', async () => {
     const before = await pwdLastSet('dave.diaz');
     await api.app.db
