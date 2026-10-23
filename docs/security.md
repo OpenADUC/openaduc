@@ -54,7 +54,7 @@ The elevated session ends at whichever comes first:
 - **Idle timeout** (`stepup.idle_timeout_minutes`, default 15 min): every authenticated request from the operator pushes it back. Requests the SPA makes by itself, polling a running sync task, are marked `x-background-request: 1` and don't count. To spare the database, a request that would move it by less than a twentieth of the timeout isn't recorded, so the session can end up to that much early.
 - **Absolute lifetime** (`stepup.absolute_lifetime_minutes`, default 4 h): counted from step-up, however active the operator is. An elevated session also never outlives the session it belongs to.
 
-Both are policy settings. Changing them requires step-up and writes a `settings.update` audit row; a new idle timeout applies to open elevated sessions at their next request, a new absolute lifetime from the next step-up.
+Both are policy settings (**Settings → Policy**). Changing them requires step-up and writes a `settings.update` audit row; a new idle timeout applies to open elevated sessions at their next request, a new absolute lifetime from the next step-up.
 
 The operator's password is held only in process memory in `CredentialCacheService`. It lives in a `Buffer` that is zeroed on eviction, is evicted when the elevated session ends by either limit (a sweep every few seconds catches an operator who never comes back), and is never written to disk or the database. An API restart wipes all cached passwords, forcing re-step-up — which is intentional.
 

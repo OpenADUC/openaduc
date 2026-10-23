@@ -39,7 +39,7 @@ OpenADUC uses cookie-based sessions plus a separate **elevated session** minted 
 
 These can be overridden per-deployment via the **app_settings** table (settings UI), which takes precedence over env values once set.
 
-The elevated session's limits are policy settings only (no environment variables): it ends after `stepup.idle_timeout_minutes` without activity (default 15) or `stepup.absolute_lifetime_minutes` after step-up (default 240), whichever comes first. Changing them requires step-up and is audited. Upgrading from a version with a fixed step-up lifetime (`stepup.ttl_minutes`, formerly also documented as `STEP_UP_TTL_MINUTES`): a lifetime you had changed becomes the absolute lifetime and caps the idle timeout, so no elevated session lasts longer than before; an unchanged one gets the new defaults.
+The elevated session's limits are policy settings only, under **Settings → Policy → Elevated sessions** (no environment variables): it ends after `stepup.idle_timeout_minutes` without activity (default 15) or `stepup.absolute_lifetime_minutes` after step-up (default 240), whichever comes first. Changing them requires step-up and is audited. Upgrading from a version with a fixed step-up lifetime (`stepup.ttl_minutes`, formerly also documented as `STEP_UP_TTL_MINUTES`): a lifetime you had changed becomes the absolute lifetime and caps the idle timeout, so no elevated session lasts longer than before; an unchanged one gets the new defaults.
 
 ## Database
 
