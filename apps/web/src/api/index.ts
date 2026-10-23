@@ -47,7 +47,7 @@ import type {
   UserSearchResponse,
   UserUpdateRequest,
 } from '@openaduc/shared';
-import { apiFetch } from './client.js';
+import { apiFetch, type ApiFetchInit } from './client.js';
 
 export interface AuditEventRow {
   id: string;
@@ -327,6 +327,9 @@ export interface IdentityCardData {
   memberOfDns: string[];
 }
 
+/** For reads the SPA polls; see ApiFetchInit.background. */
+export type Background = Pick<ApiFetchInit, 'background'>;
+
 export const api = {
   auth: {
     login(body: LoginRequest): Promise<{ actor: MeResponse }> {
@@ -366,8 +369,8 @@ export const api = {
     runInitialSync(): Promise<{ job: InitialSyncJob }> {
       return apiFetch('/setup/run-initial-sync', { method: 'POST' });
     },
-    initialSyncStatus(): Promise<{ job: InitialSyncJob | null }> {
-      return apiFetch('/setup/initial-sync-status');
+    initialSyncStatus(opts: Background = {}): Promise<{ job: InitialSyncJob | null }> {
+      return apiFetch('/setup/initial-sync-status', opts);
     },
     retryTask(): Promise<{ job: InitialSyncJob }> {
       return apiFetch('/setup/retry-task', { method: 'POST' });
@@ -581,8 +584,8 @@ export const api = {
       return apiFetch(`/directories/${id}/sync/reset`, { method: 'POST' });
     },
     syncTasks: {
-      list(id: number): Promise<{ tasks: SyncTaskSummary[] }> {
-        return apiFetch(`/directories/${id}/sync-tasks`);
+      list(id: number, opts: Background = {}): Promise<{ tasks: SyncTaskSummary[] }> {
+        return apiFetch(`/directories/${id}/sync-tasks`, opts);
       },
       update(
         id: number,
@@ -612,8 +615,11 @@ export const api = {
         const qs = opts?.limit ? `?limit=${opts.limit}` : '';
         return apiFetch(`/directories/${id}/sync-tasks/${encodeURIComponent(key)}/history${qs}`);
       },
-      queue(id: number): Promise<{ inFlight: SyncTaskKey[]; queued: SyncTaskKey[] }> {
-        return apiFetch(`/directories/${id}/sync-tasks/queue`);
+      queue(
+        id: number,
+        opts: Background = {},
+      ): Promise<{ inFlight: SyncTaskKey[]; queued: SyncTaskKey[] }> {
+        return apiFetch(`/directories/${id}/sync-tasks/queue`, opts);
       },
     },
     testSyncBind(

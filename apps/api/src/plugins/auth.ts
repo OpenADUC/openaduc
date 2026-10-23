@@ -15,6 +15,13 @@ export const SESSION_COOKIE_NAME = 'openaduc_sid';
 export const ELEVATED_IDLE_HEADER = 'x-elevated-idle-expires-at';
 
 /**
+ * Sent by the SPA on requests it makes by itself (polling a running task).
+ * Those aren't the operator's activity, so they don't hold the elevated
+ * session open. A client can only shorten its own session with this.
+ */
+export const BACKGROUND_REQUEST_HEADER = 'x-background-request';
+
+/**
  * Who may call a route. `public` routes run without a session; the others
  * need one, plus `capability` when set (null: any signed-in operator) and a
  * live step-up when `stepUp` is true.
@@ -79,8 +86,8 @@ declare module 'fastify' {
 
 export default fp(async (app) => {
   // ---- Resolve session on every request (no enforcement here) ------------
-  // A request from an elevated operator is activity: it keeps the elevated
-  // session from ending idle.
+  // A request from an elevated operator is activity, unless it's marked as
+  // background: it keeps the elevated session from ending idle.
   app.addHook('onRequest', async (req, reply) => {
     req.actor = null;
     req.directoryId = null;
@@ -90,7 +97,7 @@ export default fp(async (app) => {
       const session = await app.services.sessions.resolve(cookieToken);
       if (!session) return;
       let elevated = await app.services.sessions.findActiveElevated(session.id);
-      if (elevated) {
+      if (elevated && req.headers[BACKGROUND_REQUEST_HEADER] !== '1') {
         const before = elevated;
         // Failing to record activity shouldn't fail the request.
         elevated = await app.services.sessions.recordElevatedActivity(before).catch((err) => {
@@ -98,8 +105,8 @@ export default fp(async (app) => {
           return before;
         });
         app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
-        reply.header(ELEVATED_IDLE_HEADER, elevated.idleExpiresAt.toISOString());
       }
+      if (elevated) reply.header(ELEVATED_IDLE_HEADER, elevated.idleExpiresAt.toISOString());
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
       req.actor = { session, elevated, elevatedPassword };
       req.directoryId = session.directoryId;

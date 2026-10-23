@@ -4,7 +4,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { api, type DirectorySummary, type SyncTaskSummary } from '../api/index.js';
+import { api, type Background, type DirectorySummary, type SyncTaskSummary } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import Card from '../design/primitives/Card.vue';
@@ -39,7 +39,7 @@ async function loadDirectories(): Promise<void> {
   }
 }
 
-async function loadTasksFor(d: DirectorySummary): Promise<void> {
+async function loadTasksFor(d: DirectorySummary, opts: Background = {}): Promise<void> {
   if (!d.syncBindUpn || !d.hasSyncBindPassword) {
     // No service account — there are no tasks to fetch yet. Render the
     // directory section with a "needs SA" hint instead.
@@ -47,7 +47,7 @@ async function loadTasksFor(d: DirectorySummary): Promise<void> {
     return;
   }
   try {
-    const r = await api.directories.syncTasks.list(d.id);
+    const r = await api.directories.syncTasks.list(d.id, opts);
     tasksByDir.value = { ...tasksByDir.value, [d.id]: r.tasks };
   } catch (err) {
     // Best-effort — keep whatever we had so a transient failure doesn't
@@ -64,7 +64,7 @@ async function loadTasksFor(d: DirectorySummary): Promise<void> {
 async function load(): Promise<void> {
   loading.value = true;
   await loadDirectories();
-  await Promise.all(directories.value.map(loadTasksFor));
+  await Promise.all(directories.value.map((d) => loadTasksFor(d)));
   loading.value = false;
 }
 
@@ -103,7 +103,7 @@ let pollHandle: ReturnType<typeof setInterval> | null = null;
 watch(anyRunning, (running) => {
   if (running && pollHandle === null) {
     pollHandle = setInterval(() => {
-      void Promise.all(directories.value.map(loadTasksFor));
+      void Promise.all(directories.value.map((d) => loadTasksFor(d, { background: true })));
     }, 4000);
   } else if (!running && pollHandle !== null) {
     clearInterval(pollHandle);
