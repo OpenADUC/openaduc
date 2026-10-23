@@ -321,6 +321,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             'maxPwdAge',
             'minPwdLength',
             'pwdHistoryLength',
+            'pwdProperties',
           ],
         });
         const root: Entry = searchEntries[0] ?? ({} as Entry);
@@ -330,6 +331,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           const n = Number.parseInt(s, 10);
           return Number.isFinite(n) ? n : null;
         };
+        const pwdProperties = intAttr(root['pwdProperties']);
         return {
           lockoutDurationMs: adDurationToMs(asString(root['lockoutDuration'])),
           lockoutThreshold: intAttr(root['lockoutThreshold']),
@@ -337,6 +339,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           maxPwdAgeMs: adDurationToMs(asString(root['maxPwdAge'])),
           minPwdLength: intAttr(root['minPwdLength']),
           pwdHistoryLength: intAttr(root['pwdHistoryLength']),
+          complexityRequired: pwdProperties === null ? null : (pwdProperties & 1) === 1,
         } satisfies DirectoryDomainPolicy;
       });
       this.domainPolicyCache = {
@@ -353,6 +356,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         maxPwdAgeMs: null,
         minPwdLength: null,
         pwdHistoryLength: null,
+        complexityRequired: null,
       };
     }
   }

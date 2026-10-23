@@ -361,6 +361,8 @@ export interface DirectoryDomainPolicy {
   minPwdLength: number | null;
   /** Number of past passwords AD remembers. */
   pwdHistoryLength: number | null;
+  /** `pwdProperties` DOMAIN_PASSWORD_COMPLEX: passwords must meet AD's complexity rules. */
+  complexityRequired: boolean | null;
 }
 
 export interface DirectoryProvider {

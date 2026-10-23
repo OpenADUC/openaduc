@@ -478,6 +478,8 @@ export const directoryPolicySchema = z.object({
   minPwdLength: z.number().int().nullable(),
   // `pwdHistoryLength` — how many past passwords AD remembers.
   pwdHistoryLength: z.number().int().nullable(),
+  // Whether passwords must meet AD's complexity rules (`pwdProperties`).
+  complexityRequired: z.boolean().nullable(),
   // ISO timestamp of when this policy was last fetched from AD.
   fetchedAt: z.string(),
 });
