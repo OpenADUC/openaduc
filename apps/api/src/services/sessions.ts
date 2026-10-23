@@ -124,9 +124,8 @@ export class SessionsService {
     const expiresAt = new Date(row.expires_at).getTime();
     if (expiresAt <= now) return null;
 
-    const idleMinutes = await this.settings.get<number>('session.idle_timeout_minutes', 60);
     const lastSeenAt = new Date(row.last_seen_at).getTime();
-    if (now - lastSeenAt > idleMinutes * 60 * 1000) return null;
+    if (now - lastSeenAt > (await this.signInIdleMs())) return null;
 
     // Bump last_seen_at. Don't await; the resolve has succeeded — a failure to
     // record activity should not invalidate the request.
@@ -270,12 +269,25 @@ export class SessionsService {
     return row ? rowToElevated(row) : null;
   }
 
+  /**
+   * The idle timeout is capped by the sign-in session's. Elevated idle ends
+   * are only set as the sign-in session is seen (at step-up, or a request),
+   * so the elevated session, and the cached password, idle out first.
+   */
   private async elevationLimits(): Promise<{ idleMs: number; absoluteMs: number }> {
-    const [idleMinutes, absoluteMinutes] = await Promise.all([
+    const [idleMinutes, absoluteMinutes, signInIdleMs] = await Promise.all([
       this.settings.get<number>('stepup.idle_timeout_minutes', 15),
       this.settings.get<number>('stepup.absolute_lifetime_minutes', 240),
+      this.signInIdleMs(),
     ]);
-    return { idleMs: idleMinutes * 60 * 1000, absoluteMs: absoluteMinutes * 60 * 1000 };
+    return {
+      idleMs: Math.min(idleMinutes * 60 * 1000, signInIdleMs),
+      absoluteMs: absoluteMinutes * 60 * 1000,
+    };
+  }
+
+  private async signInIdleMs(): Promise<number> {
+    return (await this.settings.get<number>('session.idle_timeout_minutes', 60)) * 60 * 1000;
   }
 
   /**
