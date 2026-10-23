@@ -185,6 +185,30 @@ describe('useUserAttributeEdit', () => {
     expect(edit.dirty.value).toBe(true);
   });
 
+  it('keeps a failed save until the next save, a reset or a dismiss', async () => {
+    const { edit, onSaved } = setup(aUserDetail(), ELEVATED);
+    update.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    edit.draft.title = 'Lead Analyst';
+
+    edit.save();
+    await vi.waitFor(() => expect(edit.failure.value).toBe('DC unreachable'));
+    edit.save();
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    expect(edit.failure.value).toBeNull();
+
+    update.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    edit.save();
+    await vi.waitFor(() => expect(edit.failure.value).not.toBeNull());
+    edit.dismiss();
+    expect(edit.failure.value).toBeNull();
+
+    update.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    edit.save();
+    await vi.waitFor(() => expect(edit.failure.value).not.toBeNull());
+    edit.reset(aUserDetail());
+    expect(edit.failure.value).toBeNull();
+  });
+
   it('starts over from the account it’s given', () => {
     const { edit } = setup(aUserDetail({ title: 'Analyst' }));
     edit.draft.title = 'Lead Analyst';
