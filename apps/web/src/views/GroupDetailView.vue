@@ -22,6 +22,7 @@ import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import { useStickyHeader } from './_detail/useStickyHeader';
+import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -65,6 +66,10 @@ const {
   notFoundMessage: 'Group not found',
   failedMessage: 'Failed to load group',
 });
+useRecordCrumb(
+  () => props.id,
+  () => group.value?.name ?? group.value?.distinguishedName,
+);
 
 function refreshFromAd(): Promise<void> {
   // GET live-refreshes against AD, so a reload is a sync of this one object.

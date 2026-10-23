@@ -4,6 +4,7 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import ThemeToggle from '../primitives/ThemeToggle.vue';
 import GlobalSearch from './GlobalSearch.vue';
+import { recordCrumbLabel } from './recordCrumb.js';
 
 const route = useRoute();
 
@@ -22,9 +23,7 @@ const crumbs = computed<Crumb[]>(() => {
     case 'user-detail':
       return [
         { label: 'Users', to: '/users' },
-        {
-          label: typeof route.params.id === 'string' ? route.params.id.slice(0, 8) + '…' : 'Detail',
-        },
+        { label: recordCrumbLabel(route.params.id, 'User') },
       ];
     case 'deleted-users':
       return [{ label: 'Users', to: '/users' }, { label: 'Deleted' }];
@@ -33,9 +32,7 @@ const crumbs = computed<Crumb[]>(() => {
     case 'group-detail':
       return [
         { label: 'Groups', to: '/groups' },
-        {
-          label: typeof route.params.id === 'string' ? route.params.id.slice(0, 8) + '…' : 'Detail',
-        },
+        { label: recordCrumbLabel(route.params.id, 'Group') },
       ];
     case 'ou-browser':
       return [{ label: 'OUs' }];
@@ -45,16 +42,21 @@ const crumbs = computed<Crumb[]>(() => {
       return [{ label: 'Configuration' }];
     case 'appearance':
       return [{ label: 'Appearance' }];
-    case 'computers':
+    case 'computer-search':
       return [{ label: 'Computers' }];
+    case 'computer-detail':
+      return [
+        { label: 'Computers', to: '/computers' },
+        { label: recordCrumbLabel(route.params.id, 'Computer') },
+      ];
+    case 'deleted-computers':
+      return [{ label: 'Computers', to: '/computers' }, { label: 'Deleted' }];
     case 'group-policy':
       return [{ label: 'Group Policy' }];
     case 'group-policy-detail':
       return [
         { label: 'Group Policy', to: '/policies/groups' },
-        {
-          label: typeof route.params.id === 'string' ? route.params.id.slice(0, 8) + '…' : 'Detail',
-        },
+        { label: recordCrumbLabel(route.params.id, 'Policy') },
       ];
     case 'tasks':
       return [{ label: 'Tasks & Scheduler' }];
@@ -86,14 +88,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
 
     <div class="tb-actions">
       <ThemeToggle />
-      <button
-        type="button"
-        class="tb-icon"
-        title="Notifications (coming soon)"
-        aria-label="Notifications"
-      >
-        <i class="pi pi-bell" />
-      </button>
     </div>
   </header>
 </template>
@@ -151,25 +145,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
   flex-shrink: 0;
 }
 
-.tb-icon {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  color: var(--text-2);
-  font-size: 14px;
-}
-
-.tb-icon:hover {
-  background: var(--hover);
-  color: var(--text);
-  border-color: var(--border);
-}
-
 @media (max-width: 767.98px) {
   .crumbs {
     display: none;
@@ -182,10 +157,6 @@ const parentCrumbs = computed(() => crumbs.value.slice(0, -1));
   .ds-topbar {
     padding: 0 10px;
     gap: 8px;
-  }
-
-  .tb-icon[title*='Notifications'] {
-    display: none;
   }
 }
 </style>
