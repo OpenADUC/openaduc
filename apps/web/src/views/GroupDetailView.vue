@@ -22,6 +22,7 @@ import DeleteGroupDialog from '../design/feedback/DeleteGroupDialog.vue';
 import { undoable } from '../design/feedback/undoToast.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
+import { SHORTCUT_KEYS } from '../design/lib/shortcutKeys.js';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import {
   memberLabel,
@@ -193,6 +194,7 @@ const actions = computed<ObjectAction[]>(() => [
     label: 'Add member…',
     icon: 'pi-user-plus',
     capability: 'write:group.membership',
+    shortcut: SHORTCUT_KEYS.group.addMember,
     disabled: pending.value !== null,
     run: openAdd,
   },

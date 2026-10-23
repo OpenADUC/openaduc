@@ -9,6 +9,7 @@ export const SHORTCUT_KEYS = {
   // Enable and Disable share a key: only one of them fits an account.
   user: { unlock: 'u', resetPassword: 'r', enableDisable: 'e', move: 'm' },
   computer: { enableDisable: 'e', resetAccount: 'r', move: 'm' },
+  group: { addMember: 'a' },
 } as const;
 
 export type ShortcutScope = keyof typeof SHORTCUT_KEYS;
@@ -18,5 +19,5 @@ export const SHORTCUT_PAGES: Record<string, readonly ShortcutScope[]> = {
   list: ['general', 'list'],
   user: ['general', 'tabs', 'user'],
   computer: ['general', 'tabs', 'computer'],
-  group: ['general', 'tabs'],
+  group: ['general', 'tabs', 'group'],
 };
