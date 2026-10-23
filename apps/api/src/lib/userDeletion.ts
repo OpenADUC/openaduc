@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { UserDeleteBlockReason } from '@openaduc/shared';
+import { rawFlag } from './rawAttributes.js';
+import { ridOf } from './sid.js';
 
 export interface DeletionCandidate {
   enabled: boolean;
@@ -37,18 +39,4 @@ export function describeDeleteBlock(reason: UserDeleteBlockReason): string {
     case 'not_found':
       return 'user not found';
   }
-}
-
-/** The relative id: the last part of a SID. */
-export function ridOf(sid: string | null): number | null {
-  if (!sid) return null;
-  const last = sid.slice(sid.lastIndexOf('-') + 1);
-  const rid = Number.parseInt(last, 10);
-  return Number.isFinite(rid) ? rid : null;
-}
-
-/** An LDAP boolean (`TRUE`/`FALSE`, last value wins) from a raw attribute. */
-export function rawFlag(v: unknown): boolean {
-  const value = Array.isArray(v) ? v[v.length - 1] : v;
-  return typeof value === 'string' ? value.toUpperCase() === 'TRUE' : value === true;
 }

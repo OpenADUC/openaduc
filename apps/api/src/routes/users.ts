@@ -22,8 +22,10 @@ import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { findCachedOu } from '../services/ouCache.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
 
@@ -966,13 +968,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // gates against typos and against pointing the move at a container the
       // sync hasn't seen — the AD bind would refuse those anyway, but
       // failing fast here gives a cleaner 400.
-      const targetOu = await app.db
-        .selectFrom('directory_ous')
-        .where('provider_id', '=', provider.id)
-        .where('deleted_at', 'is', null)
-        .where(sql<string>`lower(distinguished_name)`, '=', body.targetOuDn.toLowerCase())
-        .select(['distinguished_name', 'name'])
-        .executeTakeFirst();
+      const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
       if (!targetOu) {
         throw app.httpErrors.badRequest('target OU not found in directory cache');
       }
@@ -1234,17 +1230,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       );
 
       if (!result.ok) {
-        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
-        if (result.errorCode === 'permission_denied') {
-          throw app.httpErrors.forbidden(
-            `directory refused the delete — you may lack the Delete right, or the account is protected from accidental deletion${detail}`,
-          );
-        }
-        if (result.errorCode === 'policy_violation') {
-          throw app.httpErrors.conflict(`cannot delete${detail}`);
-        }
-        if (result.errorCode === 'not_found') throw NotFound('user not found');
-        throw app.httpErrors.badGateway(`delete failed${detail}`);
+        throw directoryRefusal(app, result, {
+          verb: 'delete',
+          notFound: 'user not found',
+          forbidden:
+            'directory refused the delete — you may lack the Delete right, or the account is protected from accidental deletion',
+        });
       }
 
       // Drop the account from list views now rather than at the next full

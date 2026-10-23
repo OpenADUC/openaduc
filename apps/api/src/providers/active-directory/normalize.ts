@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Entry } from 'ldapts';
+import type { GroupScope, GroupType } from '@openaduc/shared';
 import type {
   DirectoryComputer,
   DirectoryDeletedComputer,
@@ -581,10 +582,7 @@ export const GROUP_TYPE = {
 } as const;
 
 /** The groupType value AD expects for a new group of this scope and type. */
-export function groupTypeValue(
-  scope: 'domain-local' | 'global' | 'universal',
-  type: 'security' | 'distribution',
-): number {
+export function groupTypeValue(scope: GroupScope, type: GroupType): number {
   return GROUP_TYPE[scope] | (type === 'security' ? GROUP_TYPE.security : 0);
 }
 

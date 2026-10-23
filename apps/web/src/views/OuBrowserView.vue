@@ -23,6 +23,7 @@ import { useOuContents } from '../design/composables/useOuContents.js';
 import { useOuTree } from '../design/composables/useOuTree.js';
 import type { DirectoryOu, GroupSummary } from '@openaduc/shared';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
+import { groupCreatedToast } from '../design/feedback/groupToasts.js';
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -355,12 +356,7 @@ function openNewGroup(parentDn: string): void {
 
 function onGroupCreated(group: GroupSummary): void {
   newGroupOpen.value = false;
-  toast.add({
-    severity: 'success',
-    summary: 'Group created',
-    detail: `${group.name ?? group.samAccountName} was created.`,
-    life: 4000,
-  });
+  toast.add(groupCreatedToast(group));
   if (selectedDn.value) void loadContents(selectedDn.value);
 }
 

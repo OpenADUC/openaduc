@@ -112,3 +112,23 @@ export async function rebuildMemberships(
     return { count: Number(users.rows[0]?.count ?? 0) + Number(groups.rows[0]?.count ?? 0) };
   });
 }
+
+/**
+ * A live OU from the cache, matched case-insensitively, with its DN as AD
+ * spells it; null when OpenADUC doesn't know it. Routes use this to refuse
+ * an OU the sync hasn't seen before asking AD.
+ */
+export async function findCachedOu(
+  db: Kysely<DB>,
+  providerId: number,
+  dn: string,
+): Promise<{ distinguished_name: string; name: string } | null> {
+  const row = await db
+    .selectFrom('directory_ous')
+    .select(['distinguished_name', 'name'])
+    .where('provider_id', '=', providerId)
+    .where('deleted_at', 'is', null)
+    .where(sql<string>`lower(distinguished_name)`, '=', dn.toLowerCase())
+    .executeTakeFirst();
+  return row ?? null;
+}

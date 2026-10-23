@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
+import type { GroupScope, GroupType } from '@openaduc/shared';
+
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
 // Directory implementation, but routes/services depend on this interface so
 // future providers (generic LDAP, Entra ID/Graph) can drop in without rewrites.
@@ -584,8 +586,8 @@ export interface GroupCreateInput {
   cn: string;
   samAccountName: string;
   description: string | null;
-  scope: 'domain-local' | 'global' | 'universal';
-  type: 'security' | 'distribution';
+  scope: GroupScope;
+  type: GroupType;
 }
 
 export interface OuAttributePatch {

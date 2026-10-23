@@ -7,8 +7,10 @@ import { computed } from 'vue';
 import { useToast } from 'primevue/usetoast';
 import { GROUP_SCOPES, GROUP_TYPES } from '@openaduc/shared';
 import WinDialog from './WinDialog.vue';
+import { groupCreatedToast } from '../../design/feedback/groupToasts.js';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
+import { dnPath, rdns } from '../../design/lib/dn.js';
 import {
   SCOPE_LABEL,
   TYPE_LABEL,
@@ -33,28 +35,14 @@ const {
   submit,
 } = useGroupCreation({
   onCreated: (group) => {
-    toast.add({
-      severity: 'success',
-      summary: 'Object created.',
-      detail: `${group.name ?? group.samAccountName} has been created.`,
-      life: 4000,
-    });
+    toast.add(groupCreatedToast(group));
     store.bumpData();
     emit('close');
   },
 });
 reset(props.parentDn);
 
-/** "OU=Groups,OU=Corp,DC=corp,DC=example" → "corp.example/Corp/Groups", as ADUC shows it. */
-const createIn = computed(() => {
-  const parts = props.parentDn.split(/(?<!\\),/).map((p) => p.trim());
-  const domain = parts.filter((p) => /^DC=/i.test(p)).map((p) => p.slice(3));
-  const path = parts
-    .filter((p) => !/^DC=/i.test(p))
-    .map((p) => p.slice(p.indexOf('=') + 1).replace(/\\(.)/g, '$1'))
-    .reverse();
-  return [domain.join('.'), ...path].join('/');
-});
+const createIn = computed(() => dnPath(rdns(props.parentDn)));
 
 const problem = computed(
   () =>

@@ -121,3 +121,38 @@ export async function reconcileNestedGroups(
       .execute();
   });
 }
+
+/**
+ * Drop a group just deleted in AD from list views, with its members and its
+ * own memberships, rather than waiting for the next sync. A restore or
+ * sync upserts the row, which clears deleted_at again.
+ */
+export async function forgetDeletedGroup(
+  db: Kysely<DB>,
+  providerId: number,
+  objectGuid: string,
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .updateTable('group_cache_records')
+      .set({ deleted_at: new Date().toISOString() })
+      .where('provider_id', '=', providerId)
+      .where('object_guid', '=', objectGuid)
+      .execute();
+    await trx
+      .deleteFrom('user_group_memberships')
+      .where('provider_id', '=', providerId)
+      .where('group_object_guid', '=', objectGuid)
+      .execute();
+    await trx
+      .deleteFrom('group_group_memberships')
+      .where('provider_id', '=', providerId)
+      .where((eb) =>
+        eb.or([
+          eb('group_object_guid', '=', objectGuid),
+          eb('member_group_object_guid', '=', objectGuid),
+        ]),
+      )
+      .execute();
+  });
+}

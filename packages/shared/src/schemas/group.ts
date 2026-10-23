@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
 import { listFreshnessSchema } from './freshness.js';
+import { samAccountNameSchemaOf } from './user.js';
 
 export const groupSummarySchema = z.object({
   id: z.string(),
@@ -97,21 +98,8 @@ export const groupNameSchema = z
   .regex(/^[^,=+<>;\\"]+$/, 'name can’t contain , = + < > ; \\ "')
   .refine((v) => !v.startsWith('#'), 'name can’t start with #');
 
-// AD's rules for a pre-Windows 2000 name, as for a user's logon name, but
-// a group's may be up to 256 characters.
-const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
-export const groupSamAccountNameSchema = z
-  .string()
-  .trim()
-  .min(1, 'pre-Windows 2000 name is required')
-  .max(256, 'pre-Windows 2000 name is too long')
-  .refine((v) => !SAM_FORBIDDEN.test(v), {
-    message: 'pre-Windows 2000 name can’t contain " / \\ [ ] : ; | = , + * ? < > @',
-  })
-  .refine((v) => !/^[. ]+$/.test(v), {
-    message: 'pre-Windows 2000 name can’t be only dots and spaces',
-  })
-  .refine((v) => !v.endsWith('.'), { message: 'pre-Windows 2000 name can’t end with a dot' });
+// AD caps sAMAccountName at 256 characters; only users are held to 20.
+export const groupSamAccountNameSchema = samAccountNameSchemaOf(256);
 
 export const groupCreateRequestSchema = z
   .object({
