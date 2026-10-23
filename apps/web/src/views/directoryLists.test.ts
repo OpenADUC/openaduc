@@ -63,10 +63,16 @@ const api = {
 };
 vi.mock('../api/index.js', () => ({ api }));
 
-const lists: [string, Component][] = [
-  ['users', (await import('./UserSearchView.vue')).default],
-  ['groups', (await import('./GroupSearchView.vue')).default],
-  ['computers', (await import('./ComputerSearchView.vue')).default],
+type Search = { mockRejectedValueOnce(err: Error): unknown };
+const lists: [string, Component, Search, string][] = [
+  ['users', (await import('./UserSearchView.vue')).default, api.users.search, 'user'],
+  ['groups', (await import('./GroupSearchView.vue')).default, api.groups.search, 'group'],
+  [
+    'computers',
+    (await import('./ComputerSearchView.vue')).default,
+    api.computers.search,
+    'computer',
+  ],
 ];
 const { useAuthStore } = await import('../stores/auth.js');
 const { useThemeStore } = await import('../design/stores/useTheme.js');
@@ -100,15 +106,19 @@ async function openList(view: Component, density: 'compact' | 'balanced' | 'comf
   return page;
 }
 
-describe.each(lists)('the %s list while it loads', (_name, view) => {
+const status = (page: Page) => page.get('.sr-only[role="status"]').text();
+const busy = (page: Page) => page.get('.p-datatable').attributes('aria-busy');
+type Page = Awaited<ReturnType<typeof openList>>;
+
+describe.each(lists)('the %s list while it loads', (name, view, search, one) => {
   it('shows skeleton rows in the table, then the rows in the same table', async () => {
     const page = await openList(view);
     const table = page.get('.p-datatable').element;
-    const skeleton = page.get('.list-skeleton');
-    expect(skeleton.attributes('role')).toBe('status');
-    expect(skeleton.findAll('.list-skeleton-row').length).toBeGreaterThan(0);
+    expect(page.findAll('.list-skeleton-row').length).toBeGreaterThan(0);
     expect(page.find('.ds-empty').exists()).toBe(false);
     expect(page.get('.page-title').text()).not.toContain('(0)');
+    expect(status(page)).toBe(`Loading ${name}…`);
+    expect(busy(page)).toBe('true');
 
     answer();
     await flushPromises();
@@ -117,6 +127,34 @@ describe.each(lists)('the %s list while it loads', (_name, view) => {
     // A test DOM has no viewport, so the virtual scroller renders no rows.
     expect(page.get('.page-title').text()).toContain('(1)');
     expect(page.find('.ds-empty').exists()).toBe(false);
+    expect(status(page)).toBe(`1 ${one}`);
+    expect(busy(page)).toBeUndefined();
+  });
+
+  it('keeps its rows, not a skeleton, while it refreshes', async () => {
+    const page = await openList(view);
+    answer();
+    await flushPromises();
+
+    await page
+      .findAll('button')
+      .find((b) => b.text() === 'Refresh')!
+      .trigger('click');
+    await flushPromises();
+    expect(page.find('.list-skeleton').exists()).toBe(false);
+    expect(page.get('.page-title').text()).toContain('(1)');
+    expect(busy(page)).toBe('true');
+    answer();
+    await flushPromises();
+  });
+
+  it('shows a failed first load as before', async () => {
+    search.mockRejectedValueOnce(new Error('DC unreachable'));
+    const page = await openList(view);
+    expect(page.find('.list-skeleton').exists()).toBe(false);
+    expect(page.get('.p-message').text()).toContain('DC unreachable');
+    expect(page.find('.ds-empty').exists()).toBe(true);
+    expect(status(page)).toBe('');
   });
 
   it('sizes its rows like the list’s rows for the density', async () => {

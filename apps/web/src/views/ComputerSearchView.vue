@@ -19,12 +19,11 @@ import type { ComputerSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
-import { useThemeStore } from '../design/stores/useTheme.js';
+import { useListLoading } from '../design/composables/useListLoading.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const router = useRouter();
-const theme = useThemeStore();
 
 // Derived `_staleDays` lets the operator filter "machines that haven't
 // logged on in N+ days" using a plain numeric matcher. Computed once
@@ -42,8 +41,19 @@ const rows = ref<CmpRow[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
-// The first load (or a reload of an empty list): the table shows skeleton rows.
-const skeleton = computed(() => loading.value && rows.value.length === 0);
+const {
+  skeleton,
+  table: listTable,
+  title: pageTitle,
+  status: listStatus,
+} = useListLoading({
+  rows,
+  loading,
+  error,
+  total: () => total.value,
+  title: 'Computers',
+  noun: ['computer', 'computers'],
+});
 const drawerOpen = ref(false);
 
 const filters = ref<{
@@ -161,7 +171,8 @@ onMounted(load);
 
 <template>
   <div class="page-inner page-fill computers-page">
-    <PageHeader :title="skeleton ? 'Computers' : `Computers (${total.toLocaleString()})`">
+    <span class="sr-only" role="status">{{ listStatus }}</span>
+    <PageHeader :title="pageTitle">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
@@ -208,23 +219,18 @@ onMounted(load);
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading && !skeleton"
       data-key="id"
       removable-sort
       sort-field="name"
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: theme.listRowHeight }"
       @row-click="(ev) => openDetail(ev.data as ComputerSummary)"
-      class="computers-table ds-list-table"
+      v-bind="listTable"
+      class="computers-table"
     >
       <template #empty>
-        <ListSkeleton
-          v-if="skeleton"
-          :columns="['avatar-rounded', 'text', 'badge', 'text']"
-          label="Loading computers…"
-        />
+        <ListSkeleton v-if="skeleton" :columns="['avatar-rounded', 'text', 'badge', 'text']" />
         <EmptyState
           v-else
           icon="pi pi-desktop"

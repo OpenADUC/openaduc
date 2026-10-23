@@ -9,10 +9,10 @@ import { useThemeStore } from '../stores/useTheme.js';
 export type ListSkeletonColumn = 'check' | 'avatar' | 'avatar-rounded' | 'badge' | 'text';
 
 const props = defineProps<{
-  /** What each column of the table shows, in order. */
+  /** What each column of the table shows, in order. Once the table is
+   *  measured its header cells decide how many columns there are; a column
+   *  this doesn't name shows text. */
   columns: readonly ListSkeletonColumn[];
-  /** Read out while loading, e.g. "Loading users…". */
-  label: string;
 }>();
 
 const theme = useThemeStore();
@@ -28,12 +28,14 @@ const rowCount = computed(() =>
   room.value === null ? 12 : Math.max(1, Math.ceil(room.value / theme.listRowHeight)),
 );
 
+const kinds = computed<readonly ListSkeletonColumn[]>(() =>
+  cells.value ? cells.value.map((_, i) => props.columns[i] ?? 'text') : props.columns,
+);
+
 const gridColumns = computed(() =>
   cells.value
     ? cells.value.map((c) => `${c.width}px`).join(' ')
-    : props.columns
-        .map((c) => (c === 'avatar' || c === 'avatar-rounded' ? '2fr' : '1fr'))
-        .join(' '),
+    : kinds.value.map((c) => (c === 'avatar' || c === 'avatar-rounded' ? '2fr' : '1fr')).join(' '),
 );
 
 function cellPadding(i: number): Record<string, string> {
@@ -56,7 +58,7 @@ function measure(): void {
     };
   });
   // No layout (a test DOM, a hidden tab): keep the defaults.
-  if (widths.length !== props.columns.length || widths.some((w) => w.width === 0)) return;
+  if (widths.length === 0 || widths.some((w) => w.width === 0)) return;
   cells.value = widths;
   const head = table.querySelector('thead')?.getBoundingClientRect().height ?? 0;
   room.value = Math.max(0, scroller.clientHeight - head);
@@ -78,17 +80,16 @@ onBeforeUnmount(() => observer?.disconnect());
   <div
     ref="root"
     class="list-skeleton skeleton-delayed"
-    role="status"
+    aria-hidden="true"
     :style="room === null ? undefined : { height: `${room}px` }"
   >
-    <span class="sr-only">{{ label }}</span>
     <div
       v-for="n in rowCount"
       :key="n"
       class="list-skeleton-row"
       :style="{ height: `${theme.listRowHeight}px`, gridTemplateColumns: gridColumns }"
     >
-      <div v-for="(kind, i) in columns" :key="i" class="list-skeleton-cell" :style="cellPadding(i)">
+      <div v-for="(kind, i) in kinds" :key="i" class="list-skeleton-cell" :style="cellPadding(i)">
         <Skeleton v-if="kind === 'check'" width="14px" height="14px" border-radius="3px" />
         <template v-else-if="kind === 'avatar' || kind === 'avatar-rounded'">
           <Skeleton
