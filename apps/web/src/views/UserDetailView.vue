@@ -1867,11 +1867,6 @@ watch(user, (u) => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* Disable browser scroll anchoring inside the detail page. When the
-     hero shrinks during the compact transition, anchoring would auto-
-     adjust scrollTop to "stabilize" content — but that fights our
-     detection and produces a flicker loop right at the trigger point. */
-  overflow-anchor: none;
 }
 
 .overview-activity {
@@ -1880,16 +1875,6 @@ watch(user, (u) => {
 
 .stale-flag {
   margin-left: 4px;
-}
-
-/* Counts beside card titles, styled like the tab bar's. */
-.ds-tab-count {
-  font-size: 11px;
-  margin-left: 6px;
-  color: var(--text-3);
-  background: var(--surface-3);
-  padding: 1px 5px;
-  border-radius: 3px;
 }
 
 /* Body ------------------------------------------------------------------- */

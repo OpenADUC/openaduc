@@ -220,9 +220,6 @@ function openManagedBy(): void {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* Disable browser scroll anchoring inside the detail page — see the
-     User detail page for rationale (compact-on-scroll flicker fix). */
-  overflow-anchor: none;
 }
 
 .kv-grid {
