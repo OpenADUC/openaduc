@@ -680,6 +680,7 @@ async function onResetSubmit(): Promise<void> {
     await api.users.resetPassword(user.value.id, {
       newPassword: resetDraft.value.newPassword,
       forceChangeAtNextLogin: resetDraft.value.forceChangeAtNextLogin,
+      unlock: false,
     });
     toast.add({
       severity: 'success',

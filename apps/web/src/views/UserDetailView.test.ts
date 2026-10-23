@@ -153,6 +153,7 @@ describe('a dialog write without an elevated session', () => {
     expect(api.users.resetPassword).toHaveBeenLastCalledWith('u1', {
       newPassword: 'N3w-passw0rd!',
       forceChangeAtNextLogin: true,
+      unlock: false,
     });
     expect(page.find('#reset-new-password').exists()).toBe(false);
   });

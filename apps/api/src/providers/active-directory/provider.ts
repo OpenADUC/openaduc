@@ -646,7 +646,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
    * LDAPS (the cleartext-on-the-wire requirement is enforced by AD itself).
    *
    * If `forceChangeAtNextLogin` is true, also set `pwdLastSet=0`. AD treats
-   * that as "needs to change on next sign-in".
+   * that as "needs to change on next sign-in". `unlock` also sets
+   * `lockoutTime=0`. All of it is one modify, so it applies or fails whole.
    */
   async resetPassword(
     userId: DirectoryObjectIdentifier,
@@ -676,6 +677,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             }),
           );
         }
+        if (input.unlock) {
+          changes.push(
+            new Change({
+              operation: 'replace',
+              modification: new Attribute({ type: 'lockoutTime', values: ['0'] }),
+            }),
+          );
+        }
 
         await client.modify(before.distinguishedName, changes);
 
@@ -687,10 +696,12 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           // audit row carries the "what" without the "how".
           before: {
             passwordLastSetAt: before.passwordLastSetAt?.toISOString() ?? null,
+            ...(input.unlock ? { locked: before.locked } : {}),
           },
           after: {
             passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null,
             forceChangeAtNextLogin: input.forceChangeAtNextLogin,
+            ...(input.unlock ? { locked: after?.locked ?? false } : {}),
           },
         };
       } catch (err) {

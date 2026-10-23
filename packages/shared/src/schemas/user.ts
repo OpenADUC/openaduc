@@ -279,6 +279,8 @@ export const confirmPasswordSchema = z.object({}).strict();
 export const resetPasswordRequestSchema = z.object({
   newPassword: z.string().min(8).max(1024),
   forceChangeAtNextLogin: z.boolean().default(true),
+  // Also clear a lockout, in the same directory modify as the password.
+  unlock: z.boolean().default(false),
 });
 export type ResetPasswordRequest = z.infer<typeof resetPasswordRequestSchema>;
 
