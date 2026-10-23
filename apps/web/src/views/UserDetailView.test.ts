@@ -94,6 +94,15 @@ describe('editing a user without an elevated session', () => {
     expect(api.users.update).toHaveBeenCalledWith('u1', { patch: { title: 'Engineer' } });
   });
 
+  it('says why a value can’t be saved, and won’t save it', async () => {
+    const { page } = await openTab('contact', ['read:user', 'write:user.attributes'], false);
+
+    await page.get('input[placeholder="Primary email"]').setValue('not an address');
+    expect(page.text()).toContain('Not an email address');
+    const save = page.findAll('button').find((b) => b.text() === 'Save changes')!;
+    expect(save.attributes('disabled')).toBeDefined();
+  });
+
   it('shows a read-only operator no editable fields', async () => {
     const { page } = await openOrganizationTab(['read:user'], true);
 
