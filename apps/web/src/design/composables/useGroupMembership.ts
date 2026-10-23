@@ -21,21 +21,25 @@ interface GroupNames {
   distinguishedName: string;
 }
 
-const groupLabel = (g: GroupNames): string => g.name || g.samAccountName || g.distinguishedName;
+/** A user or group, as far as naming it goes. A user may leave out `kind`. */
+export type MemberNames =
+  | { kind?: 'user'; id: string; displayName: string | null; samAccountName: string }
+  | ({ kind: 'group' } & GroupNames);
 
-export function membershipOf(
-  member:
-    | { kind?: 'user'; id: string; displayName: string | null; samAccountName: string }
-    | ({ kind: 'group' } & GroupNames),
-  group: GroupNames,
-): Membership {
+/** The name to show for a user or group: the first one it has. */
+export function memberLabel(m: MemberNames): string {
+  return m.kind === 'group'
+    ? m.name || m.samAccountName || m.distinguishedName
+    : m.displayName || m.samAccountName;
+}
+
+export function membershipOf(member: MemberNames, group: GroupNames): Membership {
   return {
     memberKind: member.kind ?? 'user',
     memberId: member.id,
-    memberLabel:
-      member.kind === 'group' ? groupLabel(member) : member.displayName || member.samAccountName,
+    memberLabel: memberLabel(member),
     groupId: group.id,
-    groupLabel: groupLabel(group),
+    groupLabel: memberLabel({ kind: 'group', ...group }),
   };
 }
 

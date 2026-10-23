@@ -24,6 +24,7 @@ import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import {
+  memberLabel,
   membershipChangeText,
   membershipDoneText,
   membershipOf,
@@ -147,12 +148,6 @@ function memberRoute(m: GroupMember) {
 
 function openMember(ev: DataTableRowClickEvent): void {
   void router.push(memberRoute(ev.data as GroupMember));
-}
-
-function nameOf(m: GroupMember | MemberCandidate): string {
-  return m.kind === 'user'
-    ? m.displayName || m.samAccountName
-    : m.name || m.samAccountName || m.distinguishedName;
 }
 
 /** The line under a member's name: a user's UPN, a group's pre-Windows 2000 name. */
@@ -291,12 +286,12 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <li v-for="m in membersTop" :key="m.id">
                 <router-link :to="memberRoute(m)" class="member-link">
                   <Avatar
-                    :name="nameOf(m)"
+                    :name="memberLabel(m)"
                     :seed="m.samAccountName ?? m.id"
                     :shape="avatarShape(m)"
                     :size="22"
                   />
-                  <span>{{ nameOf(m) }}</span>
+                  <span>{{ memberLabel(m) }}</span>
                 </router-link>
               </li>
               <li v-if="memberCount > membersTop.length" class="hint">
@@ -345,14 +340,14 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <template #body="{ data }">
                 <div class="user-cell">
                   <Avatar
-                    :name="nameOf(data)"
+                    :name="memberLabel(data)"
                     :seed="data.samAccountName ?? data.id"
                     :shape="avatarShape(data)"
                     :size="26"
                   />
                   <div class="user-cell-stack">
                     <div class="user-name">
-                      {{ nameOf(data) }}
+                      {{ memberLabel(data) }}
                       <span
                         v-if="data.kind === 'user' && data.passwordNeverExpires"
                         class="badge badge-violet name-flag"
@@ -382,7 +377,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
                 <Button
                   v-if="canManage"
                   label="Remove"
-                  :aria-label="`Remove ${nameOf(data)}`"
+                  :aria-label="`Remove ${memberLabel(data)}`"
                   icon="pi pi-times"
                   severity="danger"
                   size="small"
@@ -426,13 +421,13 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
             @click="addSelected = c"
           >
             <Avatar
-              :name="nameOf(c)"
+              :name="memberLabel(c)"
               :seed="c.samAccountName ?? c.id"
               :shape="avatarShape(c)"
               :size="24"
             />
             <div class="result-stack">
-              <div class="result-name">{{ nameOf(c) }}</div>
+              <div class="result-name">{{ memberLabel(c) }}</div>
               <div class="result-meta mono">{{ accountOf(c) }}</div>
             </div>
             <StatusBadge v-if="c.kind === 'user'" :user="c" />
