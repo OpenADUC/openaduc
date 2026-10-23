@@ -33,7 +33,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
   // can see OUs that haven't shown up in the most recent sync rather than
   // having them silently disappear.
   app.get('/api/ous', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<OuListResponse> => {
       const provider = await app.services.providers.buildForRequest(req);
       const rows = await app.db
@@ -71,7 +71,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
   // requested OU. "Directly" = parent DN equals `dn` case-insensitively;
   // sub-OUs are not listed here (the tree handles drill-down).
   app.get('/api/ous/contents', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<OuContentsResponse> => {
       const q = dnQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -292,7 +292,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- POST /api/ous (create a child OU) -------------------------------
   app.post('/api/ous', {
-    preHandler: [app.requireCapability('write:ou.create'), app.requireStepUp],
+    config: { policy: { capability: 'write:ou.create', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const body = ouCreateRequestSchema.parse(req.body);
       const actor = req.actor!;
@@ -419,7 +419,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
   // Body: { dn, patch }. The only field today is `description`; null clears
   // it, a string replaces. Rename is deliberately not exposed here.
   app.patch('/api/ous', {
-    preHandler: [app.requireCapability('write:ou.update'), app.requireStepUp],
+    config: { policy: { capability: 'write:ou.update', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const body = ouUpdateRequestSchema.parse(req.body);
       const actor = req.actor!;
@@ -499,7 +499,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- DELETE /api/ous (remove an empty OU) ----------------------------
   app.delete('/api/ous', {
-    preHandler: [app.requireCapability('write:ou.delete'), app.requireStepUp],
+    config: { policy: { capability: 'write:ou.delete', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const body = ouDeleteRequestSchema.parse(req.body);
       const actor = req.actor!;

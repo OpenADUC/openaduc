@@ -57,7 +57,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // UI on initial load and by the user-detail page to decide whether to
   // show the photo + sign-in fields.
   app.get('/api/directories/:id/entra', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -72,8 +72,10 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // service); subsequent updates may omit it to keep the existing one,
   // or send empty string to clear it.
   app.put('/api/directories/:id/entra', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 10, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = putSchema.parse(req.body);
@@ -149,7 +151,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
 
   // ---- DELETE /api/directories/:id/entra -------------------------------
   app.delete('/api/directories/:id/entra', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -184,8 +186,10 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // result is recorded on the integration row so the UI doesn't need a
   // separate "last test" endpoint.
   app.post('/api/directories/:id/entra/test', {
-    preHandler: app.requireCapability('configure:directory'),
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 10, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -245,7 +249,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // Pagination is page-based (table-style) because the SPA renders
   // them in DataTable / "Load more" patterns.
   app.get('/api/directories/:id/signin-events', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const querySchema = z.object({
@@ -272,7 +276,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // ---- GET /api/directories/:id/signin-events/apps ---------------------
   // Distinct app list for the audit-tab filter dropdown.
   app.get('/api/directories/:id/signin-events/apps', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const apps = await app.services.signInEvents.distinctApps(id);
@@ -285,7 +289,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // Powers the row-click modal; the list endpoint omits detail_json to
   // keep the wire size small.
   app.get('/api/directories/:id/signin-events/:eventId', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const { eventId } = z
@@ -309,7 +313,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   //   method — exact method name (mobilePhone, microsoftAuthenticatorPush, …)
   //   search — substring match on UPN / displayName
   app.get('/api/directories/:id/mfa-registration', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const querySchema = z.object({
@@ -439,7 +443,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // the audit-tab method dropdown. Pulls from the JSONB column via
   // jsonb_array_elements_text and dedupes.
   app.get('/api/directories/:id/mfa-registration/methods', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const rows = await app.db
@@ -465,7 +469,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // 404 short-circuits with a "no-photo" header so the SPA can fall back
   // to the initials avatar without retrying.
   app.get('/api/directories/:id/users/:userId/photo', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const { userId } = z

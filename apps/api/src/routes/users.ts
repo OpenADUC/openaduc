@@ -52,7 +52,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // overzealous export can't churn the DB; we return the cap-reached
   // signal in a header so the UI can warn the operator.
   app.get('/api/users/export.csv', {
-    preHandler: app.requireCapability('export:user'),
+    config: { policy: { capability: 'export:user', stepUp: false, directory: 'caller' } },
     handler: async (req, reply) => {
       const q = userSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -213,7 +213,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- GET /api/users (cache search) -----------------------------------
   app.get('/api/users', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<UserSearchResponse> => {
       const q = userSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -506,7 +506,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- GET /api/users/:id (live refresh from AD) ------------------------
   app.get('/api/users/:id', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<{ user: UserDetail }> => {
       const { id } = idParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);
@@ -738,7 +738,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- PATCH /api/users/:id (write-as-user attribute update) -----------
   app.patch('/api/users/:id', {
-    preHandler: [app.requireCapability('write:user.attributes'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.attributes', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = userUpdateRequestSchema.parse(req.body);
@@ -799,7 +799,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
   // ---- POST /api/users/:id/unlock --------------------------------------
   app.post('/api/users/:id/unlock', {
-    preHandler: [app.requireCapability('write:user.unlock'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.unlock', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const actor = req.actor!;
@@ -853,18 +853,24 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // Both routes share the same write-as-user shape as unlock. Implementation
   // delegated to a small helper to avoid copy/paste.
   app.post('/api/users/:id/disable', {
-    preHandler: [app.requireCapability('write:user.enableDisable'), app.requireStepUp],
+    config: {
+      policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
+    },
     handler: async (req) => toggleEnabled(req, app, true),
   });
 
   app.post('/api/users/:id/enable', {
-    preHandler: [app.requireCapability('write:user.enableDisable'), app.requireStepUp],
+    config: {
+      policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
+    },
     handler: async (req) => toggleEnabled(req, app, false),
   });
 
   // ---- POST /api/users/:id/reset-password ------------------------------
   app.post('/api/users/:id/reset-password', {
-    preHandler: [app.requireCapability('write:user.resetPassword'), app.requireStepUp],
+    config: {
+      policy: { capability: 'write:user.resetPassword', stepUp: true, directory: 'caller' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = resetPasswordRequestSchema.parse(req.body);
@@ -926,12 +932,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // Body: { password, groupId }. The server resolves the group's DN by
   // its objectGuid via the cache, then asks the provider to do the modify.
   app.post('/api/users/:id/groups', {
-    preHandler: [app.requireCapability('write:group.membership'), app.requireStepUp],
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
     handler: async (req) => modifyMembership(req, app, 'add'),
   });
 
   app.delete('/api/users/:id/groups', {
-    preHandler: [app.requireCapability('write:group.membership'), app.requireStepUp],
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
     handler: async (req) => modifyMembership(req, app, 'remove'),
   });
 
@@ -941,7 +947,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // re-checks via its own bind. Idempotent — if the user is already under
   // the requested OU, the provider returns ok with a no-op.
   app.post('/api/users/:id/move', {
-    preHandler: [app.requireCapability('write:user.move'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.move', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = userMoveRequestSchema.parse(req.body);
@@ -1014,7 +1020,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // Name parts, RDN, logon names and primary email in one operation. Body
   // carries only the fields that change; see userRenameRequestSchema.
   app.post('/api/users/:id/rename', {
-    preHandler: [app.requireCapability('write:user.rename'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.rename', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = userRenameRequestSchema.parse(req.body);
@@ -1079,7 +1085,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // Recycle Bin will let them be restored. Reads the cache; the delete
   // itself re-checks the live entry.
   app.post('/api/users/delete-preflight', {
-    preHandler: [app.requireCapability('write:user.delete'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.delete', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<UserDeletePreflightResponse> => {
       const body = userDeletePreflightRequestSchema.parse(req.body);
       const actor = req.actor!;
@@ -1175,7 +1181,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   // ---- DELETE /api/users/:id -------------------------------------------
   // Disabled accounts only. Body: { confirmSamAccountName }.
   app.delete('/api/users/:id', {
-    preHandler: [app.requireCapability('write:user.delete'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.delete', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = userDeleteRequestSchema.parse(req.body);
@@ -1400,7 +1406,7 @@ async function modifyMembership(
 /**
  * Build the write-context object the AD provider expects. The bind password
  * comes from the in-process credential cache (populated by step-up). The
- * non-null assertions are safe because requireStepUp gates these handlers.
+ * non-null assertions are safe because these routes require step-up.
  */
 function ctx(
   actor: NonNullable<import('fastify').FastifyRequest['actor']>,

@@ -79,7 +79,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
   // user (the appearance page reads no settings, but the policy page does).
   // Not capability-gated because no sensitive material is exposed here.
   app.get('/api/settings', {
-    preHandler: app.requireAuth,
+    config: { policy: { capability: null, stepUp: false, directory: 'none' } },
     handler: async () => {
       const rows = await app.db
         .selectFrom('app_settings')
@@ -107,7 +107,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
   // ALLOWED_SETTINGS or the whole patch is rejected. Capability gated and
   // audited per key.
   app.patch('/api/settings', {
-    preHandler: app.requireCapability('configure:security'),
+    config: { policy: { capability: 'configure:security', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const body = patchBodySchema.parse(req.body);
       const updates = Object.entries(body);
@@ -255,7 +255,7 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
 
   // ---- GET /api/settings/roles -------------------------------------------
   app.get('/api/settings/roles', {
-    preHandler: app.requireCapability('configure:security'),
+    config: { policy: { capability: 'configure:security', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<RolesResponse> => {
       const mapping = await currentMapping();
       const providerId = req.actor!.session.directoryId;
@@ -278,7 +278,7 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
   // Body: any of { admin, operator, auditor } as a group DN, or null to
   // unassign. Takes effect at each operator's next sign-in or step-up.
   app.put('/api/settings/roles', {
-    preHandler: [app.requireCapability('configure:security'), app.requireStepUp],
+    config: { policy: { capability: 'configure:security', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const body = rolesUpdateRequestSchema.parse(req.body);
       const actor = req.actor!;

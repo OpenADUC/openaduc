@@ -29,7 +29,7 @@ const idParamSchema = z.object({ id: z.guid() });
 export async function registerComputerRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/computers ----------------------------------------------
   app.get('/api/computers', {
-    preHandler: app.requireCapability('read:computer'),
+    config: { policy: { capability: 'read:computer', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<ComputerSearchResponse> => {
       const q = computerSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -137,7 +137,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
 
   // ---- GET /api/computers/:id ------------------------------------------
   app.get('/api/computers/:id', {
-    preHandler: app.requireCapability('read:computer'),
+    config: { policy: { capability: 'read:computer', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<{ computer: ComputerDetail }> => {
       const { id } = idParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);
