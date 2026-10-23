@@ -66,7 +66,7 @@ describe('ActivityFeed', () => {
       anEvent({
         id: '1',
         action: 'user.accountExpiry.set',
-        metadata: { expiresAt: '2031-03-01T05:00:00.000Z' },
+        metadata: { expiresAt: new Date(2031, 2, 1).toISOString() },
       }),
       anEvent({ id: '2', action: 'user.accountExpiry.set', metadata: { expiresAt: null } }),
     ]);
@@ -76,7 +76,7 @@ describe('ActivityFeed', () => {
       'Account expiry changed',
     ]);
     expect(page.findAll('.af-detail').map((d) => d.text())).toEqual([
-      `Expires ${new Date('2031-03-01T05:00:00.000Z').toLocaleString()}`,
+      `Expires at the end of ${new Date(2031, 1, 28).toLocaleDateString()}`,
       'Never expires',
     ]);
   });
