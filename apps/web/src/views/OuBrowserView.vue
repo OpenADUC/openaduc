@@ -21,7 +21,8 @@ import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import { useOuContents } from '../design/composables/useOuContents.js';
 import { useOuTree } from '../design/composables/useOuTree.js';
-import type { DirectoryOu } from '@openaduc/shared';
+import type { DirectoryOu, GroupSummary } from '@openaduc/shared';
+import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -29,6 +30,7 @@ const toast = useToast();
 const canCreateOu = computed(() => auth.hasCapability('write:ou.create'));
 const canUpdateOu = computed(() => auth.hasCapability('write:ou.update'));
 const canDeleteOu = computed(() => auth.hasCapability('write:ou.delete'));
+const canCreateGroup = computed(() => auth.hasCapability('write:group.create'));
 
 // ---- OU tree -------------------------------------------------------------
 
@@ -258,6 +260,14 @@ const ctxItems = computed<MenuItem[]>(() => {
       tooltip: 'Create a new organizational unit under this one.',
     });
   }
+  if (canCreateGroup.value) {
+    items.push({
+      label: 'New group…',
+      icon: 'pi pi-users',
+      command: () => openNewGroup(ou.distinguishedName),
+      tooltip: 'Create a group in this OU.',
+    });
+  }
   if (canDeleteOu.value) {
     const counts = ctxCounts.value;
     const childTip = counts
@@ -298,7 +308,9 @@ const ctxItems = computed<MenuItem[]>(() => {
 });
 
 async function onTreeNodeContext(event: MouseEvent, node: TreeNode): Promise<void> {
-  if (!canCreateOu.value && !canUpdateOu.value && !canDeleteOu.value) return;
+  if (!canCreateOu.value && !canUpdateOu.value && !canDeleteOu.value && !canCreateGroup.value) {
+    return;
+  }
   event.preventDefault();
   event.stopPropagation();
   const dn = node.data?.dn as string | undefined;
@@ -329,6 +341,27 @@ async function onTreeNodeContext(event: MouseEvent, node: TreeNode): Promise<voi
   } finally {
     ctxCountsLoading.value = false;
   }
+}
+
+// ---- New group -----------------------------------------------------------
+
+const newGroupOpen = ref(false);
+const newGroupParentDn = ref<string | null>(null);
+
+function openNewGroup(parentDn: string): void {
+  newGroupParentDn.value = parentDn;
+  newGroupOpen.value = true;
+}
+
+function onGroupCreated(group: GroupSummary): void {
+  newGroupOpen.value = false;
+  toast.add({
+    severity: 'success',
+    summary: 'Group created',
+    detail: `${group.name ?? group.samAccountName} was created.`,
+    life: 4000,
+  });
+  if (selectedDn.value) void loadContents(selectedDn.value);
 }
 
 // ---- Create OU dialog ----------------------------------------------------
@@ -565,6 +598,16 @@ async function onDeleteSubmit(): Promise<void> {
             <h3 class="pane-h">{{ selectedOu?.name ?? 'Select an OU' }}</h3>
           </div>
           <code v-if="selectedOu" class="dn-line">{{ selectedOu.distinguishedName }}</code>
+        </template>
+        <template v-if="selectedOu && canCreateGroup" #actions>
+          <Button
+            label="New group"
+            icon="pi pi-plus"
+            size="small"
+            severity="secondary"
+            outlined
+            @click="openNewGroup(selectedOu.distinguishedName)"
+          />
         </template>
         <div class="pane-body">
           <EmptyState
@@ -907,6 +950,13 @@ async function onDeleteSubmit(): Promise<void> {
         </span>
       </template>
     </ContextMenu>
+
+    <NewGroupDialog
+      v-if="newGroupOpen"
+      v-model:visible="newGroupOpen"
+      :parent-dn="newGroupParentDn"
+      @created="onGroupCreated"
+    />
 
     <!-- Add child OU dialog -->
     <Dialog

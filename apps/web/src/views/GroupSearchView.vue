@@ -19,8 +19,29 @@ import type { GroupSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import Avatar from '../design/primitives/Avatar.vue';
+import AppToast from '../design/feedback/AppToast.vue';
+import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
+import { useToast } from 'primevue/usetoast';
+import { useAuthStore } from '../stores/auth.js';
 
 const router = useRouter();
+const toast = useToast();
+const auth = useAuthStore();
+
+const canCreate = computed(() => auth.hasCapability('write:group.create'));
+const newGroupOpen = ref(false);
+
+async function onCreated(group: GroupSummary): Promise<void> {
+  newGroupOpen.value = false;
+  // The group's page shows the toast, so it waits until the page is there.
+  await router.push({ name: 'group-detail', params: { id: group.id } });
+  toast.add({
+    severity: 'success',
+    summary: 'Group created',
+    detail: `${group.name ?? group.samAccountName} was created.`,
+    life: 4000,
+  });
+}
 
 type GroupType = GroupSummary['groupType'];
 type GroupScope = GroupSummary['groupScope'];
@@ -162,10 +183,12 @@ onMounted(load);
 </script>
 
 <template>
+  <AppToast />
   <div class="page-inner page-fill groups-page">
     <PageHeader :title="`Groups (${total.toLocaleString()})`">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
+        <Button v-if="canCreate" label="New group" icon="pi pi-plus" @click="newGroupOpen = true" />
         <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"
@@ -379,6 +402,7 @@ onMounted(load);
         </div>
       </template>
     </Drawer>
+    <NewGroupDialog v-if="newGroupOpen" v-model:visible="newGroupOpen" @created="onCreated" />
   </div>
 </template>
 
