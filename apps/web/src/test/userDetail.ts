@@ -37,6 +37,7 @@ export function aUserDetail(overrides: Partial<UserDetail> = {}): UserDetail {
     ipPhone: null,
     homePhone: null,
     homePostalAddress: null,
+    streetAddress: null,
     description: null,
     company: null,
     c: null,

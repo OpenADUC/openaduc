@@ -96,6 +96,9 @@ export const userDetailSchema = userSummarySchema.extend({
   // practice every AD setup we've seen stores a single multi-line string
   // (newline-separated). Treat as scalar; the UI uses a textarea for it.
   homePostalAddress: z.string().nullable(),
+  // The work address's street lines, which ADUC's Address tab edits as
+  // "Street"; one multi-line string, like homePostalAddress.
+  streetAddress: z.string().nullable(),
   description: z.string().nullable(),
   company: z.string().nullable(),
   // AD address attributes use single-letter names: c=country code,
@@ -326,9 +329,11 @@ export const userUpdateRequestSchema = z.object({
       employeeNumber: editableStringField.optional(),
       ipPhone: editableStringField.optional(),
       homePhone: editableStringField.optional(),
-      // homePostalAddress and description are multi-line freeform fields;
-      // bump the limit so paragraph-style values don't get rejected.
+      // homePostalAddress, streetAddress and description are multi-line
+      // freeform fields; bump the limit so paragraph-style values don't get
+      // rejected.
       homePostalAddress: z.string().max(1024).nullable().optional(),
+      streetAddress: z.string().max(1024).nullable().optional(),
       description: z.string().max(1024).nullable().optional(),
       company: editableStringField.optional(),
       c: z.string().max(8).nullable().optional(),

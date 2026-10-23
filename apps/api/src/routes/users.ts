@@ -630,6 +630,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         ipPhone: rawScalarValue(raw['ipPhone']),
         homePhone: rawScalarValue(raw['homePhone']),
         homePostalAddress: rawScalarValue(raw['homePostalAddress']),
+        streetAddress: rawScalarValue(raw['streetAddress']),
         description: rawScalarValue(raw['description']),
         company: rawScalarValue(raw['company']),
         c: rawScalarValue(raw['c']),
