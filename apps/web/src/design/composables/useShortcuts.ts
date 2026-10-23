@@ -5,7 +5,6 @@
 
 import { computed, getCurrentScope, onScopeDispose, shallowReactive } from 'vue';
 
-/** The cheat sheet's headings, in its order. */
 export const SHORTCUT_SECTIONS = ['List', 'Actions', 'Tabs', 'General'] as const;
 export type ShortcutSection = (typeof SHORTCUT_SECTIONS)[number];
 
@@ -25,10 +24,12 @@ type Source = () => readonly Shortcut[];
 
 const sources = shallowReactive(new Set<Source>());
 
-/** Offer these shortcuts while the calling component is mounted. */
+/** Offer these shortcuts until the calling component or scope goes. */
 export function useShortcuts(source: Source): void {
+  // Without a scope nothing would ever take them back.
+  if (!getCurrentScope()) throw new Error('useShortcuts needs a component setup or effect scope');
   sources.add(source);
-  if (getCurrentScope()) onScopeDispose(() => sources.delete(source));
+  onScopeDispose(() => sources.delete(source));
 }
 
 /**

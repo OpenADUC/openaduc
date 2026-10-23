@@ -201,6 +201,12 @@ describe('single-key shortcuts', () => {
   });
 });
 
+describe('registering shortcuts', () => {
+  it('needs a component or scope to take them back again', () => {
+    expect(() => useShortcuts(() => [])).toThrow(/scope/);
+  });
+});
+
 describe('the shortcut cheat sheet', () => {
   it('lists the page’s shortcuts by section, and why one can’t run now', async () => {
     await open();
