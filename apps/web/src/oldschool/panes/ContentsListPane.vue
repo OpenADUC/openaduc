@@ -273,8 +273,7 @@ function userItems(r: Row): CtxItem[] {
   if (can('write:user.move')) {
     items.push({
       label: 'Move…',
-      onSelect: () =>
-        store.openDialog({ kind: 'move', objectKind: 'user', id: r.id, label: r.name }),
+      onSelect: () => store.openDialog({ kind: 'move', id: r.id, label: r.name }),
     });
   }
   const canDelete = can('write:user.delete');
@@ -313,11 +312,7 @@ function userItems(r: Row): CtxItem[] {
 function groupItems(r: Row): CtxItem[] {
   return [
     { label: 'Add to a group…', disabled: true },
-    {
-      label: 'Move…',
-      onSelect: () =>
-        store.openDialog({ kind: 'move', objectKind: 'group', id: r.id, label: r.name }),
-    },
+    { label: 'Move…', disabled: true },
     { label: 'Send Mail', disabled: true },
     { kind: 'separator' },
     { label: 'Delete', disabled: true },
@@ -338,11 +333,7 @@ function computerItems(r: Row): CtxItem[] {
       label: 'Manage',
       disabled: true,
     },
-    {
-      label: 'Move…',
-      onSelect: () =>
-        store.openDialog({ kind: 'move', objectKind: 'computer', id: r.id, label: r.name }),
-    },
+    { label: 'Move…', disabled: true },
     {
       label: 'All Tasks',
       kind: 'header',
