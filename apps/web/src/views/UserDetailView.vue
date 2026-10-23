@@ -16,7 +16,6 @@ import TreeSelect from 'primevue/treeselect';
 import type { MenuItem } from 'primevue/menuitem';
 import type { TreeNode } from 'primevue/treenode';
 import { useToast } from 'primevue/usetoast';
-import type { ToastMessageOptions } from 'primevue/toast';
 import { api, type AuditEventRow } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -483,38 +482,36 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 
 const { running: accountActionRunning, run: runAccountAction } = useAccountActions<UserDetail>({
   onDone: async (action, u) => {
-    toast.add(accountActionToast(action, u));
+    toast.add({
+      severity: 'success',
+      summary: ACCOUNT_ACTION_SUMMARY[action].done,
+      detail: action === 'unlock' ? unlockedDetail(u) : undefined,
+      life: action === 'unlock' ? 5000 : 3000,
+    });
     await load();
   },
   onFailed: (action, _u, message) =>
     toast.add({
       severity: 'error',
-      summary: `${ACCOUNT_ACTION_VERB[action]} failed`,
+      summary: ACCOUNT_ACTION_SUMMARY[action].failed,
       detail: message,
       life: 6000,
     }),
 });
 
-const ACCOUNT_ACTION_VERB: Record<AccountAction, string> = {
-  unlock: 'Unlock',
-  enable: 'Enable',
-  disable: 'Disable',
+const ACCOUNT_ACTION_SUMMARY: Record<AccountAction, { done: string; failed: string }> = {
+  unlock: { done: 'Account unlocked', failed: 'Unlock failed' },
+  enable: { done: 'Account enabled', failed: 'Enable failed' },
+  disable: { done: 'Account disabled', failed: 'Disable failed' },
 };
 
-// The account is as it was before the action, so an unlock can still say
-// when it was locked even though the reload clears that.
-function accountActionToast(action: AccountAction, u: UserDetail): ToastMessageOptions {
-  if (action !== 'unlock') {
-    return {
-      severity: 'success',
-      summary: action === 'disable' ? 'Account disabled' : 'Account enabled',
-      life: 3000,
-    };
-  }
+// The account is as it was before the unlock, so this can still say when it
+// was locked even though the reload clears that.
+function unlockedDetail(u: UserDetail): string {
   const detail = [`${u.displayName ?? u.samAccountName} can sign in now.`];
   if (u.lockedAt) detail.push(`Was locked at ${fmtAbsolute(u.lockedAt)}.`);
   if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
-  return { severity: 'success', summary: 'Account unlocked', detail: detail.join(' '), life: 5000 };
+  return detail.join(' ');
 }
 
 function runOnUser(action: AccountAction): void {
