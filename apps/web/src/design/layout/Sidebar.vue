@@ -8,6 +8,7 @@ import { useAuthStore } from '../../stores/auth.js';
 import { useThemeStore } from '../stores/useTheme.js';
 import { initialsFor, avatarGradientFor } from '../lib/format.js';
 import Wordmark from '../primitives/Wordmark.vue';
+import ElevatedSessionIndicator from '../primitives/ElevatedSessionIndicator.vue';
 
 interface NavItem {
   to: string;
@@ -155,6 +156,7 @@ const avatarBg = computed(() => avatarGradientFor(actorName.value));
     </div>
 
     <div class="sb-foot">
+      <ElevatedSessionIndicator :compact="theme.sidebarCollapsed" />
       <button
         v-tooltip.right="theme.sidebarCollapsed ? actorName : undefined"
         type="button"
@@ -362,8 +364,9 @@ const avatarBg = computed(() => avatarGradientFor(actorName.value));
   border-top: 1px solid var(--border);
   padding: 8px 8px;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   flex: 0 0 auto;
 }
 
@@ -430,7 +433,7 @@ const avatarBg = computed(() => avatarGradientFor(actorName.value));
 }
 
 .is-collapsed .sb-foot {
-  justify-content: center;
+  align-items: center;
   padding: 10px 8px;
 }
 

@@ -66,7 +66,7 @@ function onInput(key: RenameField | 'givenName' | 'surname', ev: Event): void {
 function submit(): void {
   if (changedKeys.value.length === 0) return;
   err.value = null;
-  auth.requireEdit(async () => {
+  auth.requireStepUp(async () => {
     try {
       await api.users.rename(props.id, buildRequest());
       toast.add({

@@ -248,7 +248,7 @@ async function save(closeAfter: boolean): Promise<void> {
   }
   const wantUnlock = draft.value.doUnlock && user.value.locked;
 
-  auth.requireEdit(async () => {
+  auth.requireStepUp(async () => {
     try {
       if (Object.keys(patch).length > 0) {
         await api.users.update(props.id, { patch });
@@ -281,7 +281,7 @@ function removeMembership(groupId: string, groupName: string): void {
     okLabel: 'Yes',
     destructive: false,
     onOk: () => {
-      auth.requireEdit(async () => {
+      auth.requireStepUp(async () => {
         memberOfPending.value = groupId;
         try {
           await api.users.removeGroup(props.id, { groupId });

@@ -682,7 +682,7 @@ function anchorTimeToDate(value: string): Date | null {
               outlined
               size="small"
               title="Reset stuck task"
-              @click="auth.requireEdit(() => resetStuck(t))"
+              @click="auth.requireStepUp(() => resetStuck(t))"
             />
             <Button
               v-if="canEdit"
@@ -692,7 +692,7 @@ function anchorTimeToDate(value: string): Date | null {
               outlined
               title="Run now"
               :disabled="t.lastStatus === 'running' || queuing.has(t.taskKey)"
-              @click="auth.requireEdit(() => runNow(t))"
+              @click="auth.requireStepUp(() => runNow(t))"
             />
             <Button
               v-if="canEdit"

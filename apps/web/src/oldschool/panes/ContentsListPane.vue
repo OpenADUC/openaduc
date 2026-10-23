@@ -216,7 +216,7 @@ function userItems(r: Row): CtxItem[] {
       ? {
           label: 'Enable Account',
           onSelect: () =>
-            auth.requireEdit(async () => {
+            auth.requireStepUp(async () => {
               try {
                 await api.users.enable(r.id);
                 showToastSuccess(`Object "${r.name}" has been enabled.`);
@@ -229,7 +229,7 @@ function userItems(r: Row): CtxItem[] {
       : {
           label: 'Disable Account',
           onSelect: () =>
-            auth.requireEdit(async () => {
+            auth.requireStepUp(async () => {
               try {
                 await api.users.disable(r.id);
                 showToastSuccess(`Object "${r.name}" has been disabled.`);
@@ -248,7 +248,7 @@ function userItems(r: Row): CtxItem[] {
       ? {
           label: 'Unlock Account',
           onSelect: () =>
-            auth.requireEdit(async () => {
+            auth.requireStepUp(async () => {
               try {
                 await api.users.unlock(r.id);
                 showToastSuccess(`${r.name} unlocked.`);
@@ -271,7 +271,7 @@ function userItems(r: Row): CtxItem[] {
       ? {
           label: 'Delete',
           onSelect: () =>
-            auth.requireEdit(
+            auth.requireStepUp(
               () => store.openDialog({ kind: 'delete-user', id: r.id, label: r.name }),
               'Deleting a user requires step-up authentication.',
             ),

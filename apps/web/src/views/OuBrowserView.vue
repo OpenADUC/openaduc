@@ -267,14 +267,13 @@ const ctxItems = computed<MenuItem[]>(() => {
   const ou = ctxOu.value;
   if (!ou) return [];
   const items: MenuItem[] = [];
-  // Write actions stay clickable whether or not edit mode is on —
-  // `auth.requireEdit` pops the StepUpDialog for an unauthenticated operator
-  // and auto-fires the action after they authenticate.
+  // Write actions stay clickable without an elevated session —
+  // `auth.requireStepUp` prompts step-up and runs the action after it.
   if (canUpdateOu.value) {
     items.push({
       label: 'Edit description',
       icon: 'pi pi-pencil',
-      command: () => auth.requireEdit(() => openEditDialog(ou)),
+      command: () => auth.requireStepUp(() => openEditDialog(ou)),
       tooltip: 'Edit this OU’s description (rename is not supported).',
     });
   }
@@ -282,7 +281,7 @@ const ctxItems = computed<MenuItem[]>(() => {
     items.push({
       label: 'Add child OU',
       icon: 'pi pi-folder-plus',
-      command: () => auth.requireEdit(() => openCreateDialog(ou)),
+      command: () => auth.requireStepUp(() => openCreateDialog(ou)),
       tooltip: 'Create a new organizational unit under this one.',
     });
   }
@@ -299,9 +298,9 @@ const ctxItems = computed<MenuItem[]>(() => {
       label: 'Delete OU',
       icon: 'pi pi-trash',
       // Disabled only if children are unknown (still fetching) or children
-      // are present. Edit-mode is handled at click time by requireEdit.
+      // are present. Step-up is handled at click time by requireStepUp.
       disabled: ctxHasChildren.value !== false,
-      command: () => auth.requireEdit(() => openDeleteDialog(ou)),
+      command: () => auth.requireStepUp(() => openDeleteDialog(ou)),
       tooltip: childTip,
     });
   }

@@ -29,9 +29,10 @@ const search = ref('');
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function load(): Promise<void> {
-  // The endpoint binds as the operator, so it 403s without edit mode. Bail
-  // early and render the gate panel instead of provoking an error.
-  if (!auth.editMode) return;
+  // The endpoint binds as the operator, so it 403s without an elevated
+  // session. Bail early and render the gate panel instead of provoking an
+  // error.
+  if (!auth.elevated) return;
   loading.value = true;
   error.value = null;
   try {
@@ -46,7 +47,7 @@ async function load(): Promise<void> {
   } catch (err) {
     error.value =
       err instanceof ApiError && err.status === 403
-        ? 'Your account does not have permission to view deleted computers (or your editing session expired).'
+        ? 'Your account does not have permission to view deleted computers (or your elevated session ended).'
         : err instanceof Error
           ? err.message
           : 'Failed to load deleted computers';
@@ -56,7 +57,7 @@ async function load(): Promise<void> {
 }
 
 watch(
-  () => auth.editMode,
+  () => auth.elevated,
   (now, prev) => {
     if (now && !prev) {
       void load();
@@ -83,7 +84,7 @@ function onPage(ev: DataTablePageEvent): void {
 }
 
 onMounted(() => {
-  if (auth.editMode) void load();
+  if (auth.elevated) void load();
 });
 </script>
 
@@ -110,20 +111,21 @@ onMounted(() => {
       </template>
     </PageHeader>
 
-    <!-- Edit-mode gate. Same rationale as deleted users: the endpoint binds
+    <!-- Step-up gate. Same rationale as deleted users: the endpoint binds
          as the operator (not the service account), so what they see is
          governed by their AD permissions. The cached step-up password is
          what makes that bind possible. -->
-    <div v-if="!auth.editMode" class="gate-panel">
+    <div v-if="!auth.elevated" class="gate-panel">
       <i class="pi pi-lock gate-icon" />
       <div class="gate-stack">
-        <strong>Editing required to view deleted computers</strong>
+        <strong>Step up to view deleted computers</strong>
         <p class="gate-body">
           The deleted-computers list reads Active Directory as your account, not the service
-          account, so the entries you see depend on your AD permissions. Turn on
-          <strong>Editing</strong> in the top bar to enter your password — the page will load
-          automatically.
+          account, so the entries you see depend on your AD permissions. Step up to load the page.
         </p>
+        <div>
+          <Button label="Step up" icon="pi pi-key" size="small" @click="auth.requestStepUp()" />
+        </div>
       </div>
     </div>
 

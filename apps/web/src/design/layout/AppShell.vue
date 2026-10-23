@@ -5,8 +5,6 @@ import { useRoute } from 'vue-router';
 import Sidebar from './Sidebar.vue';
 import Topbar from './Topbar.vue';
 import StepUpDialog from '../feedback/StepUpDialog.vue';
-import EditModeFab from '../primitives/EditModeFab.vue';
-import EditModeStatusPill from '../primitives/EditModeStatusPill.vue';
 import OldSchoolMmc from '../../oldschool/OldSchoolMmc.vue';
 import { useAuthStore } from '../../stores/auth.js';
 import { useResponsive } from '../composables/useResponsive.js';
@@ -55,9 +53,9 @@ watch(
 // Global StepUpDialog. Mounted once at the shell level so any view (or
 // the API client itself, on a 'step_up_required' response) can flip
 // `auth.stepUpRequested` to open the dialog without each view needing
-// to own its own copy. The reason field is populated when the dialog
-// opened automatically (e.g. cached step-up password expired); the
-// EditModeFab leaves it null for a normal user-initiated open.
+// to own its own copy. The reason field is populated when the server
+// refused a write (e.g. cached step-up password expired); it's null when
+// a write prompted step-up up front.
 function onDialogVisibility(open: boolean): void {
   auth.stepUpRequested = open;
   if (!open) {
@@ -86,8 +84,6 @@ function onDialogVisibility(open: boolean): void {
         <slot />
       </div>
     </main>
-    <EditModeFab />
-    <EditModeStatusPill />
 
     <!-- Old School: full-viewport overlay covering sidebar, topbar, and
          page. Mounted at the shell level so it lives on top of every

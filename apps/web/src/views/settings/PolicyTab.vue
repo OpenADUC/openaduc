@@ -262,7 +262,7 @@ onMounted(async () => {
       icon="pi pi-check"
       :loading="saving"
       :disabled="loading || limitsConflict"
-      @click="auth.requireEdit(save)"
+      @click="auth.requireStepUp(save)"
     />
     <span v-else class="hint">
       You don't have <span class="mono">configure:security</span> capability — view only.

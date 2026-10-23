@@ -11,8 +11,7 @@ import { ApiError } from '../../api/client.js';
 const props = defineProps<{
   visible: boolean;
   // Optional context shown above the password field — populated when
-  // the dialog opened automatically (e.g. "your editing session
-  // expired") rather than from a click on the editing toggle.
+  // the server refused a write because the elevated session was gone.
   reason?: string | null;
 }>();
 const emit = defineEmits<{
@@ -73,8 +72,8 @@ function onCancel(): void {
       {{ reason }}
     </Message>
     <p class="dialog-prose">
-      Re-enter your AD password to authorize sensitive actions for the next session. The server uses
-      this to bind as you when applying changes.
+      Re-enter your AD password to unlock writes. The server uses it to bind as you when applying
+      changes, and forgets it when you've been idle a while or lock writes.
     </p>
     <!-- PrimeVue Dialog's onAfterEnter calls focus() which only finds
          elements with the [autofocus] attribute. Without one, it falls
