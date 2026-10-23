@@ -128,7 +128,9 @@ const CONDITIONS: {
     details: (b, now) => {
       const details: string[] = [];
       if (b.since) details.push(`Since ${when(b.since, now)}`);
-      if (b.badPasswords !== null) {
+      // badPwdCount isn't replicated: the DC that answered may count 0 for
+      // a lockout another DC made, so a 0 says nothing.
+      if (b.badPasswords) {
         details.push(`${b.badPasswords} bad password${b.badPasswords === 1 ? '' : 's'}`);
       }
       const end = lockoutEnd(b, now);

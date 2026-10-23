@@ -181,6 +181,13 @@ describe('describeBlocker', () => {
         .details,
     ).toEqual(['1 bad password']);
   });
+
+  it('leaves out a bad-password count of 0, which another DC may not share', () => {
+    expect(
+      describeBlocker({ kind: 'locked', since: null, badPasswords: 0, ends: 'unknown' }, NOW)
+        .details,
+    ).toEqual([]);
+  });
 });
 
 describe('userStatus', () => {
