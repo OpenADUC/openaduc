@@ -21,6 +21,11 @@ import AppToast from '../design/feedback/AppToast.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import { undoable } from '../design/feedback/undoToast.js';
+import {
+  accountActionFailedSummary,
+  accountActionToast,
+  passwordResetToast,
+} from '../design/feedback/userToasts.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
@@ -28,7 +33,7 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
-import { lockoutEnd, signInBlockers, signInFix, type SignInFix } from '../design/lib/signIn.js';
+import { fixFor, lockoutEnd, signInBlockers, type SignInFix } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
@@ -485,38 +490,13 @@ const {
   dismiss: dismissAccountFailure,
 } = useAccountActions<UserDetail>({
   onDone: async (action, u, offer) => {
-    toast.add(
-      undoable(
-        {
-          severity: 'success',
-          summary: `${ACCOUNT_ACTION_TEXT[action].done} ${nameOf(u)}`,
-          detail: action === 'unlock' ? unlockedDetail(u) : undefined,
-          life: action === 'unlock' ? 5000 : 3000,
-        },
-        offer,
-      ),
-    );
+    toast.add(accountActionToast(action, u, offer));
     await load();
   },
 });
 
-const ACCOUNT_ACTION_TEXT: Record<AccountAction, { done: string; verb: string }> = {
-  unlock: { done: 'Unlocked', verb: 'unlock' },
-  enable: { done: 'Enabled', verb: 'enable' },
-  disable: { done: 'Disabled', verb: 'disable' },
-};
-
 const nameOf = (u: { displayName: string | null; samAccountName: string }) =>
   u.displayName ?? u.samAccountName;
-
-// The account is as it was before the unlock, so this can still say when it
-// was locked even though the reload clears that.
-function unlockedDetail(u: UserDetail): string {
-  const detail = [`${nameOf(u)} can sign in now.`];
-  if (u.lockedAt) detail.push(`Was locked at ${fmtAbsolute(u.lockedAt)}.`);
-  if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
-  return detail.join(' ');
-}
 
 const accountActionRunning = computed(() => (user.value ? accountActionOn(user.value.id) : null));
 
@@ -533,14 +513,7 @@ function openResetDialog(): void {
 }
 
 async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
-  toast.add({
-    severity: 'success',
-    summary: outcome.unlocked ? 'Password reset and account unlocked' : 'Password reset',
-    detail: outcome.forceChangeAtNextLogin
-      ? 'User must change it at next sign-in'
-      : 'New password is in effect',
-    life: 4000,
-  });
+  toast.add(passwordResetToast(outcome));
   await load();
 }
 
@@ -577,14 +550,9 @@ function openExpiryDialog(): void {
 
 const blockers = computed(() => (user.value ? signInBlockers(user.value) : []));
 
-// The fix for the most severe condition: fixing a lesser one wouldn't let
-// the user sign in, so an operator who can't make it gets no button.
-const primaryFix = computed<SignInFix | null>(() => {
-  const top = blockers.value[0];
-  if (!top) return null;
-  const fix = signInFix(top);
-  return auth.hasCapability(fix.capability) ? fix : null;
-});
+const primaryFix = computed<SignInFix | null>(() =>
+  user.value ? fixFor(user.value, auth.hasCapability) : null,
+);
 
 const primaryFixRunning = computed(() => {
   const fix = primaryFix.value?.fix;
@@ -623,7 +591,7 @@ const actionFailure = computed<ObjectActionFailure | null>(() => {
   if (account) {
     const { action, account: u } = account.op;
     return {
-      summary: `Couldn’t ${ACCOUNT_ACTION_TEXT[action].verb} ${nameOf(u)}`,
+      summary: accountActionFailedSummary(action, u),
       message: account.message,
       retry: retryAccountAction,
       dismiss: dismissAccountFailure,
