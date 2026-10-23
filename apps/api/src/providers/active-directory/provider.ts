@@ -886,6 +886,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       }
     });
   }
+
   /**
    * Replace a small allowlist of mutable user attributes. Follows the same
    * write-as-user model as `unlockUser`: bind as the operator, resolve the
@@ -1035,13 +1036,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 
   /**
    * Move a user or computer to a different OU. AD permits this via
-   * modifyDN: keep the account's existing RDN (the CN=…) but change its parent to `targetOuDn`.
-   * ldapts accepts a full new DN as the second argument and translates it
+   * modifyDN: keep the account's existing RDN (the CN=…) but change its
+   * parent to `targetOuDn`. ldapts accepts a full new DN as the second argument and translates it
    * into the wire-level Modify DN request (with `newSuperior` set to the
    * target OU).
    *
-   * Idempotent: if the account is already directly under `targetOuDn`, returns
-   * `ok: true` with a no-op snapshot so the caller doesn't have to special-
+   * Idempotent: if the account is already directly under `targetOuDn`,
+   * returns `ok: true` with a no-op snapshot so the caller doesn't have to special-
    * case the case where someone clicked "Move" without changing the value.
    *
    * `objectGuid` survives a move, so cached IDs (memberships, audit
@@ -2683,10 +2684,6 @@ function groupSnapshot(group: DirectoryGroup): Record<string, unknown> {
   };
 }
 
-/**
- * Map an LDAP write failure to a MutationResult reason by result code
- * rather than by message text, which varies across DC versions.
- */
 type AccountKind = 'user' | 'computer';
 
 /** An entry's userAccountControl as a number; NaN when unparseable. */
@@ -2696,6 +2693,10 @@ function userAccountControlOf(entry: Entry): number {
   return value ? Number.parseInt(String(value), 10) : 0;
 }
 
+/**
+ * Map an LDAP write failure to a MutationResult reason by result code
+ * rather than by message text, which varies across DC versions.
+ */
 function classifyWriteError(err: unknown): MutationResult {
   const errorMessage = err instanceof Error ? err.message : 'write failed';
   if (err instanceof InsufficientAccessError) {
