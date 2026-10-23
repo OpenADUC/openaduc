@@ -742,7 +742,7 @@ const actions = computed<ObjectAction[]>(() => {
   return [
     {
       label: accountActionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
-      icon: 'pi pi-unlock',
+      icon: 'pi-unlock',
       capability: 'write:user.unlock',
       available: u.locked,
       disabled: busy,
@@ -750,7 +750,7 @@ const actions = computed<ObjectAction[]>(() => {
     },
     {
       label: 'Reset password…',
-      icon: 'pi pi-key',
+      icon: 'pi-key',
       capability: 'write:user.resetPassword',
       danger: true,
       run: openResetDialog,
@@ -758,7 +758,7 @@ const actions = computed<ObjectAction[]>(() => {
     u.enabled
       ? {
           label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
-          icon: 'pi pi-ban',
+          icon: 'pi-ban',
           capability: 'write:user.enableDisable',
           danger: true,
           disabled: busy,
@@ -766,21 +766,21 @@ const actions = computed<ObjectAction[]>(() => {
         }
       : {
           label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
-          icon: 'pi pi-check',
+          icon: 'pi-check',
           capability: 'write:user.enableDisable',
           disabled: busy,
           run: () => runOnUser('enable'),
         },
     {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
-      icon: 'pi pi-folder-open',
+      icon: 'pi-folder-open',
       capability: 'write:user.move',
       disabled: busy,
       run: openMoveDialog,
     },
     {
       label: 'Rename…',
-      icon: 'pi pi-id-card',
+      icon: 'pi-id-card',
       capability: 'write:user.rename',
       disabled: busy,
       run: () => {
@@ -791,7 +791,7 @@ const actions = computed<ObjectAction[]>(() => {
     // what the server enforces.
     {
       label: 'Delete…',
-      icon: 'pi pi-trash',
+      icon: 'pi-trash',
       capability: 'write:user.delete',
       available: !u.enabled,
       danger: true,
@@ -917,7 +917,8 @@ watch(user, (u) => {
       :actions="actions"
       :actions-busy="accountActionRunning !== null || moveSubmitting"
       :refreshing="refreshing"
-      :freshness="user.freshness"
+      :cached-at="user.freshness.cachedAt"
+      :live-refreshed-at="user.freshness.liveRefreshedAt"
       @refresh="refreshFromAd"
     >
       <template #badges>

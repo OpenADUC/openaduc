@@ -186,7 +186,7 @@ const tabs = computed<ObjectPageTab<TabId>[]>(() => [
 const actions = computed<ObjectAction[]>(() => [
   {
     label: 'Add member…',
-    icon: 'pi pi-user-plus',
+    icon: 'pi-user-plus',
     capability: 'write:group.membership',
     disabled: pending.value !== null,
     run: openAdd,
@@ -220,7 +220,8 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
       :actions="actions"
       :actions-busy="adding"
       :refreshing="refreshing"
-      :freshness="group.freshness"
+      :cached-at="group.freshness.cachedAt"
+      :live-refreshed-at="group.freshness.liveRefreshedAt"
       @refresh="refreshFromAd"
     >
       <template #badges>

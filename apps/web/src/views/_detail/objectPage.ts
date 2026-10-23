@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Capability } from '@openaduc/shared';
 
+// Icons are PrimeIcons names such as 'pi-th-large'; the layout adds the
+// base `pi` class.
+
 export interface ObjectPageTab<T extends string> {
   id: T;
   label: string;
-  /** PrimeIcons class, e.g. 'pi-th-large'. */
   icon: string;
   count?: number;
   visible: boolean;
@@ -14,7 +16,6 @@ export interface ObjectPageTab<T extends string> {
 
 export interface ObjectAction {
   label: string;
-  /** PrimeIcons classes, e.g. 'pi pi-unlock'. */
   icon: string;
   /** Operators without it don't see the action. */
   capability: Capability;
