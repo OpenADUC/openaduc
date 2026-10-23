@@ -171,7 +171,9 @@ describe('changing a group’s members from the group page', () => {
   });
 
   it('won’t make a group a member of itself', async () => {
-    const res = await operator.post(`/api/groups/${allStaff}/groups`, { groupId: allStaff });
+    const res = await operator.post(`/api/groups/${allStaff}/groups`, {
+      groupId: allStaff.toUpperCase(),
+    });
 
     expect(res.statusCode).toBe(400);
     expect(await directoryMembers(ALL_STAFF)).not.toContain(ALL_STAFF.toLowerCase());
@@ -196,6 +198,19 @@ describe('changing a group’s members from the group page', () => {
       groupName: 'Domain Users',
       errorMessage: reason.replace('directory rejected the change: ', ''),
     });
+  });
+
+  it('needs step-up to nest a group', async () => {
+    const unelevated = api.client();
+    await unelevated.signIn(api, 'oa.operator');
+
+    const res = await unelevated.delete(`/api/groups/${engineering}/groups`, {
+      groupId: allStaff,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: { code: string } }>().error.code).toBe('step_up_required');
+    expect(await directoryMembers(ALL_STAFF)).toContain(ENGINEERING.toLowerCase());
   });
 
   it('refuses operators without the group-membership capability', async () => {

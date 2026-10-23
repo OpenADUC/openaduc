@@ -25,7 +25,7 @@ export async function changeMembership(
 ): Promise<{ ok: true; before: unknown; after: unknown }> {
   const { id } = idParamSchema.parse(req.params);
   const body = groupMembershipChangeSchema.parse(req.body);
-  if (kind === 'group' && body.groupId === id) {
+  if (kind === 'group' && body.groupId.toLowerCase() === id.toLowerCase()) {
     throw app.httpErrors.badRequest('a group can’t be a member of itself');
   }
   const actor = req.actor!;
