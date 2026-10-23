@@ -13,6 +13,7 @@ import {
 
 const ALL_STAFF = 'CN=All Staff,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test';
 const ENGINEERING = 'CN=Engineering,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test';
+const DOMAIN_USERS = 'CN=Domain Users,CN=Users,DC=openaduc,DC=test';
 
 interface Member {
   kind: 'user' | 'group';
@@ -55,7 +56,7 @@ describe('changing a group’s members from the group page', () => {
   const auditRows = (action: string) =>
     api.app.db
       .selectFrom('audit_events')
-      .select(['result', 'target_type', 'target_id', 'metadata_json'])
+      .select(['result', 'target_type', 'target_id', 'metadata_json', 'before_json', 'after_json'])
       .where('action', '=', action)
       .orderBy('id')
       .execute();
@@ -99,8 +100,8 @@ describe('changing a group’s members from the group page', () => {
     const res = await operator.post(`/api/users/${alice}/groups`, { groupId: allStaff });
 
     expect(res.statusCode).toBe(200);
-    const aliceDn = (await readDirectoryUser('alice.anders', ['distinguishedName']))!.dn;
-    expect(await directoryMembers(ALL_STAFF)).toContain(String(aliceDn).toLowerCase());
+    const aliceDn = String((await readDirectoryUser('alice.anders', ['distinguishedName']))!.dn);
+    expect(await directoryMembers(ALL_STAFF)).toContain(aliceDn.toLowerCase());
     const group = await members(allStaff);
     expect(group.members).toContainEqual(expect.objectContaining({ kind: 'user', id: alice }));
     expect(group.memberCount).toBe(4);
@@ -111,6 +112,8 @@ describe('changing a group’s members from the group page', () => {
         target_type: 'user',
         target_id: alice,
         metadata_json: { groupId: allStaff, groupDn: ALL_STAFF, groupName: 'All Staff' },
+        before_json: { isMember: false, group: ALL_STAFF, member: aliceDn, memberKind: 'user' },
+        after_json: { isMember: true, group: ALL_STAFF, member: aliceDn, memberKind: 'user' },
       },
     ]);
   });
@@ -134,12 +137,20 @@ describe('changing a group’s members from the group page', () => {
     expect(group.members.map((m) => m.id)).not.toContain(engineering);
     expect(group.memberCount).toBe(2);
     expect(await listedCount('All Staff')).toBe(2);
+    const snapshot = (isMember: boolean) => ({
+      isMember,
+      group: ALL_STAFF,
+      member: ENGINEERING,
+      memberKind: 'group',
+    });
     expect(await auditRows('group.group.remove')).toEqual([
       {
         result: 'success',
         target_type: 'group',
         target_id: engineering,
         metadata_json: { groupId: allStaff, groupDn: ALL_STAFF, groupName: 'All Staff' },
+        before_json: snapshot(true),
+        after_json: snapshot(false),
       },
     ]);
   });
@@ -164,6 +175,27 @@ describe('changing a group’s members from the group page', () => {
 
     expect(res.statusCode).toBe(400);
     expect(await directoryMembers(ALL_STAFF)).not.toContain(ALL_STAFF.toLowerCase());
+  });
+
+  it('says why the directory refused a change, and audits the reason', async () => {
+    // oa.operator has write rights only under OU=OpenADUC Test.
+    const domainUsers = await groupId('Domain Users');
+
+    const res = await operator.post(`/api/groups/${engineering}/groups`, {
+      groupId: domainUsers,
+    });
+
+    expect(res.statusCode).toBe(403);
+    const reason = res.json<{ error: { message: string } }>().error.message;
+    expect(reason).toMatch(/^directory rejected the change: .+/);
+    expect(await directoryMembers(DOMAIN_USERS)).not.toContain(ENGINEERING.toLowerCase());
+    const [row] = (await auditRows('group.group.add')).filter((r) => r.result === 'failure');
+    expect(row?.metadata_json).toEqual({
+      groupId: domainUsers,
+      groupDn: DOMAIN_USERS,
+      groupName: 'Domain Users',
+      errorMessage: reason.replace('directory rejected the change: ', ''),
+    });
   });
 
   it('refuses operators without the group-membership capability', async () => {

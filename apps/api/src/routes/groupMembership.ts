@@ -84,18 +84,25 @@ export async function changeMembership(
         before: r.before ?? null,
         after: r.after ?? null,
         errorCode: r.reason ?? null,
+        errorMessage: r.errorMessage ?? null,
       };
     },
   );
 
   if (!result.ok) {
-    if (result.errorCode === 'permission_denied') {
-      throw app.httpErrors.forbidden('directory rejected the change');
+    const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+    switch (result.errorCode) {
+      case 'permission_denied':
+        throw app.httpErrors.forbidden(`directory rejected the change${detail}`);
+      case 'not_found':
+        throw app.httpErrors.notFound(`${kind} or group not found in directory`);
+      case 'conflict':
+        throw app.httpErrors.conflict(`directory rejected the change${detail}`);
+      case 'policy_violation':
+        throw app.httpErrors.unprocessableEntity(`directory refused the change${detail}`);
+      default:
+        throw app.httpErrors.badGateway(`group ${op} failed${detail}`);
     }
-    if (result.errorCode === 'not_found') {
-      throw app.httpErrors.notFound(`${kind} or group not found in directory`);
-    }
-    throw app.httpErrors.badGateway(`group ${op} failed: ${result.errorCode ?? 'unknown'}`);
   }
 
   // A user's memberships come from its own memberOf; a nested group's from

@@ -910,64 +910,47 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       try {
         const memberEntry =
           member.kind === 'user'
-            ? await this.findUserEntry(client, member.id)
-            : await this.findGroupEntry(client, member.id);
+            ? await this.findUserEntry(client, member.id, ['objectGUID', 'distinguishedName'])
+            : await this.findGroupEntry(client, member.id, ['objectGUID', 'distinguishedName']);
         if (!memberEntry) {
           return { ok: false, reason: 'not_found', errorMessage: `${member.kind} not found` };
         }
-        const groupEntry = await this.findGroupEntry(client, groupId);
+        const groupEntry = await this.findGroupEntry(client, groupId, [
+          'objectGUID',
+          'distinguishedName',
+        ]);
         if (!groupEntry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
-        const memberDn =
-          member.kind === 'user'
-            ? normalizeUser(memberEntry).distinguishedName
-            : normalizeGroup(memberEntry).distinguishedName;
-        const group = normalizeGroup(groupEntry);
-        const memberDnLc = memberDn.toLowerCase();
-        const isMember = group.memberDns.some((dn) => dn.toLowerCase() === memberDnLc);
+        const memberDn = asString(memberEntry.distinguishedName) ?? memberEntry.dn;
+        const groupDn = asString(groupEntry.distinguishedName) ?? groupEntry.dn;
+        // Ask AD rather than reading `member`, which a large group hands
+        // out in ranges.
+        const { searchEntries } = await client.search(groupDn, {
+          scope: 'base',
+          filter: `(member=${escapeLdapFilter(memberDn)})`,
+          attributes: ['distinguishedName'],
+        });
+        const isMember = searchEntries.length > 0;
+        const snapshot = (inGroup: boolean) => ({
+          isMember: inGroup,
+          group: groupDn,
+          member: memberDn,
+          memberKind: member.kind,
+        });
 
-        if (op === 'add' && isMember) {
-          return {
-            ok: true,
-            before: { isMember: true },
-            after: { isMember: true },
-          };
-        }
-        if (op === 'delete' && !isMember) {
-          return {
-            ok: true,
-            before: { isMember: false },
-            after: { isMember: false },
-          };
+        if ((op === 'add') === isMember) {
+          return { ok: true, before: snapshot(isMember), after: snapshot(isMember) };
         }
 
         await client.modify(
-          group.distinguishedName,
+          groupDn,
           new Change({
             operation: op,
-            modification: new Attribute({
-              type: 'member',
-              values: [memberDn],
-            }),
+            modification: new Attribute({ type: 'member', values: [memberDn] }),
           }),
         );
-
-        return {
-          ok: true,
-          before: { isMember, group: group.distinguishedName, [member.kind]: memberDn },
-          after: {
-            isMember: op === 'add',
-            group: group.distinguishedName,
-            [member.kind]: memberDn,
-          },
-        };
+        return { ok: true, before: snapshot(isMember), after: snapshot(op === 'add') };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz = /no write|insuff/i.test(message);
-        return {
-          ok: false,
-          reason: isAuthz ? 'permission_denied' : 'directory_error',
-          errorMessage: message,
-        };
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
