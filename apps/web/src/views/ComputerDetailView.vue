@@ -156,13 +156,16 @@ const actions = computed<ObjectAction[]>(() => {
   // down; the server refuses them too. While the record loads nothing is
   // available, but the list lets the layout hold the Actions button's place.
   const writable = c?.writeBlock === null;
+  const whyUnavailable = c?.writeBlock ? WRITE_BLOCK[c.writeBlock].reason : null;
   return [
     c?.enabled !== false
       ? {
           label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
           icon: 'pi-ban',
           capability: 'write:computer.enableDisable',
+          shortcut: 'e',
           available: writable,
+          whyUnavailable,
           danger: true,
           disabled: busy.value,
           run: () => c && runAccountAction('disable', c),
@@ -171,6 +174,7 @@ const actions = computed<ObjectAction[]>(() => {
           label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
           icon: 'pi-check',
           capability: 'write:computer.enableDisable',
+          shortcut: 'e',
           disabled: busy.value,
           run: () => runAccountAction('enable', c),
         },
@@ -178,7 +182,9 @@ const actions = computed<ObjectAction[]>(() => {
       label: c && resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
       icon: 'pi-refresh',
       capability: 'write:computer.resetAccount',
+      shortcut: 'r',
       available: writable,
+      whyUnavailable,
       danger: true,
       disabled: busy.value,
       run: () => c && askReset(c),
@@ -187,24 +193,30 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:computer.move',
+      shortcut: 'm',
       available: writable,
+      whyUnavailable,
       disabled: busy.value,
       run: openMoveDialog,
     },
   ];
 });
 
-const WRITE_BLOCK: Record<ComputerWriteBlock, { label: string; title: string }> = {
+// `reason` is what the shortcut cheat sheet says of a blocked action.
+const WRITE_BLOCK: Record<ComputerWriteBlock, { label: string; title: string; reason: string }> = {
   domain_controller: {
     label: 'domain controller',
+    reason: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   read_only_domain_controller: {
     label: 'read-only domain controller',
+    reason: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   critical_system_object: {
     label: 'critical',
+    reason: 'AD marks it critical',
     title:
       'AD marks this computer as a critical system object, so OpenADUC won’t disable, reset or move it.',
   },

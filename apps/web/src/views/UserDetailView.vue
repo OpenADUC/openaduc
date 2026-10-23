@@ -47,7 +47,7 @@ import { useAccountActions, type AccountAction } from '../design/composables/use
 import {
   USER_ACTIONS,
   USER_ACTION_ORDER,
-  fitsUser,
+  unfitReason,
   userActionLabel,
   type UserAction,
 } from '../design/lib/userActions.js';
@@ -765,11 +765,14 @@ const actions = computed<ObjectAction[]>(() => {
     accountActionRunning.value !== null || moveSubmitting.value || expirySubmitting.value;
   const userAction = (action: UserAction, run: () => void): ObjectAction => {
     const info = USER_ACTIONS[action];
+    const unfit = u ? unfitReason(action, u) : null;
     return {
       label: userActionLabel(action, accountActionRunning.value),
       icon: info.icon,
       capability: info.capability,
-      available: !!u && fitsUser(action, u),
+      shortcut: info.shortcut,
+      available: !!u && unfit === null,
+      whyUnavailable: unfit,
       ...(info.danger ? { danger: true } : {}),
       // Reset password runs in its dialog.
       ...(info.running ? { disabled: busy } : {}),
@@ -791,6 +794,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:user.move',
+      shortcut: 'm',
       disabled: busy,
       run: openMoveDialog,
     },

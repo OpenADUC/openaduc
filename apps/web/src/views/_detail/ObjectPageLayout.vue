@@ -11,6 +11,7 @@ import Card from '../../design/primitives/Card.vue';
 import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { useShortcuts, type Shortcut } from '../../design/composables/useShortcuts.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
@@ -151,6 +152,41 @@ const offersActions = computed(() =>
 function toggleActionsMenu(event: Event): void {
   actionsMenu.value?.toggle(event);
 }
+
+// ---- Shortcuts ------------------------------------------------------------
+
+// An action's shortcut is there whenever its menu item could be; when it
+// can't run now, the cheat sheet says why. Of two actions on one key, such
+// as Enable and Disable, the one that fits the object speaks for it.
+function actionShortcuts(): Shortcut[] {
+  const offered = props.actions.filter((a) => a.shortcut && auth.hasCapability(a.capability));
+  const fits = (a: ObjectAction) => a.available !== false;
+  return offered
+    .filter((a) => fits(a) || !offered.some((b) => b.shortcut === a.shortcut && fits(b)))
+    .map((a) => ({
+      key: a.shortcut!,
+      label: a.label,
+      section: 'Actions',
+      unavailable: props.loading
+        ? `the ${props.kind} is still loading`
+        : !fits(a)
+          ? (a.whyUnavailable ?? `not for this ${props.kind}`)
+          : a.disabled || props.actionsBusy
+            ? 'another action is running'
+            : null,
+      run: a.run,
+    }));
+}
+
+useShortcuts(() => [
+  ...actionShortcuts(),
+  ...visibleTabs.value.slice(0, 9).map((t, i): Shortcut => ({
+    key: String(i + 1),
+    label: t.label,
+    section: 'Tabs',
+    run: () => select(t.id),
+  })),
+]);
 
 const freshnessText = computed(() => {
   const cached = `Cache written ${fmtRelative(props.cachedAt)}`;

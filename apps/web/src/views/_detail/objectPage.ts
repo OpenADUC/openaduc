@@ -21,6 +21,10 @@ export interface ObjectAction {
   capability: Capability;
   /** False hides the action, e.g. Unlock on an account that isn't locked. */
   available?: boolean;
+  /** Why it isn't available, which the shortcut cheat sheet says. */
+  whyUnavailable?: string | null;
+  /** The key that runs it on the page, e.g. 'u'; actions may share one. */
+  shortcut?: string;
   disabled?: boolean;
   danger?: boolean;
   run: () => void;
