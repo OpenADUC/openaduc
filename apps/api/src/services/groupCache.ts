@@ -117,6 +117,7 @@ export async function reconcileNestedGroups(
           member_group_object_guid: g.object_guid,
         })),
       )
+      .onConflict((oc) => oc.doNothing())
       .execute();
   });
 }
