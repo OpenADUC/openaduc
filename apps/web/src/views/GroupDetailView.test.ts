@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client.js';
 
 const jane = {
+  kind: 'user',
   id: 'u1',
   samAccountName: 'jdoe',
   userPrincipalName: 'jdoe@corp.example',
@@ -19,6 +20,16 @@ const jane = {
   locked: false,
   passwordNeverExpires: false,
 };
+const nested = {
+  kind: 'group',
+  id: 'g9',
+  name: 'Interns',
+  samAccountName: 'interns',
+  distinguishedName: 'CN=Interns,DC=corp,DC=example',
+  description: null,
+  groupType: 'security',
+  groupScope: 'global',
+};
 const aGroup = (id: string, name: string) => ({
   id,
   name,
@@ -27,9 +38,9 @@ const aGroup = (id: string, name: string) => ({
   description: null,
   groupType: 'security',
   groupScope: 'global',
-  memberCount: 1,
+  memberCount: 2,
   email: null,
-  members: [jane],
+  members: [jane, nested],
   freshness: { cachedAt: null, liveRefreshedAt: null },
 });
 const api = {
@@ -103,6 +114,16 @@ describe('changing a group’s members', () => {
     await click(page, 'Undo');
     expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
     expect(page.text()).toContain('Added Jane Doe to Engineering');
+  });
+
+  it('lists a nested group among the members, and opens its page', async () => {
+    const { page, router } = await openMembers();
+
+    const row = page.findAll('.members-table tbody tr').find((r) => r.text().includes('Interns'));
+    expect(row?.text()).toContain('group');
+    await row!.trigger('click');
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe('/groups/g9');
   });
 
   it('keeps a failed remove on the Members tab until dismissed', async () => {

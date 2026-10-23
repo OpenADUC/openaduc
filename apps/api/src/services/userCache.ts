@@ -148,16 +148,22 @@ export async function clearLockedExcept(
 }
 
 /**
- * A cached user's memberOf DNs as a jsonb array, from the raw attributes
- * column `rawColumn` (AD sends one value as a string, several as an array).
+ * A cached object's values of `attribute` as a jsonb array, from the raw
+ * attributes column `rawColumn` (AD sends one value as a string, several as
+ * an array).
  */
-export function memberOfArray(rawColumn: string): RawBuilder<unknown> {
+export function rawValuesArray(rawColumn: string, attribute: string): RawBuilder<unknown> {
   const raw = sql.ref(rawColumn);
   return sql`CASE
-    WHEN jsonb_typeof(${raw} -> 'memberOf') = 'array' THEN ${raw} -> 'memberOf'
-    WHEN ${raw} ? 'memberOf' THEN jsonb_build_array(${raw} -> 'memberOf')
+    WHEN jsonb_typeof(${raw} -> ${attribute}) = 'array' THEN ${raw} -> ${attribute}
+    WHEN ${raw} ? ${attribute} THEN jsonb_build_array(${raw} -> ${attribute})
     ELSE '[]'::jsonb
   END`;
+}
+
+/** A cached user's memberOf DNs as a jsonb array. */
+export function memberOfArray(rawColumn: string): RawBuilder<unknown> {
+  return rawValuesArray(rawColumn, 'memberOf');
 }
 
 /** GUIDs of cached users whose memberOf lists `groupDn`. */

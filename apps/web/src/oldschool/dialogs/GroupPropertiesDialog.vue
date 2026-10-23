@@ -106,11 +106,17 @@ const scope = computed(() => (group.value?.groupScope ?? '').toLowerCase());
             This group has no members.
           </div>
           <div v-for="m in group.members" :key="m.id" class="os-listbox-row">
-            <WinIcon :name="m.enabled ? 'user' : 'user-disabled'" :size="14" />
-            <span style="flex: 1">{{ m.displayName ?? m.samAccountName }}</span>
-            <span style="color: var(--os-window-text-muted)">{{
-              m.userPrincipalName ?? m.email ?? ''
-            }}</span>
+            <template v-if="m.kind === 'user'">
+              <WinIcon :name="m.enabled ? 'user' : 'user-disabled'" :size="14" />
+              <span style="flex: 1">{{ m.displayName ?? m.samAccountName }}</span>
+              <span style="color: var(--os-window-text-muted)">{{
+                m.userPrincipalName ?? m.email ?? ''
+              }}</span>
+            </template>
+            <template v-else>
+              <WinIcon name="group" :size="14" />
+              <span style="flex: 1">{{ m.name ?? m.samAccountName }}</span>
+            </template>
           </div>
         </div>
         <div style="display: flex; gap: 6px; margin-top: 8px">

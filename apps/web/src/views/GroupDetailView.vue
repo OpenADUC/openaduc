@@ -160,18 +160,34 @@ function closeAdd(): void {
 }
 
 function startRemove(member: GroupMember): void {
-  if (group.value) removeMembership(membershipOf(member, group.value));
+  if (group.value && member.kind === 'user') {
+    removeMembership(membershipOf(member, group.value));
+  }
+}
+
+function memberRoute(m: GroupMember) {
+  return { name: m.kind === 'user' ? 'user-detail' : 'group-detail', params: { id: m.id } };
 }
 
 function openMember(ev: DataTableRowClickEvent): void {
-  const row = ev.data as GroupMember;
-  void router.push({ name: 'user-detail', params: { id: row.id } });
+  void router.push(memberRoute(ev.data as GroupMember));
 }
 
-function memberInitials(m: GroupMember): string {
-  return ((m.displayName ?? m.samAccountName) || '?').slice(0, 1).toUpperCase();
+function nameOf(m: GroupMember): string {
+  return m.kind === 'user'
+    ? m.displayName || m.samAccountName
+    : m.name || m.samAccountName || m.distinguishedName;
 }
-void memberInitials;
+
+/** The line under a member's name: a user's UPN, a group's pre-Windows 2000 name. */
+function accountOf(m: GroupMember): string {
+  return m.kind === 'user'
+    ? (m.userPrincipalName ?? m.samAccountName)
+    : (m.samAccountName ?? m.distinguishedName);
+}
+
+const avatarShape = (m: GroupMember) =>
+  m.kind === 'group' ? ('rounded' as const) : ('circle' as const);
 
 // ---- Header and tabs -------------------------------------------------------
 
@@ -297,16 +313,14 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
             />
             <ul v-else class="member-list">
               <li v-for="m in membersTop" :key="m.id">
-                <router-link
-                  :to="{ name: 'user-detail', params: { id: m.id } }"
-                  class="member-link"
-                >
+                <router-link :to="memberRoute(m)" class="member-link">
                   <Avatar
-                    :name="m.displayName ?? m.samAccountName"
-                    :seed="m.samAccountName"
+                    :name="nameOf(m)"
+                    :seed="m.samAccountName ?? m.id"
+                    :shape="avatarShape(m)"
                     :size="22"
                   />
-                  <span>{{ m.displayName ?? m.samAccountName }}</span>
+                  <span>{{ nameOf(m) }}</span>
                 </router-link>
               </li>
               <li v-if="memberCount > membersTop.length" class="hint">
@@ -355,40 +369,42 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <template #body="{ data }">
                 <div class="user-cell">
                   <Avatar
-                    :name="data.displayName ?? data.samAccountName"
-                    :seed="data.samAccountName"
+                    :name="nameOf(data)"
+                    :seed="data.samAccountName ?? data.id"
+                    :shape="avatarShape(data)"
                     :size="26"
                   />
                   <div class="user-cell-stack">
                     <div class="user-name">
-                      {{ data.displayName ?? data.samAccountName }}
+                      {{ nameOf(data) }}
                       <span
-                        v-if="data.passwordNeverExpires"
+                        v-if="data.kind === 'user' && data.passwordNeverExpires"
                         class="badge badge-violet name-flag"
                         title="never expires"
                       >
                         <i class="pi pi-shield" /> never expires
                       </span>
                     </div>
-                    <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
+                    <div class="user-meta">{{ accountOf(data) }}</div>
                   </div>
                 </div>
               </template>
             </Column>
             <Column header="Status" :style="{ width: '140px' }">
               <template #body="{ data }">
-                <StatusBadge :user="data" />
+                <StatusBadge v-if="data.kind === 'user'" :user="data" />
+                <span v-else class="badge badge-muted"><i class="pi pi-users" /> group</span>
               </template>
             </Column>
             <Column header="Email" :style="{ minWidth: '220px' }">
               <template #body="{ data }">
-                <span class="cell-mono">{{ data.email ?? '—' }}</span>
+                <span class="cell-mono">{{ (data.kind === 'user' && data.email) || '—' }}</span>
               </template>
             </Column>
             <Column :style="{ width: '110px' }" header-style="text-align: right">
               <template #body="{ data }">
                 <Button
-                  v-if="canManage"
+                  v-if="canManage && (data as GroupMember).kind === 'user'"
                   label="Remove"
                   icon="pi pi-times"
                   severity="danger"
