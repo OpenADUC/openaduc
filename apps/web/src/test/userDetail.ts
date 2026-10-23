@@ -32,6 +32,8 @@ export function aUserDetail(overrides: Partial<UserDetail> = {}): UserDetail {
     isPrivileged: false,
     lockedAt: null,
     autoUnlockAt: null,
+    lockedUntilUnlocked: false,
+    badPasswordCount: null,
     employeeID: null,
     employeeNumber: null,
     ipPhone: null,

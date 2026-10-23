@@ -7,10 +7,12 @@ import {
   sambaTool,
   startApi,
   type TestApi,
+  type TestClient,
 } from './harness.js';
 
 describe('locked status', () => {
   let api: TestApi;
+  let admin: TestClient;
 
   const daveLocked = async () =>
     (
@@ -26,7 +28,7 @@ describe('locked status', () => {
   beforeAll(async () => {
     reseedDirectory(); // Dave locked, lockout duration 0 (until an admin unlocks)
     api = await startApi();
-    await configureDirectory(api);
+    admin = await configureDirectory(api);
   });
   afterAll(async () => {
     reseedDirectory(); // restores the lockout duration
@@ -36,6 +38,21 @@ describe('locked status', () => {
   it('stays locked while the lockout has no duration', async () => {
     await run('users.locked');
     expect(await daveLocked()).toBe(true);
+  });
+
+  it('says a lockout with no duration lasts until someone unlocks the account', async () => {
+    const id = (await admin.get('/api/users?q=dave.diaz')).json<{ rows: { id: string }[] }>()
+      .rows[0]!.id;
+    const res = await admin.get(`/api/users/${id}`);
+    expect(res.statusCode).toBe(200);
+    const { user } = res.json<{ user: Record<string, unknown> }>();
+    expect(user).toMatchObject({
+      locked: true,
+      autoUnlockAt: null,
+      lockedUntilUnlocked: true,
+      badPasswordCount: 5,
+    });
+    expect(user.lockedAt).toEqual(expect.any(String));
   });
 
   it('clears once the lockout duration has passed, though lockoutTime is still set', async () => {

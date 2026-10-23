@@ -541,10 +541,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // policy fetch.
       const lockoutFiletime = refreshed.user.lockedAt;
       let autoUnlockAt: Date | null = null;
+      let lockedUntilUnlocked = false;
       if (refreshed.user.locked && lockoutFiletime) {
         try {
           const policy = await provider.getDomainPolicy();
-          if (policy.lockoutDurationMs && policy.lockoutDurationMs > 0) {
+          if (policy.lockoutDurationMs === 0) lockedUntilUnlocked = true;
+          else if (policy.lockoutDurationMs && policy.lockoutDurationMs > 0) {
             autoUnlockAt = new Date(lockoutFiletime.getTime() + policy.lockoutDurationMs);
           }
         } catch (err) {
@@ -605,6 +607,8 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         locked: refreshed.user.locked,
         lockedAt: dateOrNull(refreshed.user.lockedAt),
         autoUnlockAt: dateOrNull(autoUnlockAt),
+        lockedUntilUnlocked,
+        badPasswordCount: refreshed.user.badPasswordCount ?? null,
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
         passwordMustChange: refreshed.user.passwordMustChange,
         passwordExpiresAt: computeExpiresAt(
