@@ -2,7 +2,6 @@
 <script setup lang="ts">
 import { latestRequest } from '../design/lib/latestRequest.js';
 import { useUserRecord } from '../design/composables/useDirectoryRecords.js';
-import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import Button from 'primevue/button';
@@ -756,9 +755,10 @@ const links = computed<ObjectLink[]>(() => {
   ];
 });
 
+// Listed while the record loads too, so the layout can hold the Actions
+// button's place.
 const actions = computed<ObjectAction[]>(() => {
   const u = user.value;
-  if (!u) return [];
   // The only disable case is "an action of this kind is already running" so
   // the operator can't double-fire.
   const busy =
@@ -769,7 +769,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: userActionLabel(action, accountActionRunning.value),
       icon: info.icon,
       capability: info.capability,
-      available: fitsUser(action, u),
+      available: !!u && fitsUser(action, u),
       ...(info.danger ? { danger: true } : {}),
       // Reset password runs in its dialog.
       ...(info.running ? { disabled: busy } : {}),
@@ -809,7 +809,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: 'Delete…',
       icon: 'pi-trash',
       capability: 'write:user.delete',
-      available: !u.enabled,
+      available: u?.enabled === false,
       danger: true,
       disabled: busy,
       run: () => {
@@ -872,14 +872,13 @@ const tabs = computed<ObjectPageTab<TabId>[]>(() => {
     { id: 'contact', label: 'Contact', icon: 'pi-envelope', visible: true },
     { id: 'account', label: 'Account', icon: 'pi-id-card', visible: true },
   ];
-  const groupsTab: ObjectPageTab<TabId> = {
+  list.push({
     id: 'groups',
     label: 'Groups',
     icon: 'pi-users',
+    count: u?.groupMemberships.length ?? 0,
     visible: true,
-  };
-  if (u) groupsTab.count = u.groupMemberships.length;
-  list.push(groupsTab);
+  });
   // Sign-ins is conditional on an Entra integration. We use the same
   // `entra` field the response carries when integration is enabled —
   // null = not configured, so the tab disappears entirely.
@@ -914,19 +913,20 @@ watch(user, (u) => {
   <div class="page-inner detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <DetailLoading v-if="!user && loading">Loading user…</DetailLoading>
     <ObjectPageLayout
-      v-if="user"
+      v-if="user || loading"
       kind="user"
+      :loading="!user"
+      :skeleton="{ status: true, subtitle: true, cards: 4 }"
       :name="displayName"
       :avatar="{
-        name: user.displayName ?? user.samAccountName,
-        seed: user.samAccountName,
+        name: user?.displayName ?? user?.samAccountName ?? null,
+        seed: user?.samAccountName ?? null,
         photoUrl,
       }"
       :subtitle="subtitle"
       :identifier="identifier"
-      :dn="user.distinguishedName"
+      :dn="user?.distinguishedName ?? ''"
       :links="links"
       :tabs="tabs"
       fallback-tab="overview"
@@ -934,11 +934,11 @@ watch(user, (u) => {
       :actions-busy="accountActionRunning !== null || moveSubmitting || expirySubmitting"
       :action-failure="actionFailure"
       :refreshing="refreshing"
-      :cached-at="user.freshness.cachedAt"
-      :live-refreshed-at="user.freshness.liveRefreshedAt"
+      :cached-at="user?.freshness.cachedAt ?? null"
+      :live-refreshed-at="user?.freshness.liveRefreshedAt ?? null"
       @refresh="refreshFromAd"
     >
-      <template #badges>
+      <template v-if="user" #badges>
         <StatusBadge :user="user" size="lg" />
         <span
           v-if="user.isPrivileged"
@@ -959,7 +959,7 @@ watch(user, (u) => {
         </span>
       </template>
 
-      <template #status>
+      <template v-if="user" #status>
         <SignInStatus :blockers="blockers" :last-logon-at="user.lastLogonAt" />
       </template>
 
@@ -974,7 +974,7 @@ watch(user, (u) => {
         />
       </template>
 
-      <template #default="{ tab: activeTab, select: selectTab }">
+      <template v-if="user" #default="{ tab: activeTab, select: selectTab }">
         <!-- Overview — at-a-glance summary that aggregates the most-asked-about
            pieces from each detail tab so the operator does not have to hunt. -->
         <div v-if="activeTab === 'overview'" class="detail-grid">
