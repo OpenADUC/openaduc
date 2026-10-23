@@ -178,7 +178,7 @@ describe('the actions menu', () => {
   it('leaves out actions that do not apply to this object', async () => {
     const { page } = await open('/groups/g1', {
       capabilities: ['write:group.membership', 'write:user.rename'],
-      actions: [{ ...remove, available: false }, rename],
+      actions: [{ ...remove, unavailable: 'not for this group' }, rename],
     });
     const items = await openActionsMenu(page);
     expect(items.map((i) => i.text())).toEqual(['Rename…']);
@@ -223,8 +223,7 @@ describe('object page shortcuts', () => {
       icon: 'pi-unlock',
       capability: 'write:user.unlock',
       shortcut: 'u',
-      available: false,
-      whyUnavailable: 'account isn’t locked',
+      unavailable: 'account isn’t locked',
       run: unlock,
     },
     {
@@ -232,8 +231,7 @@ describe('object page shortcuts', () => {
       icon: 'pi-check',
       capability: 'write:user.enableDisable',
       shortcut: 'e',
-      available: false,
-      whyUnavailable: 'account is already enabled',
+      unavailable: 'account is already enabled',
       run: enable,
     },
     {
@@ -438,7 +436,7 @@ describe('while the record loads', () => {
       label: 'Remove…',
       icon: 'pi-trash',
       capability: 'write:group.membership',
-      available: false,
+      unavailable: 'the group isn’t loaded',
       run: vi.fn(),
     };
     const { page } = await open('/groups/g1', {

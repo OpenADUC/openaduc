@@ -153,10 +153,9 @@ const busy = computed(
 const actions = computed<ObjectAction[]>(() => {
   const c = computer.value;
   // Disabling, resetting or moving a domain controller can take the domain
-  // down; the server refuses them too. While the record loads nothing is
-  // available, but the list lets the layout hold the Actions button's place.
-  const writable = c?.writeBlock === null;
-  const whyUnavailable = c?.writeBlock ? WRITE_BLOCK[c.writeBlock].reason : null;
+  // down; the server refuses them too. While the record loads the list lets
+  // the layout hold the Actions button's place.
+  const unavailable = c?.writeBlock ? WRITE_BLOCK[c.writeBlock].unavailable : null;
   return [
     c?.enabled !== false
       ? {
@@ -164,8 +163,7 @@ const actions = computed<ObjectAction[]>(() => {
           icon: 'pi-ban',
           capability: 'write:computer.enableDisable',
           shortcut: 'e',
-          available: writable,
-          whyUnavailable,
+          unavailable,
           danger: true,
           disabled: busy.value,
           run: () => c && runAccountAction('disable', c),
@@ -183,8 +181,7 @@ const actions = computed<ObjectAction[]>(() => {
       icon: 'pi-refresh',
       capability: 'write:computer.resetAccount',
       shortcut: 'r',
-      available: writable,
-      whyUnavailable,
+      unavailable,
       danger: true,
       disabled: busy.value,
       run: () => c && askReset(c),
@@ -194,29 +191,31 @@ const actions = computed<ObjectAction[]>(() => {
       icon: 'pi-folder-open',
       capability: 'write:computer.move',
       shortcut: 'm',
-      available: writable,
-      whyUnavailable,
+      unavailable,
       disabled: busy.value,
       run: openMoveDialog,
     },
   ];
 });
 
-// `reason` is what the shortcut cheat sheet says of a blocked action.
-const WRITE_BLOCK: Record<ComputerWriteBlock, { label: string; title: string; reason: string }> = {
+// `unavailable` is what the shortcut cheat sheet says of a blocked action.
+const WRITE_BLOCK: Record<
+  ComputerWriteBlock,
+  { label: string; title: string; unavailable: string }
+> = {
   domain_controller: {
     label: 'domain controller',
-    reason: 'it’s a domain controller',
+    unavailable: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   read_only_domain_controller: {
     label: 'read-only domain controller',
-    reason: 'it’s a domain controller',
+    unavailable: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   critical_system_object: {
     label: 'critical',
-    reason: 'AD marks it critical',
+    unavailable: 'AD marks it critical',
     title:
       'AD marks this computer as a critical system object, so OpenADUC won’t disable, reset or move it.',
   },

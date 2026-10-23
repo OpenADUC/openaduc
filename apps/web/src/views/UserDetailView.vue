@@ -47,7 +47,7 @@ import { useAccountActions, type AccountAction } from '../design/composables/use
 import {
   USER_ACTIONS,
   USER_ACTION_ORDER,
-  unfitReason,
+  userActionUnavailable,
   userActionLabel,
   type UserAction,
 } from '../design/lib/userActions.js';
@@ -765,14 +765,12 @@ const actions = computed<ObjectAction[]>(() => {
     accountActionRunning.value !== null || moveSubmitting.value || expirySubmitting.value;
   const userAction = (action: UserAction, run: () => void): ObjectAction => {
     const info = USER_ACTIONS[action];
-    const unfit = u ? unfitReason(action, u) : null;
     return {
       label: userActionLabel(action, accountActionRunning.value),
       icon: info.icon,
       capability: info.capability,
       shortcut: info.shortcut,
-      available: !!u && unfit === null,
-      whyUnavailable: unfit,
+      unavailable: u ? userActionUnavailable(action, u) : null,
       ...(info.danger ? { danger: true } : {}),
       // Reset password runs in its dialog.
       ...(info.running ? { disabled: busy } : {}),
@@ -813,7 +811,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: 'Delete…',
       icon: 'pi-trash',
       capability: 'write:user.delete',
-      available: u?.enabled === false,
+      unavailable: u?.enabled === false ? null : 'only a disabled account can be deleted',
       danger: true,
       disabled: busy,
       run: () => {

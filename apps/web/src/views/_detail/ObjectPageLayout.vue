@@ -131,7 +131,7 @@ const menuId = computed(() => `${props.kind}-actions-menu`);
 
 const menuItems = computed<MenuItem[]>(() =>
   props.actions
-    .filter((a) => a.available !== false && auth.hasCapability(a.capability))
+    .filter((a) => !a.unavailable && auth.hasCapability(a.capability))
     .map((a) => ({
       label: a.label,
       icon: `pi ${a.icon}`,
@@ -160,7 +160,7 @@ function toggleActionsMenu(event: Event): void {
 // as Enable and Disable, the one that fits the object speaks for it.
 function actionShortcuts(): Shortcut[] {
   const offered = props.actions.filter((a) => a.shortcut && auth.hasCapability(a.capability));
-  const fits = (a: ObjectAction) => a.available !== false;
+  const fits = (a: ObjectAction) => !a.unavailable;
   return offered
     .filter((a) => fits(a) || !offered.some((b) => b.shortcut === a.shortcut && fits(b)))
     .map((a) => ({
@@ -169,11 +169,7 @@ function actionShortcuts(): Shortcut[] {
       section: 'Actions',
       unavailable: props.loading
         ? `the ${props.kind} is still loading`
-        : !fits(a)
-          ? (a.whyUnavailable ?? `not for this ${props.kind}`)
-          : a.disabled || props.actionsBusy
-            ? 'another action is running'
-            : null,
+        : (a.unavailable ?? (a.disabled || props.actionsBusy ? 'another action is running' : null)),
       run: a.run,
     }));
 }
