@@ -1,56 +1,32 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Editing a user's attributes, behind both the user page and the Old School
-// Properties dialog.
-//
-// The draft holds every editable attribute as the text its input shows; a
-// multi-valued one is one value per line. Values are compared and saved
-// trimmed, an empty one clears the attribute, and a save sends only what
-// changed. Saving needs step-up: the first save prompts it and then runs,
-// and the draft outlives the elevated session.
-
 import { computed, reactive, ref } from 'vue';
 import { userUpdateRequestSchema, type UserDetail, type UserUpdateRequest } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 
-export const SCALAR_ATTRIBUTES = [
-  'displayName',
-  'givenName',
-  'surname',
-  'description',
-  'employeeID',
-  'employeeNumber',
-  'title',
-  'department',
-  'company',
-  'email',
-  'phone',
-  'mobile',
-  'homePhone',
-  'ipPhone',
-  'l',
-  'st',
-  'postalCode',
-  'c',
-  'co',
-  'homePostalAddress',
-] as const;
-export const MULTI_VALUED_ATTRIBUTES = ['otherMailbox', 'otherMobile', 'otherHomePhone'] as const;
-
-export type ScalarAttribute = (typeof SCALAR_ATTRIBUTES)[number];
-export type MultiValuedAttribute = (typeof MULTI_VALUED_ATTRIBUTES)[number];
-export type UserAttribute = ScalarAttribute | MultiValuedAttribute;
-
-export type AttributeChange =
-  | { key: ScalarAttribute; from: string | null; to: string | null }
-  | { key: MultiValuedAttribute; from: string[]; to: string[] };
-
 type Patch = NonNullable<UserUpdateRequest['patch']>;
 const PATCH_FIELDS = userUpdateRequestSchema.shape.patch.shape;
 
+export type UserAttribute = keyof typeof PATCH_FIELDS;
+export type MultiValuedAttribute = {
+  [K in UserAttribute]: UserDetail[K] extends string[] ? K : never;
+}[UserAttribute];
+export type ScalarAttribute = Exclude<UserAttribute, MultiValuedAttribute>;
+
+// A multi-valued attribute is one whose patch takes a list of values.
+const isMultiValued = (key: UserAttribute): key is MultiValuedAttribute =>
+  PATCH_FIELDS[key].safeParse([]).success;
+const ATTRIBUTES = Object.keys(PATCH_FIELDS) as UserAttribute[];
+const SCALAR_ATTRIBUTES = ATTRIBUTES.filter((k): k is ScalarAttribute => !isMultiValued(k));
+const MULTI_VALUED_ATTRIBUTES = ATTRIBUTES.filter(isMultiValued);
+
+type AttributeChange =
+  | { key: ScalarAttribute; from: string | null; to: string | null }
+  | { key: MultiValuedAttribute; from: string[]; to: string[] };
+
 export function useUserAttributeEdit(options: {
-  onSaved: (changed: number) => void | Promise<void>;
+  onSaved?: (changed: number) => void | Promise<void>;
   onFailed: (message: string) => void;
 }) {
   const auth = useAuthStore();
@@ -109,20 +85,22 @@ export function useUserAttributeEdit(options: {
   });
   const valid = computed(() => Object.keys(problems.value).length === 0);
 
-  function save(): void {
+  /** `after` runs once the save lands, after `onSaved`, including after a step-up. */
+  function save(after?: () => void | Promise<void>): void {
     if (!user.value || !dirty.value || !valid.value || saving.value) return;
-    auth.requireStepUp(commit);
+    auth.requireStepUp(() => commit(after));
   }
 
-  async function commit(): Promise<void> {
+  async function commit(after?: () => void | Promise<void>): Promise<void> {
     if (!user.value || !dirty.value || !valid.value || saving.value) return;
     saving.value = true;
     const count = changes.value.length;
     try {
       await api.users.update(user.value.id, { patch: patch.value });
-      await options.onSaved(count);
+      await options.onSaved?.(count);
+      await after?.();
     } catch (err) {
-      if (auth.retryAfterStepUp(err, commit)) return;
+      if (auth.retryAfterStepUp(err, () => commit(after))) return;
       options.onFailed(err instanceof ApiError ? err.message : String(err));
     } finally {
       saving.value = false;
@@ -133,9 +111,7 @@ export function useUserAttributeEdit(options: {
 }
 
 function emptyDraft(): Record<UserAttribute, string> {
-  const d = {} as Record<UserAttribute, string>;
-  for (const key of [...SCALAR_ATTRIBUTES, ...MULTI_VALUED_ATTRIBUTES]) d[key] = '';
-  return d;
+  return Object.fromEntries(ATTRIBUTES.map((k) => [k, ''])) as Record<UserAttribute, string>;
 }
 
 function scalar(text: string): string | null {

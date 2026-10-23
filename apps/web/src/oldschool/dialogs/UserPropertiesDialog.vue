@@ -44,7 +44,6 @@ const {
   saving,
   save: saveAttributes,
 } = useUserAttributeEdit({
-  onSaved: () => finishApply(true),
   onFailed: (message) =>
     toast.add({ severity: 'error', summary: 'Apply failed', detail: message, life: 6000 }),
 });
@@ -177,8 +176,10 @@ const attributeRows = computed(() => {
 });
 
 // --- Apply ----------------------------------------------------------
-// What the pending OK or Apply also does once the attributes are saved.
-let applying = { close: false, unlock: false };
+interface ApplyIntent {
+  close: boolean;
+  unlock: boolean;
+}
 
 function apply(close: boolean): void {
   if (!user.value) return;
@@ -186,21 +187,21 @@ function apply(close: boolean): void {
     if (close) emit('close');
     return;
   }
-  applying = { close, unlock: doUnlock.value && user.value.locked };
-  if (attributesDirty.value) saveAttributes();
+  const intent: ApplyIntent = { close, unlock: doUnlock.value && user.value.locked };
+  if (attributesDirty.value) saveAttributes(() => finishApply(intent, true));
   else
     auth.requireStepUp(
-      () => finishApply(false),
+      () => finishApply(intent, false),
       'Updating a user requires step-up authentication.',
     );
 }
 
-async function finishApply(attributesSaved: boolean): Promise<void> {
-  if (applying.unlock) {
+async function finishApply(intent: ApplyIntent, attributesSaved: boolean): Promise<void> {
+  if (intent.unlock) {
     try {
       await api.users.unlock(props.id);
     } catch (e) {
-      if (auth.retryAfterStepUp(e, () => finishApply(attributesSaved))) return;
+      if (auth.retryAfterStepUp(e, () => finishApply(intent, attributesSaved))) return;
       toast.add({
         severity: 'error',
         summary: attributesSaved
@@ -219,7 +220,7 @@ async function finishApply(attributesSaved: boolean): Promise<void> {
   toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
   store.bumpData();
   await load();
-  if (applying.close) emit('close');
+  if (intent.close) emit('close');
 }
 
 // --- Member Of helpers -----------------------------------------------
