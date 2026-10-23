@@ -7,70 +7,11 @@ import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UserDetail } from '@openaduc/shared';
+import { aUserDetail } from '../test/userDetail.js';
 
 const inFifteenMinutes = () => new Date(Date.now() + 15 * 60_000).toISOString();
 
-const user: UserDetail = {
-  id: 'u1',
-  samAccountName: 'jdoe',
-  userPrincipalName: 'jdoe@corp.example',
-  displayName: 'Jane Doe',
-  email: null,
-  department: null,
-  title: 'Analyst',
-  enabled: true,
-  locked: false,
-  passwordNeverExpires: false,
-  passwordExpiresAt: null,
-  passwordMustChange: false,
-  accountExpiresAt: null,
-  lastLogonAt: null,
-  modifiedAtSource: null,
-  hasPhoto: false,
-  givenName: null,
-  surname: null,
-  phone: null,
-  mobile: null,
-  managerDn: null,
-  manager: null,
-  distinguishedName: 'CN=Jane Doe,DC=corp,DC=example',
-  passwordLastSetAt: null,
-  lastBadPasswordAt: null,
-  isPrivileged: false,
-  lockedAt: null,
-  autoUnlockAt: null,
-  employeeID: null,
-  employeeNumber: null,
-  ipPhone: null,
-  homePhone: null,
-  homePostalAddress: null,
-  description: null,
-  company: null,
-  c: null,
-  co: null,
-  l: null,
-  st: null,
-  postalCode: null,
-  cn: null,
-  physicalDeliveryOfficeName: null,
-  postOfficeBox: null,
-  profilePath: null,
-  scriptPath: null,
-  homeDirectory: null,
-  pager: null,
-  facsimileTelephoneNumber: null,
-  info: null,
-  primarySmtpAddress: null,
-  otherMailbox: [],
-  otherHomePhone: [],
-  otherMobile: [],
-  emailAliases: [],
-  directReports: [],
-  groupMemberships: [],
-  freshness: { cachedAt: null, liveRefreshedAt: null, isStale: false },
-  entra: null,
-} as unknown as UserDetail;
+const user = aUserDetail({ title: 'Analyst' });
 
 const api = {
   users: {
