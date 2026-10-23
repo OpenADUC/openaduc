@@ -10,7 +10,6 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import Message from 'primevue/message';
-import Toast from 'primevue/toast';
 import TreeSelect from 'primevue/treeselect';
 import type { TreeNode } from 'primevue/treenode';
 import { useToast } from 'primevue/usetoast';
@@ -20,7 +19,10 @@ import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Card from '../design/primitives/Card.vue';
 import GroupChip from '../design/primitives/GroupChip.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import AppToast from '../design/feedback/AppToast.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
+import InlineFailure from '../design/feedback/InlineFailure.vue';
+import { undoable } from '../design/feedback/undoToast.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
@@ -32,16 +34,27 @@ import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 import type { UserDetail } from '@openaduc/shared';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
-import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
+import type {
+  ObjectAction,
+  ObjectActionFailure,
+  ObjectLink,
+  ObjectPageTab,
+} from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
 import { useUserMove } from '../design/composables/useUserMove.js';
 import {
+  membershipChangeText,
+  membershipDoneText,
   membershipOf,
   useGroupMembership,
   type Membership,
+  type MembershipChange,
+  type MembershipFailure,
 } from '../design/composables/useGroupMembership.js';
+import { placeFailure } from '../design/lib/failurePlacement.js';
+import type { UndoOffer } from '../design/lib/undoableWrite.js';
 import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
   useUserAttributeEdit,
@@ -304,6 +317,8 @@ const {
   valid,
   saving,
   save: saveAttributes,
+  failure: saveFailure,
+  dismiss: dismissSaveFailure,
 } = useUserAttributeEdit({
   onSaved: async (n) => {
     toast.add({
@@ -314,8 +329,6 @@ const {
     });
     await load();
   },
-  onFailed: (message) =>
-    toast.add({ severity: 'error', summary: 'Save failed', detail: message, life: 6000 }),
 });
 
 const {
@@ -460,35 +473,42 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 
 // ---- Hero actions (unlock / enable / disable) ----------------------------
 
-const { runningOn: accountActionOn, run: runAccountAction } = useAccountActions<UserDetail>({
-  onDone: async (action, u) => {
-    toast.add({
-      severity: 'success',
-      summary: ACCOUNT_ACTION_SUMMARY[action].done,
-      detail: action === 'unlock' ? unlockedDetail(u) : undefined,
-      life: action === 'unlock' ? 5000 : 3000,
-    });
+const {
+  runningOn: accountActionOn,
+  run: runAccountAction,
+  failure: accountFailure,
+  retry: retryAccountAction,
+  dismiss: dismissAccountFailure,
+} = useAccountActions<UserDetail>({
+  onDone: async (action, u, offer) => {
+    toast.add(
+      undoable(
+        {
+          severity: 'success',
+          summary: `${ACCOUNT_ACTION_TEXT[action].done} ${nameOf(u)}`,
+          detail: action === 'unlock' ? unlockedDetail(u) : undefined,
+          life: action === 'unlock' ? 5000 : 3000,
+        },
+        offer,
+      ),
+    );
     await load();
   },
-  onFailed: (action, _u, message) =>
-    toast.add({
-      severity: 'error',
-      summary: ACCOUNT_ACTION_SUMMARY[action].failed,
-      detail: message,
-      life: 6000,
-    }),
 });
 
-const ACCOUNT_ACTION_SUMMARY: Record<AccountAction, { done: string; failed: string }> = {
-  unlock: { done: 'Account unlocked', failed: 'Unlock failed' },
-  enable: { done: 'Account enabled', failed: 'Enable failed' },
-  disable: { done: 'Account disabled', failed: 'Disable failed' },
+const ACCOUNT_ACTION_TEXT: Record<AccountAction, { done: string; verb: string }> = {
+  unlock: { done: 'Unlocked', verb: 'unlock' },
+  enable: { done: 'Enabled', verb: 'enable' },
+  disable: { done: 'Disabled', verb: 'disable' },
 };
+
+const nameOf = (u: { displayName: string | null; samAccountName: string }) =>
+  u.displayName ?? u.samAccountName;
 
 // The account is as it was before the unlock, so this can still say when it
 // was locked even though the reload clears that.
 function unlockedDetail(u: UserDetail): string {
-  const detail = [`${u.displayName ?? u.samAccountName} can sign in now.`];
+  const detail = [`${nameOf(u)} can sign in now.`];
   if (u.lockedAt) detail.push(`Was locked at ${fmtAbsolute(u.lockedAt)}.`);
   if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
   return detail.join(' ');
@@ -532,16 +552,20 @@ const {
   ready: moveReady,
   submitting: moveSubmitting,
   error: moveError,
+  failure: moveFailure,
   load: loadMove,
   submit: submitMove,
+  ouName,
+  retry: retryMove,
+  dismiss: dismissMoveFailure,
 } = useUserMove({
-  onMoved: async (_u, to) => {
-    toast.add({
-      severity: 'success',
-      summary: 'User moved',
-      detail: `Now under ${to}`,
-      life: 4000,
-    });
+  onMoved: async (u, to, offer) => {
+    toast.add(
+      undoable(
+        { severity: 'success', summary: `Moved ${nameOf(u)} to ${ouName(to)}`, life: 4000 },
+        offer,
+      ),
+    );
     moveDialogOpen.value = false;
     await load();
   },
@@ -589,36 +613,69 @@ function openMoveDialog(): void {
   void loadMove(user.value.id);
 }
 
-// ---- Group membership: remove + add --------------------------------------
-
-const groupToast = (summary: string) => toast.add({ severity: 'success', summary, life: 3000 });
-const groupFailed = (summary: string, detail: string) =>
-  toast.add({ severity: 'error', summary, detail, life: 6000 });
-
-// Removing a group is destructive and a single click on the chip's "x" was
-// too easy to trigger by accident. Funnel removals through a confirmation
-// dialog with an explicit Cancel/Remove choice.
-const removeConfirm = ref<Membership | null>(null);
-const { pending: groupPending, remove: removeMembership } = useGroupMembership({
-  onChanged: async (_change, m) => {
-    groupToast(`Removed from ${m.groupLabel}`);
-    removeConfirm.value = null;
-    await load();
-  },
-  onFailed: (_change, _m, message) => groupFailed('Remove failed', message),
+const { inDialog: moveDialogFailure, onPage: movePageFailure } = placeFailure(moveFailure, {
+  belongsHere: (f) => f.op.user.id === props.id,
+  dialog: { open: () => moveDialogOpen.value, made: (f) => !f.undo },
 });
 
-function requestRemoveGroup(group: UserDetail['groupMemberships'][number]): void {
-  if (!user.value || groupPending.value) return;
-  removeConfirm.value = membershipOf(user.value, group);
+// Closing the dialog gives up on a move that failed in it.
+function closeMoveDialog(): void {
+  moveDialogOpen.value = false;
+  if (moveDialogFailure.value) dismissMoveFailure();
 }
 
-function cancelRemoveGroup(): void {
-  removeConfirm.value = null;
+const { onPage: accountPageFailure } = placeFailure(accountFailure, {
+  belongsHere: (f) => f.op.account.id === props.id,
+});
+
+// A failed account action, or a failed move the dialog isn't showing (an
+// Undo), shows under the Actions menu.
+const actionFailure = computed<ObjectActionFailure | null>(() => {
+  const account = accountPageFailure.value;
+  if (account) {
+    const { action, account: u } = account.op;
+    return {
+      summary: `Couldn’t ${ACCOUNT_ACTION_TEXT[action].verb} ${nameOf(u)}`,
+      message: account.message,
+      retry: retryAccountAction,
+      dismiss: dismissAccountFailure,
+    };
+  }
+  const move = movePageFailure.value;
+  if (move) {
+    return {
+      summary: `Couldn’t move ${nameOf(move.op.user)} to ${ouName(move.op.destinationDn)}`,
+      message: move.message,
+      retry: retryMove,
+      dismiss: dismissMoveFailure,
+    };
+  }
+  return null;
+});
+
+// ---- Group membership: remove + add --------------------------------------
+
+async function onMembershipChanged(
+  change: MembershipChange,
+  m: Membership,
+  offer: UndoOffer,
+): Promise<void> {
+  toast.add(
+    undoable({ severity: 'success', summary: membershipDoneText(change, m), life: 3000 }, offer),
+  );
+  await load();
 }
 
-function confirmRemoveGroup(): void {
-  if (removeConfirm.value) removeMembership(removeConfirm.value);
+const {
+  pending: groupPending,
+  remove: removeMembership,
+  failure: removeFailure,
+  retry: retryRemove,
+  dismiss: dismissRemoveFailure,
+} = useGroupMembership({ onChanged: onMembershipChanged });
+
+function removeGroup(group: UserDetail['groupMemberships'][number]): void {
+  if (user.value) removeMembership(membershipOf(user.value, group));
 }
 
 const addGroupOpen = ref(false);
@@ -635,14 +692,58 @@ const {
   adding: addingGroupId,
   load: loadAddGroup,
   add: addToGroup,
+  failure: addFailure,
+  retry: retryAdd,
+  dismiss: dismissAddFailure,
 } = useAddToGroup({
-  onAdded: async (m) => {
-    groupToast(`Added to ${m.groupLabel}`);
-    addGroupOpen.value = false;
-    await load();
+  onChanged: async (change, m, offer) => {
+    if (change === 'add') addGroupOpen.value = false;
+    await onMembershipChanged(change, m, offer);
   },
-  onFailed: (message) => groupFailed('Add failed', message),
 });
+
+const isThisUsers = (f: MembershipFailure) => f.op.membership.userId === props.id;
+const { onPage: removePageFailure } = placeFailure(removeFailure, { belongsHere: isThisUsers });
+const { inDialog: addDialogFailure, onPage: addPageFailure } = placeFailure(addFailure, {
+  belongsHere: isThisUsers,
+  dialog: { open: () => addGroupOpen.value, made: (f) => !f.undo },
+});
+
+// Closing the dialog gives up on an add that failed in it.
+function closeAddGroupDialog(): void {
+  addGroupOpen.value = false;
+  if (addDialogFailure.value) dismissAddFailure();
+}
+
+// A failed remove, or a failed change the add dialog isn't showing (an
+// Undo), shows on the Groups tab.
+const groupFailure = computed(() => {
+  const remove = removePageFailure.value;
+  const add = addPageFailure.value;
+  const [f, retry, dismiss] = remove
+    ? [remove, retryRemove, dismissRemoveFailure]
+    : add
+      ? [add, retryAdd, dismissAddFailure]
+      : [null, null, null];
+  if (!f) return null;
+  return {
+    summary: `Couldn’t ${membershipChangeText(f.op.change, f.op.membership)}`,
+    message: f.message,
+    retry,
+    dismiss,
+  };
+});
+
+// Another user's page reuses this one; what failed on the last one is moot.
+watch(
+  () => props.id,
+  () => {
+    dismissAccountFailure();
+    dismissMoveFailure();
+    dismissRemoveFailure();
+    dismissAddFailure();
+  },
+);
 
 function openAddGroupDialog(): void {
   if (!user.value) return;
@@ -894,7 +995,7 @@ watch(user, (u) => {
 </script>
 
 <template>
-  <Toast />
+  <AppToast />
   <div class="page-inner detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
@@ -916,6 +1017,7 @@ watch(user, (u) => {
       fallback-tab="overview"
       :actions="actions"
       :actions-busy="accountActionRunning !== null || moveSubmitting"
+      :action-failure="actionFailure"
       :refreshing="refreshing"
       :cached-at="user.freshness.cachedAt"
       :live-refreshed-at="user.freshness.liveRefreshedAt"
@@ -1406,6 +1508,16 @@ watch(user, (u) => {
             />
           </div>
 
+          <InlineFailure
+            v-if="groupFailure"
+            class="groups-failure"
+            :summary="groupFailure.summary"
+            :message="groupFailure.message"
+            :busy="groupPending !== null || addingGroupId !== null"
+            @retry="groupFailure.retry"
+            @dismiss="groupFailure.dismiss"
+          />
+
           <EmptyState
             v-if="user.groupMemberships.length === 0"
             icon="pi pi-users"
@@ -1433,7 +1545,7 @@ watch(user, (u) => {
                   :nested="false"
                   :removable="canManageGroups && groupPending?.membership.groupId !== g.id"
                   :to="{ name: 'group-detail', params: { id: g.id } }"
-                  @remove="requestRemoveGroup(g)"
+                  @remove="removeGroup(g)"
                 />
               </div>
             </section>
@@ -1697,6 +1809,19 @@ watch(user, (u) => {
                 @click="saveAttributes()"
               />
             </span>
+            <div v-if="saveFailure" class="save-bar-failure" role="alert">
+              <i class="pi pi-times-circle" aria-hidden="true" />
+              <span>Save failed: {{ saveFailure }}</span>
+              <Button
+                icon="pi pi-times"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                aria-label="Dismiss"
+                @click="dismissSaveFailure"
+              />
+            </div>
           </div>
         </transition>
       </template>
@@ -1710,7 +1835,7 @@ watch(user, (u) => {
       header="Move to OU"
       :style="{ width: '34rem' }"
       :closable="!moveSubmitting"
-      @update:visible="(v) => !v && (moveDialogOpen = false)"
+      @update:visible="(v) => !v && closeMoveDialog()"
     >
       <p class="dialog-prose primary">
         Move <strong>{{ user?.displayName ?? user?.samAccountName }}</strong> to a different
@@ -1737,6 +1862,9 @@ watch(user, (u) => {
         />
       </div>
       <Message v-if="moveError" severity="error" :closable="false">{{ moveError }}</Message>
+      <Message v-else-if="moveDialogFailure" severity="error" closable @close="dismissMoveFailure">
+        {{ moveDialogFailure.message }}
+      </Message>
       <Message v-else-if="moveTargetIsCurrent" severity="info" :closable="false">
         That's the user's current OU — pick a different one.
       </Message>
@@ -1746,7 +1874,7 @@ watch(user, (u) => {
           text
           severity="secondary"
           :disabled="moveSubmitting"
-          @click="moveDialogOpen = false"
+          @click="closeMoveDialog"
         />
         <Button
           label="Move"
@@ -1766,7 +1894,7 @@ watch(user, (u) => {
       header="Add to group"
       :style="{ width: '32rem' }"
       :closable="addingGroupId === null"
-      @update:visible="(v) => !v && (addGroupOpen = false)"
+      @update:visible="(v) => !v && closeAddGroupDialog()"
     >
       <p class="dialog-prose secondary">Search by name. Adding commits immediately.</p>
       <InputText v-model="groupSearchQuery" placeholder="Search groups…" autofocus fluid />
@@ -1819,29 +1947,15 @@ watch(user, (u) => {
         </p>
       </div>
       <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
+      <Message v-else-if="addDialogFailure" severity="error" closable @close="dismissAddFailure">
+        Couldn’t
+        {{ membershipChangeText(addDialogFailure.op.change, addDialogFailure.op.membership) }}:
+        {{ addDialogFailure.message }}
+      </Message>
       <template #footer>
-        <Button label="Close" text severity="secondary" @click="addGroupOpen = false" />
+        <Button label="Close" text severity="secondary" @click="closeAddGroupDialog" />
       </template>
     </Dialog>
-
-    <!-- Group removal confirmation: a single-click on the chip's "x" was too
-         easy to fire by accident, so every removal now goes through here. -->
-    <ConfirmDialog
-      :visible="removeConfirm !== null"
-      title="Remove group membership?"
-      :message="
-        removeConfirm
-          ? `Remove ${user?.displayName || user?.samAccountName || 'this user'} from “${removeConfirm.groupLabel}”?`
-          : ''
-      "
-      detail="The change is committed to the directory immediately."
-      confirm-label="Remove"
-      severity="danger"
-      :busy="groupPending !== null"
-      @update:visible="(v) => !v && cancelRemoveGroup()"
-      @cancel="cancelRemoveGroup"
-      @confirm="confirmRemoveGroup"
-    />
 
     <ConfirmDialog v-bind="leaveDialog" />
 
@@ -2028,6 +2142,10 @@ watch(user, (u) => {
   flex-wrap: wrap;
 }
 
+.groups-failure {
+  margin-bottom: 14px;
+}
+
 .groups-toolbar-left {
   display: flex;
   align-items: center;
@@ -2103,8 +2221,12 @@ watch(user, (u) => {
   gap: 6px;
 }
 
-.group-grid :deep(.gchip) {
+.group-grid :deep(.gchip-wrap) {
   width: 100%;
+}
+
+.group-grid :deep(.gchip) {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -2334,6 +2456,7 @@ watch(user, (u) => {
 
 .save-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-top: 16px;
@@ -2374,6 +2497,14 @@ watch(user, (u) => {
   align-items: center;
   gap: 6px;
   margin-left: auto;
+}
+
+.save-bar-failure {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--red);
 }
 
 .save-bar-enter-active,

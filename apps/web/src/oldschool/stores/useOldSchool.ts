@@ -28,14 +28,7 @@ export type DialogSpec =
   | { kind: 'delete-user'; id: string; label: string }
   | { kind: 'move'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
-  | {
-      kind: 'confirm';
-      title: string;
-      message: string;
-      okLabel?: string;
-      destructive?: boolean;
-      onOk: () => void | Promise<void>;
-    }
+  | { kind: 'message'; title: string; message: string }
   | { kind: 'about' }
   | { kind: 'find' };
 
@@ -63,7 +56,7 @@ export interface SelectedRow {
  * Reasonable default dimensions for each dialog kind. Roughly matches
  * the proportions of the real MMC counterparts: Properties dialogs are
  * tall enough to render the General/Account tabs without scroll, the
- * pickers are wider, and Confirm is a tight little prompt.
+ * pickers are wider, and a message box is a tight little prompt.
  */
 function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: number } {
   switch (kind) {
@@ -83,7 +76,7 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
       return { width: 520, height: 480 };
     case 'find':
       return { width: 580, height: 500 };
-    case 'confirm':
+    case 'message':
       return { width: 420, height: 220 };
     case 'about':
       return { width: 460, height: 260 };
@@ -193,6 +186,11 @@ export const useOldSchool = defineStore('oldSchool', () => {
     windows.value = next;
   }
 
+  /** A failure, in a message box that stays until the operator clicks OK, as ADUC does. */
+  function reportError(message: string): void {
+    openDialog({ kind: 'message', title: 'Active Directory Domain Services', message });
+  }
+
   function bumpData(): void {
     dataVersion.value += 1;
   }
@@ -214,6 +212,7 @@ export const useOldSchool = defineStore('oldSchool', () => {
     focusWindow,
     moveWindow,
     resizeWindow,
+    reportError,
     bumpData,
   };
 });

@@ -38,6 +38,9 @@ export const useAuthStore = defineStore('auth', () => {
   // original click ("Save") completes without them having to re-do the
   // work. Cleared on cancel by AppShell's dialog visibility handler.
   const stepUpPendingAction = ref<(() => void | Promise<void>) | null>(null);
+  // What the caller of the pending action wants done if the operator
+  // cancels the step-up instead, so a queued write isn't dropped unseen.
+  let stepUpCancelled: (() => void) | null = null;
 
   // Reactive clock that ends `elevated` at the idle end. We store a single
   // number rather than re-creating Date instances so dependent computeds only
@@ -160,6 +163,7 @@ export const useAuthStore = defineStore('auth', () => {
     // success/failure toast.
     const action = stepUpPendingAction.value;
     stepUpPendingAction.value = null;
+    stepUpCancelled = null;
     if (action) {
       void Promise.resolve()
         .then(action)
@@ -177,7 +181,11 @@ export const useAuthStore = defineStore('auth', () => {
    * after step-up. The action is responsible for its own toast/error
    * reporting.
    */
-  function requireStepUp(action: () => void | Promise<void>, reason: string | null = null): void {
+  function requireStepUp(
+    action: () => void | Promise<void>,
+    reason: string | null = null,
+    onCancel?: () => void,
+  ): void {
     if (elevated.value) {
       void Promise.resolve()
         .then(action)
@@ -186,8 +194,23 @@ export const useAuthStore = defineStore('auth', () => {
         });
       return;
     }
-    stepUpPendingAction.value = action;
+    queue(action, onCancel);
     requestStepUp(reason);
+  }
+
+  function queue(action: () => void | Promise<void>, onCancel?: () => void): void {
+    stepUpPendingAction.value = action;
+    stepUpCancelled = onCancel ?? null;
+  }
+
+  /** The operator closed the step-up prompt without stepping up. */
+  function cancelStepUp(): void {
+    stepUpRequested.value = false;
+    stepUpReason.value = null;
+    stepUpPendingAction.value = null;
+    const cancelled = stepUpCancelled;
+    stepUpCancelled = null;
+    cancelled?.();
   }
 
   /**
@@ -196,9 +219,13 @@ export const useAuthStore = defineStore('auth', () => {
    * operator steps up and return true. Otherwise return false so the caller
    * reports the error.
    */
-  function retryAfterStepUp(err: unknown, retry: () => void | Promise<void>): boolean {
+  function retryAfterStepUp(
+    err: unknown,
+    retry: () => void | Promise<void>,
+    onCancel?: () => void,
+  ): boolean {
     if (!(err instanceof ApiError) || err.code !== 'step_up_required') return false;
-    stepUpPendingAction.value = retry;
+    queue(retry, onCancel);
     return true;
   }
 
@@ -236,5 +263,6 @@ export const useAuthStore = defineStore('auth', () => {
     requestStepUp,
     requireStepUp,
     retryAfterStepUp,
+    cancelStepUp,
   };
 });

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { ref } from 'vue';
+import { computed } from 'vue';
 import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
-import { useAuthStore } from '../../stores/auth.js';
+import { useUndoableWrite, type UndoOffer, type WriteFailure } from '../lib/undoableWrite.js';
 
 /** A user's membership of a group, with the names to show for each. */
 export interface Membership {
@@ -31,60 +30,72 @@ export function membershipOf(
   };
 }
 
-/** Add a user to a group or remove them from one, one change at a time. */
+const WORDS: Record<MembershipChange, { verb: string; done: string; prep: string }> = {
+  add: { verb: 'add', done: 'Added', prep: 'to' },
+  remove: { verb: 'remove', done: 'Removed', prep: 'from' },
+};
+
+/** "add Jane Doe to Sales": what a change does, for "Couldn't …" or ADUC's "Windows cannot …". */
+export function membershipChangeText(change: MembershipChange, m: Membership): string {
+  const w = WORDS[change];
+  return `${w.verb} ${m.userLabel} ${w.prep} ${m.groupLabel}`;
+}
+
+/** "Added Jane Doe to Sales": what a toast says once a change lands. */
+export function membershipDoneText(change: MembershipChange, m: Membership): string {
+  const w = WORDS[change];
+  return `${w.done} ${m.userLabel} ${w.prep} ${m.groupLabel}`;
+}
+
+export interface MembershipEdit {
+  change: MembershipChange;
+  membership: Membership;
+}
+
+export type MembershipFailure = WriteFailure<MembershipEdit>;
+
+const INVERSE: Record<MembershipChange, MembershipChange> = { add: 'remove', remove: 'add' };
+
+/**
+ * Add a user to a group or remove them from one, one change at a time.
+ * `onChanged` gets the offer of Undo, which makes the inverse change the
+ * same way. The last failure stays in `failure` until it's retried,
+ * dismissed or another change starts.
+ */
 export function useGroupMembership(options: {
-  onChanged: (change: MembershipChange, membership: Membership) => void | Promise<void>;
-  onFailed: (
+  onChanged: (
     change: MembershipChange,
     membership: Membership,
-    message: string,
+    offer: UndoOffer,
   ) => void | Promise<void>;
+  onFailed?: (failure: MembershipFailure) => void | Promise<void>;
 }) {
-  const auth = useAuthStore();
-  const pending = ref<{ change: MembershipChange; membership: Membership } | null>(null);
+  const writes = useUndoableWrite<MembershipEdit>({
+    write: ({ change, membership: { userId, groupId } }) =>
+      change === 'add'
+        ? api.users.addGroup(userId, { groupId })
+        : api.users.removeGroup(userId, { groupId }),
+    inverse: ({ change, membership }) => ({ change: INVERSE[change], membership }),
+    onDone: ({ change, membership }, offer) => options.onChanged(change, membership, offer),
+    onFailed: options.onFailed,
+  });
+  const pending = computed(() => writes.runningOn());
 
   /** `after` runs once the change lands, after `onChanged`, including after a step-up. */
   function add(membership: Membership, after?: () => void | Promise<void>): void {
-    start('add', membership, after);
+    if (!pending.value) writes.run({ change: 'add', membership }, after);
   }
 
   function remove(membership: Membership, after?: () => void | Promise<void>): void {
-    start('remove', membership, after);
+    if (!pending.value) writes.run({ change: 'remove', membership }, after);
   }
 
-  function start(
-    change: MembershipChange,
-    membership: Membership,
-    after?: () => void | Promise<void>,
-  ): void {
-    if (pending.value) return;
-    auth.requireStepUp(() => commit(change, membership, after));
-  }
-
-  async function commit(
-    change: MembershipChange,
-    membership: Membership,
-    after?: () => void | Promise<void>,
-  ): Promise<void> {
-    if (pending.value) return;
-    pending.value = { change, membership };
-    const { userId, groupId } = membership;
-    try {
-      try {
-        if (change === 'add') await api.users.addGroup(userId, { groupId });
-        else await api.users.removeGroup(userId, { groupId });
-      } catch (err) {
-        if (auth.retryAfterStepUp(err, () => commit(change, membership, after))) return;
-        const message = err instanceof ApiError ? err.message : String(err);
-        await options.onFailed(change, membership, message);
-        return;
-      }
-      await options.onChanged(change, membership);
-      await after?.();
-    } finally {
-      pending.value = null;
-    }
-  }
-
-  return { pending, add, remove };
+  return {
+    pending,
+    add,
+    remove,
+    failure: writes.failure,
+    retry: writes.retry,
+    dismiss: writes.dismiss,
+  };
 }

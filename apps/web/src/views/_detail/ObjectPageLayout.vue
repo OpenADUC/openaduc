@@ -6,12 +6,13 @@ import Menu from 'primevue/menu';
 import type { MenuItem } from 'primevue/menuitem';
 import { useToast } from 'primevue/usetoast';
 import Avatar from '../../design/primitives/Avatar.vue';
+import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
-import type { ObjectAction, ObjectLink, ObjectPageTab } from './objectPage';
+import type { ObjectAction, ObjectActionFailure, ObjectLink, ObjectPageTab } from './objectPage';
 
 // The page mounts this once its record has loaded, so tab visibility is
 // already final.
@@ -36,6 +37,7 @@ const props = withDefaults(
     actions?: readonly ObjectAction[];
     /** An action is running: the Actions button shows it. */
     actionsBusy?: boolean;
+    actionFailure?: ObjectActionFailure | null;
     refreshing?: boolean;
     cachedAt: string | null;
     /** When the record was last read live from the directory, if it ever was. */
@@ -47,6 +49,7 @@ const props = withDefaults(
     links: () => [],
     actions: () => [],
     actionsBusy: false,
+    actionFailure: null,
     refreshing: false,
     liveRefreshedAt: null,
   },
@@ -246,6 +249,15 @@ const freshnessText = computed(() => {
         <Menu :id="menuId" ref="actionsMenu" :model="menuItems" :popup="true" />
       </div>
     </nav>
+
+    <InlineFailure
+      v-if="actionFailure"
+      :summary="actionFailure.summary"
+      :message="actionFailure.message"
+      :busy="actionsBusy"
+      @retry="actionFailure.retry"
+      @dismiss="actionFailure.dismiss"
+    />
 
     <slot :tab="activeTab" :select="select" />
 

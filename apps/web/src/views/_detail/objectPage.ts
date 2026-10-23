@@ -26,6 +26,14 @@ export interface ObjectAction {
   run: () => void;
 }
 
+/** An action that failed, shown under the Actions menu until retried or dismissed. */
+export interface ObjectActionFailure {
+  summary: string;
+  message: string;
+  retry: () => void;
+  dismiss: () => void;
+}
+
 /** A launcher in the header, such as Email or a Teams chat. */
 export interface ObjectLink {
   label: string;

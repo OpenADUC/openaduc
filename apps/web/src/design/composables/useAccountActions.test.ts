@@ -53,7 +53,8 @@ describe('useAccountActions', () => {
     const { actions, onDone, onFailed } = setup();
 
     actions.run(action, jane);
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(action, jane));
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(onDone.mock.calls[0]!.slice(0, 2)).toEqual([action, jane]);
     expect(call).toHaveBeenCalledWith('u1');
     expect(onFailed).not.toHaveBeenCalled();
   });
@@ -86,7 +87,11 @@ describe('useAccountActions', () => {
 
     actions.run('disable', jane, after);
     await vi.waitFor(() =>
-      expect(onFailed).toHaveBeenCalledWith('disable', jane, 'directory rejected the change'),
+      expect(onFailed).toHaveBeenCalledWith({
+        op: { action: 'disable', account: jane },
+        message: 'directory rejected the change',
+        undo: false,
+      }),
     );
     expect(onDone).not.toHaveBeenCalled();
     expect(after).not.toHaveBeenCalled();
@@ -101,7 +106,7 @@ describe('useAccountActions', () => {
     expect(unlock).not.toHaveBeenCalled();
 
     await auth.stepUp('pw');
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane));
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane, null));
     expect(unlock).toHaveBeenCalledOnce();
   });
 
@@ -119,5 +124,47 @@ describe('useAccountActions', () => {
     await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
     expect(enable).toHaveBeenCalledTimes(2);
     expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['disable', enable],
+    ['enable', disable],
+  ] as const)('undoes a %s with the inverse action', async (action, inverse) => {
+    const { actions, onDone } = setup();
+
+    actions.run(action, jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(inverse).not.toHaveBeenCalled();
+
+    (onDone.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+    expect(inverse).toHaveBeenCalledWith('u1');
+    expect(onDone.mock.calls[1]![2]).toBeNull();
+  });
+
+  it('can’t undo an unlock', async () => {
+    const { actions, onDone } = setup();
+
+    actions.run('unlock', jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane, null));
+  });
+
+  it('keeps a failure until it’s retried', async () => {
+    const { actions, onDone } = setup();
+    disable.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    actions.run('disable', jane);
+    await vi.waitFor(() =>
+      expect(actions.failure.value).toEqual({
+        op: { action: 'disable', account: jane },
+        message: 'DC unreachable',
+        undo: false,
+      }),
+    );
+
+    actions.retry();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(disable).toHaveBeenCalledTimes(2);
+    expect(actions.failure.value).toBeNull();
   });
 });

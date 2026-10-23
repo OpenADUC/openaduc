@@ -102,9 +102,13 @@ function onPage(ev: DataTablePageEvent): void {
 const pending = ref<DeletedUserSummary | null>(null);
 const dialogOpen = ref(false);
 const restoring = ref(false);
+// Shown in the dialog until it's dismissed, the restore is retried, or the
+// dialog is opened again.
+const restoreError = ref<string | null>(null);
 
 function askRestore(row: DeletedUserSummary): void {
   pending.value = row;
+  restoreError.value = null;
   dialogOpen.value = true;
 }
 
@@ -112,6 +116,7 @@ async function confirmRestore(): Promise<void> {
   const row = pending.value;
   if (!row) return;
   restoring.value = true;
+  restoreError.value = null;
   try {
     const resp = await api.deletedUsers.restore(row.id, {});
     toast.add({
@@ -132,9 +137,8 @@ async function confirmRestore(): Promise<void> {
     void resp;
   } catch (err) {
     if (auth.retryAfterStepUp(err, confirmRestore)) return;
-    const message =
+    restoreError.value =
       err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Restore failed';
-    toast.add({ severity: 'error', summary: 'Restore failed', detail: message, life: 8000 });
   } finally {
     restoring.value = false;
   }
@@ -371,6 +375,9 @@ const bannerBody = computed(() => {
         >
           The Recycle Bin is not enabled — restored users come back in tombstone form (no group
           memberships, sparse attributes).
+        </Message>
+        <Message v-if="restoreError" severity="error" closable @close="restoreError = null">
+          Restore failed: {{ restoreError }}
         </Message>
       </div>
       <template #footer>

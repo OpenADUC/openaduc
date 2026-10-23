@@ -13,6 +13,7 @@ import { useOuContents } from '../../design/composables/useOuContents.js';
 import { useOldSchool, type SelectedRow } from '../stores/useOldSchool.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useToast } from 'primevue/usetoast';
+import { undoable } from '../../design/feedback/undoToast.js';
 import WinIcon from '../primitives/WinIcon.vue';
 import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
 import {
@@ -185,12 +186,12 @@ const DONE: Record<AccountAction, (name: string) => string> = {
   unlock: (name) => `${name} unlocked.`,
 };
 const { runningOn, run: runAccountAction } = useAccountActions<Row>({
-  onDone: (action, r) => {
-    toast.add({ severity: 'success', summary: DONE[action](r.name), life: 2500 });
+  onDone: (action, r, offer) => {
+    toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
     store.bumpData();
   },
-  onFailed: (_action, _r, message) =>
-    toast.add({ severity: 'error', summary: 'Operation failed', detail: message, life: 5000 }),
+  onFailed: ({ op: { action, account }, message }) =>
+    store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
 });
 
 function userItems(r: Row): CtxItem[] {

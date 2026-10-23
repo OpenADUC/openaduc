@@ -112,9 +112,24 @@ describe('the Old School add to group dialog', () => {
     await flushPromises();
     expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
     expect(toast.add).toHaveBeenCalledWith(
-      expect.objectContaining({ summary: 'Jane Doe added to Sales.' }),
+      expect.objectContaining({ summary: 'Added Jane Doe to Sales.' }),
     );
     expect(oldSchool.dataVersion).toBe(version + 1);
     expect(dialog.emitted('close')).toHaveLength(1);
+  });
+
+  it('says in a message box why the add failed', async () => {
+    api.users.addGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const { dialog, oldSchool } = await openAddToGroup();
+
+    await row(dialog, 'Sales').trigger('click');
+    await ok(dialog).trigger('click');
+    await flushPromises();
+    expect(oldSchool.windows.at(-1)!.dialog).toEqual({
+      kind: 'message',
+      title: 'Active Directory Domain Services',
+      message: 'Windows cannot add Jane Doe to Sales because:\nDC unreachable',
+    });
+    expect(dialog.emitted('close')).toBeUndefined();
   });
 });

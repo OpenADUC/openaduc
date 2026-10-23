@@ -21,6 +21,10 @@ const api = {
     update: vi.fn(async () => ({ user })),
     resetPassword: vi.fn(async () => ({})),
     unlock: vi.fn(async () => ({})),
+    disable: vi.fn(async () => ({})),
+    enable: vi.fn(async () => ({})),
+    addGroup: vi.fn(async () => ({ ok: true })),
+    removeGroup: vi.fn(async () => ({ ok: true })),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -49,7 +53,10 @@ async function openTab(tab: string, capabilities: string[], elevated: boolean) {
   } as never; // only these fields matter
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/users/:id', name: 'user-detail', component: UserDetailView, props: true }],
+    routes: [
+      { path: '/users/:id', name: 'user-detail', component: UserDetailView, props: true },
+      { path: '/groups/:id', name: 'group-detail', component: { render: () => null } },
+    ],
   });
   await router.push(`/users/u1?tab=${tab}`);
   const page = mount(RouterView, {
@@ -290,5 +297,110 @@ describe('unlocking from the Account tab', () => {
     expect(api.users.unlock).toHaveBeenCalledWith('u1');
     expect(api.users.get).toHaveBeenCalledTimes(2);
     expect(page.findAll('button').some((b) => b.text() === 'Not locked')).toBe(true);
+  });
+});
+
+async function runAction(page: Page, label: string) {
+  await click(page, 'Actions');
+  const item = page.findAll('[role="menuitem"]').find((i) => i.text() === label);
+  expect(item).toBeDefined();
+  await item!.find('a').trigger('click');
+  await flushPromises();
+}
+
+const inSales = aUserDetail({
+  groupMemberships: [
+    { id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales', direct: true },
+  ] as never,
+});
+
+describe('a single reversible change', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user });
+  });
+
+  it('disables the account without asking, and Undo enables it again', async () => {
+    const { page } = await openTab('overview', ['read:user', 'write:user.enableDisable'], true);
+
+    await runAction(page, 'Disable account');
+    expect(api.users.disable).toHaveBeenCalledWith('u1');
+    expect(page.find('[role="dialog"]').exists()).toBe(false);
+    expect(page.text()).toContain('Disabled Jane Doe');
+
+    await click(page, 'Undo');
+    expect(api.users.enable).toHaveBeenCalledWith('u1');
+    expect(page.text()).toContain('Enabled Jane Doe');
+    expect(page.findAll('button').some((b) => b.text() === 'Undo')).toBe(false);
+  });
+
+  it('removes a group without asking, and Undo adds the user back', async () => {
+    api.users.get.mockResolvedValue({ user: inSales });
+    const { page } = await openTab('groups', ['read:user', 'write:group.membership'], true);
+
+    await page.get('button[aria-label="Remove from Sales"]').trigger('click');
+    await flushPromises();
+    expect(api.users.removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
+    expect(page.text()).toContain('Removed Jane Doe from Sales');
+
+    await click(page, 'Undo');
+    expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
+    expect(page.text()).toContain('Added Jane Doe to Sales');
+  });
+});
+
+describe('a failed change', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.users.get.mockResolvedValue({ user });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('stays under the Actions menu until retried', async () => {
+    api.users.disable.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const { page } = await openTab('overview', ['read:user', 'write:user.enableDisable'], true);
+
+    await runAction(page, 'Disable account');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(page.get('.inline-failure').text()).toContain('Couldn’t disable Jane Doe');
+    expect(page.get('.inline-failure').text()).toContain('DC unreachable');
+
+    await click(page, 'Retry');
+    expect(api.users.disable).toHaveBeenCalledTimes(2);
+    expect(page.find('.inline-failure').exists()).toBe(false);
+  });
+
+  it('stays on the Groups tab until dismissed', async () => {
+    api.users.get.mockResolvedValue({ user: inSales });
+    api.users.removeGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const { page } = await openTab('groups', ['read:user', 'write:group.membership'], true);
+
+    await page.get('button[aria-label="Remove from Sales"]').trigger('click');
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(page.get('.inline-failure').text()).toContain('Couldn’t remove Jane Doe from Sales');
+
+    await page.get('.inline-failure button[aria-label="Close"]').trigger('click');
+    await flushPromises();
+    expect(page.find('.inline-failure').exists()).toBe(false);
+    expect(api.users.removeGroup).toHaveBeenCalledOnce();
+  });
+
+  it('doesn’t show on another user’s page, even when it comes in after the switch', async () => {
+    let refuse!: (err: Error) => void;
+    api.users.disable.mockImplementationOnce(() => new Promise((_, r) => (refuse = r)));
+    const { page, router } = await openTab(
+      'overview',
+      ['read:user', 'write:user.enableDisable'],
+      true,
+    );
+
+    await runAction(page, 'Disable account');
+    await router.push('/users/u2?tab=overview');
+    await flushPromises();
+    refuse(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    await flushPromises();
+    expect(page.find('.inline-failure').exists()).toBe(false);
   });
 });

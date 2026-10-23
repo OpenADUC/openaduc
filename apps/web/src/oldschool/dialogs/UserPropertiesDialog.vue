@@ -14,8 +14,14 @@ import { useOldSchool } from '../stores/useOldSchool.js';
 import { useUserRecord } from '../../design/composables/useDirectoryRecords.js';
 import type { UserAttribute } from '../../design/composables/useUserAttributeEdit.js';
 import { useUserChangesApply } from '../../design/composables/useUserChangesApply.js';
-import { membershipOf, useGroupMembership } from '../../design/composables/useGroupMembership.js';
+import {
+  membershipChangeText,
+  membershipDoneText,
+  membershipOf,
+  useGroupMembership,
+} from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
+import { undoable } from '../../design/feedback/undoToast.js';
 
 const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -30,7 +36,7 @@ const canManageGroups = computed(() => auth.hasCapability('write:group.membershi
 
 const { draft, problems, valid, unlock, dirty, applying, reset, apply } = useUserChangesApply({
   onApplied: () => toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 }),
-  onFailed: (summary, detail) => toast.add({ severity: 'error', summary, detail, life: 6000 }),
+  onFailed: (summary, detail) => store.reportError(`${summary}\n${detail}`),
   refresh: () => store.bumpData(),
 });
 
@@ -163,28 +169,27 @@ const memberOfSelected = ref<string | null>(null);
 const selectedMembership = computed(
   () => user.value?.groupMemberships.find((g) => g.id === memberOfSelected.value) ?? null,
 );
+// Unlike ADUC, Remove doesn't ask first: the toast offers Undo instead.
 const { pending: membershipPending, remove: removeMembership } = useGroupMembership({
-  onChanged: (_change, m) => {
-    toast.add({ severity: 'success', summary: `Removed from ${m.groupLabel}.`, life: 2500 });
+  onChanged: (change, m, offer) => {
+    toast.add(
+      undoable(
+        { severity: 'success', summary: `${membershipDoneText(change, m)}.`, life: 2500 },
+        offer,
+      ),
+    );
     store.bumpData();
   },
-  onFailed: (_change, _m, message) =>
-    toast.add({ severity: 'error', summary: 'Remove failed', detail: message, life: 5000 }),
+  onFailed: ({ op: { change, membership }, message }) =>
+    store.reportError(
+      `Windows cannot ${membershipChangeText(change, membership)} because:\n${message}`,
+    ),
 });
 
-function confirmRemoveMembership(): void {
+function removeSelectedMembership(): void {
   const u = user.value;
   const g = selectedMembership.value;
-  if (!u || !g) return;
-  const membership = membershipOf(u, g);
-  store.openDialog({
-    kind: 'confirm',
-    title: 'Active Directory Domain Services',
-    message: `Remove ${membership.userLabel} from "${membership.groupLabel}"?`,
-    okLabel: 'Yes',
-    destructive: false,
-    onOk: () => removeMembership(membership),
-  });
+  if (u && g) removeMembership(membershipOf(u, g));
 }
 function openAddGroup(): void {
   if (!user.value) return;
@@ -602,7 +607,7 @@ const upnLogonName = computed(() => {
                 ? 'Membership comes from a nested group'
                 : undefined
             "
-            @click="confirmRemoveMembership"
+            @click="removeSelectedMembership"
           >
             Remove
           </button>
