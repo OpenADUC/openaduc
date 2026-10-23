@@ -197,6 +197,7 @@ export const COMPUTER_ATTRS = [
   'managedBy',
   'memberOf',
   'userAccountControl',
+  'isCriticalSystemObject',
   'pwdLastSet',
   'lastLogonTimestamp',
   'whenCreated',

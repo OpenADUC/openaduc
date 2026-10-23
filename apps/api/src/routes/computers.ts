@@ -13,7 +13,7 @@
 // a single live LDAP read so the operator sees the latest dnsHostName / OS /
 // last logon between syncs. Writes bind as the operator.
 
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
@@ -24,21 +24,13 @@ import {
   type ComputerDetail,
   type ComputerSearchResponse,
 } from '@openaduc/shared';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import type {
-  DirectoryComputer,
-  DirectoryObjectIdentifier,
-  DirectoryProvider,
-  MutationResult,
-  WriteContext,
-} from '../providers/types.js';
-import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { upsertComputer } from '../services/computerCache.js';
+import { NotFound } from '../plugins/errorHandler.js';
+import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
+import { computerWriteBlock } from '../lib/computerWrites.js';
 import { rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
-import { directoryRefusal } from './directoryRefusal.js';
-import { ctx } from './writeContext.js';
+import { writeComputer } from './computerWrite.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -238,6 +230,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
           isStale: Boolean(cacheRow?.stale_at),
         },
         rawAttributes: rawAttributesFor(req.actor?.session.capabilities, live.rawAttributes),
+        writeBlock: computerWriteBlock(live.rawAttributes),
       };
 
       // Audit the view, gated by the same setting as user/group views and
@@ -273,6 +266,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       writeComputer(app, req, await app.services.providers.buildForRequest(req), {
         action: 'computer.disable',
         verb: 'disable',
+        refuseProtected: true,
         write: (provider, id, c) => provider.disableComputer(id, c),
       }),
   });
@@ -285,6 +279,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       writeComputer(app, req, await app.services.providers.buildForRequest(req), {
         action: 'computer.enable',
         verb: 'enable',
+        refuseProtected: false,
         write: (provider, id, c) => provider.enableComputer(id, c),
       }),
   });
@@ -298,8 +293,9 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
     },
     handler: async (req) =>
       writeComputer(app, req, await app.services.providers.buildForRequest(req), {
-        action: 'computer.reset',
+        action: 'computer.account.reset',
         verb: 'reset the account',
+        refuseProtected: true,
         forbidden: 'directory refused the reset — you may lack the Reset Password right',
         write: (provider, id, c) => provider.resetComputerAccount(id, c),
       }),
@@ -317,80 +313,10 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       return writeComputer(app, req, provider, {
         action: 'computer.move',
         verb: 'move',
+        refuseProtected: true,
         metadata: { targetOuDn: targetOu.distinguished_name, targetOuName: targetOu.name },
         write: (p, id, c) => p.moveComputer(id, targetOu.distinguished_name, c),
       });
     },
   });
-}
-
-/** Read a computer live and put it in the cache, so lists show it as it is now. */
-async function refreshComputer(
-  app: FastifyInstance,
-  provider: DirectoryProvider,
-  id: string,
-): Promise<DirectoryComputer | null> {
-  const live = await provider.getComputer({ kind: 'objectGuid', value: id });
-  if (live) await upsertComputer(app.db, provider.id, live);
-  return live;
-}
-
-/** One audited write to the computer `:id`, as the operator, with the cache updated after. */
-async function writeComputer(
-  app: FastifyInstance,
-  req: FastifyRequest,
-  provider: DirectoryProvider,
-  spec: {
-    action: string;
-    /** What was refused, as in "cannot disable". */
-    verb: string;
-    forbidden?: string;
-    metadata?: Record<string, unknown>;
-    write: (
-      provider: DirectoryProvider,
-      id: DirectoryObjectIdentifier,
-      writeCtx: WriteContext,
-    ) => Promise<MutationResult>;
-  },
-): Promise<{ ok: true; before: unknown; after: unknown }> {
-  const { id } = idParamSchema.parse(req.params);
-  const actor = req.actor!;
-  if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
-
-  const before = await refreshComputer(app, provider, id);
-  if (!before) throw NotFound('computer not found');
-
-  const result = await withAudit(
-    app.services.audit,
-    {
-      ...auditContextFromRequest(req),
-      action: spec.action,
-      actorAuthMethod: 'ad-password',
-      providerId: provider.id,
-      targetType: 'computer',
-      targetId: before.objectGuid,
-      targetDn: before.distinguishedName,
-      ...(spec.metadata ? { metadata: spec.metadata } : {}),
-    },
-    async () => {
-      const r = await spec.write(provider, { kind: 'objectGuid', value: id }, ctx(actor, req));
-      return {
-        ok: r.ok,
-        before: r.before ?? null,
-        after: r.after ?? null,
-        errorCode: r.reason ?? null,
-        errorMessage: r.errorMessage ?? null,
-      };
-    },
-  );
-  if (!result.ok) {
-    throw directoryRefusal(app, result, {
-      verb: spec.verb,
-      notFound: 'computer not found',
-      ...(spec.forbidden ? { forbidden: spec.forbidden } : {}),
-    });
-  }
-
-  await refreshComputer(app, provider, id);
-  return { ok: true, before: result.before, after: result.after };
 }

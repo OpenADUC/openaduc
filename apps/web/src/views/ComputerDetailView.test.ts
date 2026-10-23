@@ -35,6 +35,7 @@ const aComputer = (overrides: Partial<ComputerDetail> = {}): ComputerDetail => (
   groupMemberships: [],
   freshness: { cachedAt: null, isStale: false },
   rawAttributes: null,
+  writeBlock: null,
   ...overrides,
 });
 

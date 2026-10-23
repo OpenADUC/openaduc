@@ -11,6 +11,15 @@ const queryBoolean = z.union([z.boolean(), z.string()]).transform((v, ctx) => {
   return z.NEVER;
 });
 
+// Why OpenADUC won't disable, reset or move a computer: domain controllers
+// (writable or read-only) and objects AD marks critical.
+export const computerWriteBlockSchema = z.enum([
+  'domain_controller',
+  'read_only_domain_controller',
+  'critical_system_object',
+]);
+export type ComputerWriteBlock = z.infer<typeof computerWriteBlockSchema>;
+
 export const computerSummarySchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
@@ -99,6 +108,7 @@ export const computerDetailSchema = computerSummarySchema.extend({
   }),
   // Null for callers without view:raw_attributes.
   rawAttributes: z.record(z.string(), z.unknown()).nullable(),
+  writeBlock: computerWriteBlockSchema.nullable(),
 });
 export type ComputerDetail = z.infer<typeof computerDetailSchema>;
 
