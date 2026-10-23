@@ -22,34 +22,49 @@ const initial = computed(() => {
 </script>
 
 <template>
-  <RouterLink
-    v-if="to"
-    :to="to"
-    class="gchip linkable"
-    :class="{ nested }"
-    :title="nested ? 'Inherited via nested group · open detail' : 'Open group detail'"
-  >
-    <span class="gchip-icon">{{ nested ? '⤴' : initial }}</span>
-    <span :style="sensitive ? { color: 'var(--red)' } : undefined">{{ name }}</span>
-    <span v-if="removable" class="gchip-x" @click.prevent.stop="$emit('remove')">
-      <i class="pi pi-times" />
+  <!-- Remove is a button beside the chip, never inside the link, so it has
+       its own focus stop and target. -->
+  <span class="gchip-wrap">
+    <RouterLink
+      v-if="to"
+      :to="to"
+      class="gchip linkable"
+      :class="{ nested }"
+      :title="nested ? 'Inherited via nested group · open detail' : 'Open group detail'"
+    >
+      <span class="gchip-icon">{{ nested ? '⤴' : initial }}</span>
+      <span :style="sensitive ? { color: 'var(--red)' } : undefined">{{ name }}</span>
+    </RouterLink>
+    <span
+      v-else
+      class="gchip"
+      :class="{ nested }"
+      :title="nested ? 'Inherited via nested group' : ''"
+    >
+      <span class="gchip-icon">{{ nested ? '⤴' : initial }}</span>
+      <span :style="sensitive ? { color: 'var(--red)' } : undefined">{{ name }}</span>
     </span>
-  </RouterLink>
-  <span
-    v-else
-    class="gchip"
-    :class="{ nested }"
-    :title="nested ? 'Inherited via nested group' : ''"
-  >
-    <span class="gchip-icon">{{ nested ? '⤴' : initial }}</span>
-    <span :style="sensitive ? { color: 'var(--red)' } : undefined">{{ name }}</span>
-    <span v-if="removable" class="gchip-x" @click="$emit('remove')">
-      <i class="pi pi-times" />
-    </span>
+    <button
+      v-if="removable"
+      type="button"
+      class="gchip-x"
+      :aria-label="`Remove from ${name}`"
+      :title="`Remove from ${name}`"
+      @click="$emit('remove')"
+    >
+      <i class="pi pi-times" aria-hidden="true" />
+    </button>
   </span>
 </template>
 
 <style scoped>
+.gchip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
 /* Both variants share the .gchip class from theme.css; this scoped block
  * just adds the link-specific affordances. */
 .gchip.linkable {
