@@ -25,10 +25,10 @@ import { useConfirm } from '../../design/composables/useConfirm.js';
 import { fmtRelative } from '../../design/lib/format.js';
 
 // Settings → Entra ID tab. Configures the Microsoft Entra (Graph)
-// integration on a per-directory basis.
+// integration of the directory the operator is signed in to; the API
+// refuses any other directory's.
 //
-// The form for each directory is opened in a modal dialog rather than
-// inline cards: the field set is non-trivial (tenant ID, client ID,
+// The form is opened in a modal dialog rather than an inline card: the field set is non-trivial (tenant ID, client ID,
 // secret rotation, four feature toggles, webhook URL, permissions help)
 // and the modal keeps the parent list compact.
 
@@ -49,13 +49,11 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const r = await api.directories.list();
-    const dirs = r.directories.filter((d) => d.configured);
-    // Pull each directory's Entra integration in parallel — the API
-    // returns null on directories that have nothing configured yet.
-    const integrations = await Promise.all(
-      dirs.map((d) => api.directories.entra.get(d.id).then((res) => res.integration)),
-    );
-    rows.value = dirs.map((d, i) => ({ directory: d, integration: integrations[i] ?? null }));
+    const own = r.directories.find((d) => d.configured && d.id === auth.actor?.directoryId);
+    // The API returns null when nothing is configured yet.
+    rows.value = own
+      ? [{ directory: own, integration: (await api.directories.entra.get(own.id)).integration }]
+      : [];
   } catch (err) {
     toast.add({
       severity: 'error',
@@ -235,6 +233,15 @@ async function submitEdit(): Promise<void> {
   }
 }
 
+function startTest(): void {
+  if (!auth.elevated) {
+    afterStepUp = runTest;
+    editStepUpOpen.value = true;
+    return;
+  }
+  void runTest();
+}
+
 async function runTest(): Promise<void> {
   if (!editTarget.value) return;
   editTestResult.value = null;
@@ -320,16 +327,17 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
       <div>
         <h2 class="int-title">Entra ID</h2>
         <p class="int-sub">
-          Connect Microsoft Entra (Graph) per AD directory to enrich users with photos, sign-in
-          activity, and MFA state, and to post admin notifications to Teams.
+          Connect Microsoft Entra (Graph) to the directory you're signed in to, to enrich users with
+          photos, sign-in activity, and MFA state, and to post admin notifications to Teams. To
+          configure another directory, sign in to it.
         </p>
       </div>
     </header>
 
-    <!-- Entra integration: one card per configured AD directory -->
+    <!-- Entra integration of the signed-in directory -->
     <Card
       title="Microsoft Entra ID (Microsoft Graph)"
-      :sub="'Photos, sign-in activity, and Teams notifications. Configure per directory.'"
+      sub="Photos, sign-in activity, and Teams notifications."
     >
       <div v-if="loading" class="int-loading">Loading…</div>
       <EmptyState
@@ -500,7 +508,7 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
               severity="secondary"
               :loading="editTestRunning"
               :disabled="!editTarget.integration"
-              @click="runTest"
+              @click="startTest"
             />
             <Message
               v-if="editTestResult"
