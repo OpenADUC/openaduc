@@ -14,7 +14,13 @@ const api = {
   },
   directories: { policy: vi.fn(async () => ({ policy: null })) },
   auth: {
-    stepUp: vi.fn(async () => ({ elevated: { active: true, expiresAt: '2999-01-01T00:00:00Z' } })),
+    stepUp: vi.fn(async () => ({
+      elevated: {
+        active: true,
+        idleExpiresAt: '2999-01-01T00:00:00Z',
+        absoluteExpiresAt: '2999-01-01T00:00:00Z',
+      },
+    })),
   },
 };
 vi.mock('../../api/index.js', () => ({ api }));
@@ -30,8 +36,12 @@ async function openTab(elevated: boolean) {
     capabilities: ['configure:security'],
     directoryId: 1,
     elevated: elevated
-      ? { active: true, expiresAt: '2999-01-01T00:00:00Z' }
-      : { active: false, expiresAt: null },
+      ? {
+          active: true,
+          idleExpiresAt: '2999-01-01T00:00:00Z',
+          absoluteExpiresAt: '2999-01-01T00:00:00Z',
+        }
+      : { active: false, idleExpiresAt: null, absoluteExpiresAt: null },
   } as never; // only these fields matter
   const tab = mount(PolicyTab, { global: { plugins: [pinia, PrimeVue, ToastService] } });
   await flushPromises();

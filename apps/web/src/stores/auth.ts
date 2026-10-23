@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { defineStore } from 'pinia';
 import { computed, onScopeDispose, ref } from 'vue';
-import type { LoginRequest, MeResponse } from '@openaduc/shared';
+import type { ElevatedSessionState, LoginRequest, MeResponse } from '@openaduc/shared';
 import { api } from '../api/index.js';
 import { ApiError, setStepUpRequiredHandler } from '../api/client.js';
+
+const NOT_ELEVATED: ElevatedSessionState = {
+  active: false,
+  idleExpiresAt: null,
+  absoluteExpiresAt: null,
+};
 
 /**
  * Auth store. Owns:
@@ -44,7 +50,8 @@ export const useAuthStore = defineStore('auth', () => {
   onScopeDispose(() => window.clearInterval(tickHandle));
 
   const isAuthenticated = computed(() => actor.value !== null);
-  const elevatedExpiresAt = computed(() => actor.value?.elevated.expiresAt ?? null);
+  // When the elevated session ends if the operator does nothing more.
+  const elevatedExpiresAt = computed(() => actor.value?.elevated.idleExpiresAt ?? null);
   const elevatedExpiresAtMs = computed(() => {
     const iso = elevatedExpiresAt.value;
     return iso ? new Date(iso).getTime() : null;
@@ -139,7 +146,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (reason && actor.value?.elevated.active) {
       actor.value = {
         ...actor.value,
-        elevated: { active: false, expiresAt: null },
+        elevated: NOT_ELEVATED,
       };
     }
     stepUpReason.value = reason;
@@ -159,7 +166,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (actor.value) {
       actor.value = {
         ...actor.value,
-        elevated: { active: resp.elevated.active, expiresAt: resp.elevated.expiresAt },
+        elevated: resp.elevated,
       };
     }
     // Run any retry queued by a caller whose original action triggered the
@@ -217,7 +224,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (actor.value) {
         actor.value = {
           ...actor.value,
-          elevated: { active: false, expiresAt: null },
+          elevated: NOT_ELEVATED,
         };
       }
     }

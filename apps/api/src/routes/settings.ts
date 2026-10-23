@@ -36,7 +36,8 @@ const ALLOWED_SETTINGS: Record<
   'audit.retention_days': { type: 'number', min: -1, max: 36500 },
   'session.idle_timeout_minutes': { type: 'number', min: 1, max: 1440 },
   'session.absolute_timeout_hours': { type: 'number', min: 1, max: 168 },
-  'stepup.ttl_minutes': { type: 'number', min: 1, max: 480 },
+  'stepup.idle_timeout_minutes': { type: 'number', min: 1, max: 480 },
+  'stepup.absolute_lifetime_minutes': { type: 'number', min: 1, max: 1440 },
   'sync.cron': { type: 'string-nullable' },
 };
 

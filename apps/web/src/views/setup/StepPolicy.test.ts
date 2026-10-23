@@ -10,7 +10,13 @@ const api = {
   settings: { list: vi.fn(async () => ({ settings: {} })) },
   setup: { policy: vi.fn(async () => ({ ok: true })) },
   auth: {
-    stepUp: vi.fn(async () => ({ elevated: { active: true, expiresAt: '2999-01-01T00:00:00Z' } })),
+    stepUp: vi.fn(async () => ({
+      elevated: {
+        active: true,
+        idleExpiresAt: '2999-01-01T00:00:00Z',
+        absoluteExpiresAt: '2999-01-01T00:00:00Z',
+      },
+    })),
   },
 };
 vi.mock('../../api/index.js', () => ({ api }));

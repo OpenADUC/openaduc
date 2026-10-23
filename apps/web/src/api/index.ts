@@ -13,6 +13,7 @@ import type {
   DeletedUserSearchQuery,
   DeletedUserSearchResponse,
   DirectoryOu,
+  ElevatedSessionState,
   GroupDetail,
   GroupPolicyDetail,
   GroupPolicyListResponse,
@@ -337,9 +338,7 @@ export const api = {
     me(): Promise<{ actor: MeResponse }> {
       return apiFetch('/auth/me');
     },
-    stepUp(
-      body: StepUpRequest,
-    ): Promise<{ elevated: { active: boolean; expiresAt: string | null } }> {
+    stepUp(body: StepUpRequest): Promise<{ elevated: ElevatedSessionState }> {
       return apiFetch('/auth/step-up', { method: 'POST', body: JSON.stringify(body) });
     },
     revokeStepUp(): Promise<{ ok: boolean }> {

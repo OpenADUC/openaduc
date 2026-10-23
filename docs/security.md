@@ -21,7 +21,7 @@ There is no local break-glass account yet: if every domain controller is unreach
 
 Successful sign-in mints an `admin_sessions` row and a signed cookie. The session stores a **snapshot** of the operator's capabilities, resolved from their AD group memberships at sign-in.
 
-Every step-up re-reads those memberships from the fresh bind and replaces the snapshot. An operator removed from a role group loses that role's capabilities at their next step-up, and one left with no role is signed out. Stepping up never extends the session's absolute expiry. The worst case for a removed operator is therefore: write access until their current elevated session expires (`STEP_UP_TTL_MINUTES`), and read access until the session itself ends (idle or absolute timeout below). To cut access immediately, disable the AD account: binds then fail, so they can't step up again.
+Every step-up re-reads those memberships from the fresh bind and replaces the snapshot. An operator removed from a role group loses that role's capabilities at their next step-up, and one left with no role is signed out. Stepping up never extends the session's absolute expiry. The worst case for a removed operator is therefore: write access until their current elevated session ends (see [step-up](#step-up-authentication)), and read access until the session itself ends (idle or absolute timeout below). To cut access immediately, disable the AD account: binds then fail, so they can't step up again.
 
 Two timeouts apply, both configurable:
 
@@ -47,9 +47,16 @@ A failed capability check returns 403 and writes an `authz.deny` row to the audi
 
 ## Step-up authentication
 
-Mutating routes require **step-up auth**: the operator re-enters their AD password, the API rebinds against the directory, and on success mints an `elevated_sessions` row with a short TTL (`STEP_UP_TTL_MINUTES`, default 60 min) and a write-only subset of capabilities.
+Mutating routes require **step-up auth**: the operator re-enters their AD password, the API rebinds against the directory, and on success mints an `elevated_sessions` row with a write-only subset of capabilities.
 
-The operator's password is held only in process memory in `CredentialCacheService`. It lives in a `Buffer` that is zeroed on eviction, expires at the elevated session TTL, and is never written to disk or the database. An API restart wipes all cached passwords, forcing re-step-up — which is intentional.
+The elevated session ends at whichever comes first:
+
+- **Idle timeout** (`stepup.idle_timeout_minutes`, default 15 min): every authenticated request from the operator pushes it back. To spare the database, a request that would move it by less than a twentieth of the timeout isn't recorded, so the session can end up to that much early.
+- **Absolute lifetime** (`stepup.absolute_lifetime_minutes`, default 4 h): counted from step-up, however active the operator is. An elevated session also never outlives the session it belongs to.
+
+Both are policy settings. Changing them requires step-up and writes a `settings.update` audit row; a new idle timeout applies to open elevated sessions at their next request, a new absolute lifetime from the next step-up.
+
+The operator's password is held only in process memory in `CredentialCacheService`. It lives in a `Buffer` that is zeroed on eviction, is evicted when the elevated session ends by either limit (a sweep every few seconds catches an operator who never comes back), and is never written to disk or the database. An API restart wipes all cached passwords, forcing re-step-up — which is intentional.
 
 This is what enables **write-as-user**: every AD modification is bound as the operator, not as a shared service account, so AD's own audit log attributes the change to the right human.
 
