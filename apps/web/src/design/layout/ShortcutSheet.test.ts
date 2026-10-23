@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import { defineComponent, h, ref } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ShortcutSheet from './ShortcutSheet.vue';
 import { useShortcuts, type Shortcut } from '../composables/useShortcuts.js';
+import { useThemeStore } from '../stores/useTheme.js';
 
 enableAutoUnmount(afterEach);
 afterEach(() => {
@@ -55,11 +57,14 @@ const Page = defineComponent({
 
 async function open() {
   vi.clearAllMocks();
+  localStorage.clear();
+  const pinia = createPinia();
+  setActivePinia(pinia);
   locked.value = true;
   enabled.value = true;
   const sheet = mount(ShortcutSheet, {
     attachTo: document.body,
-    global: { plugins: [PrimeVue] },
+    global: { plugins: [pinia, PrimeVue] },
   });
   const page = mount(Page, { attachTo: document.body });
   await flushPromises();
@@ -241,5 +246,46 @@ describe('the shortcut cheat sheet', () => {
     await flushPromises();
     press('u');
     expect(unlock).not.toHaveBeenCalled();
+  });
+});
+
+describe('turning single-key shortcuts off', () => {
+  const persisted = () => JSON.parse(localStorage.getItem('openaduc:theme') ?? '{}');
+
+  it('is a switch in the cheat sheet, after which no key runs, not even ?', async () => {
+    await open();
+    press('?', { shiftKey: true });
+    await flushPromises();
+    const toggle = sheetDialog()!.querySelector<HTMLInputElement>('input[role="switch"]')!;
+    expect(toggle.checked).toBe(true);
+    expect(sheetDialog()!.textContent).toContain('Single-key shortcuts');
+
+    toggle.click();
+    await flushPromises();
+    expect(sheetDialog()!.textContent).toContain('Appearance');
+    expect(persisted().singleKeyShortcuts).toBe(false);
+    sheetDialog()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
+    await flushPromises();
+    expect(sheetDialog()).toBeNull();
+
+    press('u');
+    press('?', { shiftKey: true });
+    await flushPromises();
+    expect(unlock).not.toHaveBeenCalled();
+    expect(sheetDialog()).toBeNull();
+  });
+
+  it('stays off in this browser, and works again once turned back on', async () => {
+    await open();
+    useThemeStore().singleKeyShortcuts = false;
+    await flushPromises();
+    setActivePinia(createPinia());
+    expect(useThemeStore().singleKeyShortcuts).toBe(false);
+    press('u');
+    expect(unlock).not.toHaveBeenCalled();
+
+    useThemeStore().singleKeyShortcuts = true;
+    press('u');
+    expect(unlock).toHaveBeenCalledOnce();
   });
 });

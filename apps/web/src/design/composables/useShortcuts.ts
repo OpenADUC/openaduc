@@ -4,6 +4,7 @@
 // it can't list a shortcut that doesn't work or miss one that does.
 
 import { computed, getCurrentScope, onScopeDispose, shallowReactive } from 'vue';
+import { useThemeStore } from '../stores/useTheme.js';
 
 export const SHORTCUT_SECTIONS = ['List', 'Actions', 'Tabs', 'General'] as const;
 export type ShortcutSection = (typeof SHORTCUT_SECTIONS)[number];
@@ -93,7 +94,7 @@ function forShortcuts(e: KeyboardEvent): boolean {
 
 /** The window's keydown handler: runs the key's shortcut if one can run. */
 export function onShortcutKey(e: KeyboardEvent): void {
-  if (!forShortcuts(e)) return;
+  if (!useThemeStore().singleKeyShortcuts || !forShortcuts(e)) return;
   // Caps Lock types 'U' without Shift; Shift+U was turned away above.
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const shortcut = shortcuts.value.find((s) => s.key === key);
