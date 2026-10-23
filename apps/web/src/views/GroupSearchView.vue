@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, type ComponentPublicInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
@@ -20,6 +20,7 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
+import { useListShortcuts } from '../design/composables/useListShortcuts.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
@@ -71,6 +72,15 @@ const {
   noun: ['group', 'groups'],
 });
 const drawerOpen = ref(false);
+const searchField = ref<ComponentPublicInstance | null>(null);
+const { setTable: setListTable, pt: listPt } = useListShortcuts<GroupSummary>({
+  noun: ['group', 'groups'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
+  searchField: searchField,
+});
 
 const filters = ref<{
   name: FilterEntry<string>;
@@ -250,6 +260,8 @@ onMounted(load);
       scroll-height="flex"
       @row-click="(ev) => openDetail(ev.data as GroupSummary)"
       v-bind="listTable"
+      :ref="setListTable"
+      :pt="listPt"
       class="groups-table"
     >
       <template #empty>
@@ -356,7 +368,12 @@ onMounted(load);
       <div class="filter-form">
         <div class="filter-field">
           <label class="filter-label">Name</label>
-          <InputText v-model="filters.name.value" placeholder="Contains…" class="filter-input" />
+          <InputText
+            ref="searchField"
+            v-model="filters.name.value"
+            placeholder="Contains…"
+            class="filter-input"
+          />
         </div>
 
         <div v-if="showTypeFilter" class="filter-field">

@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, type ComponentPublicInstance } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
@@ -20,6 +20,7 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
+import { useListShortcuts } from '../design/composables/useListShortcuts.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
@@ -55,6 +56,15 @@ const {
   noun: ['computer', 'computers'],
 });
 const drawerOpen = ref(false);
+const searchField = ref<ComponentPublicInstance | null>(null);
+const { setTable: setListTable, pt: listPt } = useListShortcuts<ComputerSummary>({
+  noun: ['computer', 'computers'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
+  searchField: searchField,
+});
 
 const filters = ref<{
   name: FilterEntry<string>;
@@ -227,6 +237,8 @@ onMounted(load);
       scroll-height="flex"
       @row-click="(ev) => openDetail(ev.data as ComputerSummary)"
       v-bind="listTable"
+      :ref="setListTable"
+      :pt="listPt"
       class="computers-table"
     >
       <template #empty>
@@ -317,6 +329,7 @@ onMounted(load);
         <div class="filter-field">
           <label class="filter-label">Name</label>
           <InputText
+            ref="searchField"
             v-model="filters.name.value"
             placeholder="Hostname, sAM, or FQDN…"
             class="filter-input"
