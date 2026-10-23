@@ -74,6 +74,23 @@ describe('elevated session limits', () => {
   });
 });
 
+describe('elevated session limits that conflict', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("won't save an idle timeout longer than the absolute lifetime", async () => {
+    api.settings.list.mockResolvedValueOnce({
+      settings: {
+        'stepup.idle_timeout_minutes': { value: 300 },
+        'stepup.absolute_lifetime_minutes': { value: 240 },
+      },
+    } as never);
+    const { save, tab } = await openTab(true);
+
+    expect(tab.text()).toContain("The idle timeout can't be longer than the absolute lifetime.");
+    expect(save.attributes('disabled')).toBeDefined();
+  });
+});
+
 // Settings changes need step-up (ADR 0001: the first write prompts, then retries).
 describe('saving settings', () => {
   beforeEach(() => vi.clearAllMocks());

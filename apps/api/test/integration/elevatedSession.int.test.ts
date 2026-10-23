@@ -174,6 +174,21 @@ describe('elevated sessions end when idle', () => {
     expect((await admin.get('/api/auth/me')).statusCode).toBe(401);
   });
 
+  it('refuses an idle timeout longer than the absolute lifetime', async () => {
+    const admin = await steppedUpAdmin();
+
+    const refused = await admin.patch('/api/settings', { 'stepup.idle_timeout_minutes': 300 });
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json().error.message).toMatch(/idle timeout.*absolute lifetime/i);
+
+    const both = {
+      'stepup.idle_timeout_minutes': 300,
+      'stepup.absolute_lifetime_minutes': 300,
+    };
+    expect((await admin.patch('/api/settings', both)).statusCode).toBe(200);
+    await setSetting('stepup.idle_timeout_minutes', 15);
+  });
+
   it('makes the limits policy settings that need step-up to change and are audited', async () => {
     const admin = api.client();
     await admin.signIn(api, 'oa.admin');
@@ -198,6 +213,7 @@ describe('elevated sessions end when idle', () => {
       .select(['before_json', 'after_json'])
       .where('action', '=', 'settings.update')
       .where('target_id', '=', 'stepup.idle_timeout_minutes')
+      .orderBy('id', 'desc')
       .executeTakeFirstOrThrow();
     expect(audit).toMatchObject({ before_json: { value: 15 }, after_json: { value: 5 } });
 
