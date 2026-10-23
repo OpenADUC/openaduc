@@ -312,6 +312,8 @@ const {
   valid,
   saving,
   save: saveAttributes,
+  failure: saveFailure,
+  dismiss: dismissSaveFailure,
 } = useUserAttributeEdit({
   onSaved: async (n) => {
     toast.add({
@@ -322,8 +324,6 @@ const {
     });
     await load();
   },
-  onFailed: (message) =>
-    toast.add({ severity: 'error', summary: 'Save failed', detail: message, life: 6000 }),
 });
 
 const {
@@ -1781,6 +1781,19 @@ watch(user, (u) => {
                 @click="saveAttributes()"
               />
             </span>
+            <div v-if="saveFailure" class="save-bar-failure" role="alert">
+              <i class="pi pi-times-circle" aria-hidden="true" />
+              <span>Save failed: {{ saveFailure }}</span>
+              <Button
+                icon="pi pi-times"
+                text
+                rounded
+                size="small"
+                severity="secondary"
+                aria-label="Dismiss"
+                @click="dismissSaveFailure"
+              />
+            </div>
           </div>
         </transition>
       </template>
@@ -2409,6 +2422,7 @@ watch(user, (u) => {
 
 .save-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-top: 16px;
@@ -2449,6 +2463,14 @@ watch(user, (u) => {
   align-items: center;
   gap: 6px;
   margin-left: auto;
+}
+
+.save-bar-failure {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--red);
 }
 
 .save-bar-enter-active,
