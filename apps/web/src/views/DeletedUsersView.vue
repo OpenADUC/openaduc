@@ -102,7 +102,8 @@ function onPage(ev: DataTablePageEvent): void {
 const pending = ref<DeletedUserSummary | null>(null);
 const dialogOpen = ref(false);
 const restoring = ref(false);
-// Shown in the dialog until the next attempt or the dialog closes.
+// Shown in the dialog until it's dismissed, the restore is retried, or the
+// dialog is opened again.
 const restoreError = ref<string | null>(null);
 
 function askRestore(row: DeletedUserSummary): void {
