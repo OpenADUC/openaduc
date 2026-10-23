@@ -10,9 +10,6 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 // Known gaps, keyed by route. Each breaks a rule today; #72 closes them and
 // empties this list. Don't add to it to get a new route past the test.
 const ALLOWLIST: Record<string, string> = {
-  // Cross-directory access.
-  'GET /api/audit-events': "returns every directory's audit rows; no directory filter",
-
   // Writes without step-up.
   'PATCH /api/settings':
     'can turn off view/search auditing, change retention and lengthen sessions',

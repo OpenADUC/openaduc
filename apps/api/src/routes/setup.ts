@@ -509,6 +509,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             action: 'settings.update',
             result: 'success',
             actorAuthMethod: 'ad-password',
+            providerId: null,
             targetType: 'config',
             targetId: u.key,
             metadata: { key: u.key, source: 'setup-wizard' },
