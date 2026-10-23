@@ -48,8 +48,18 @@ const api = {
     get: vi.fn(async (id: string) => ({
       group: aGroup(id, id === 'g1' ? 'Engineering' : 'Sales'),
     })),
+    search: vi.fn(async () => ({
+      rows: [{ ...aGroup('g5', 'Contractors'), memberCount: 0 }],
+      total: 1,
+    })),
+    addGroup: vi.fn(async () => ({ ok: true })),
+    removeGroup: vi.fn(async () => ({ ok: true })),
   },
   users: {
+    search: vi.fn(async () => ({
+      rows: [{ ...jane, id: 'u2', displayName: 'John Smith', samAccountName: 'jsmith' }],
+      total: 1,
+    })),
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
   },
@@ -93,11 +103,23 @@ async function openMembers(id = 'g1') {
 
 type Page = Awaited<ReturnType<typeof openMembers>>['page'];
 
-async function click(page: Page, label: string) {
-  const button = page.findAll('button').find((b) => b.text() === label);
+async function click(page: Page, label: string, nth = 0) {
+  const button = page.findAll('button').filter((b) => b.text() === label)[nth];
   expect(button).toBeDefined();
   await button!.trigger('click');
   await flushPromises();
+}
+
+async function addMember(page: Page, query: string, pick: string) {
+  await click(page, 'Add member');
+  await page.get('[role="dialog"] input').setValue(query);
+  const option = await vi.waitFor(() => {
+    const found = page.findAll('[role="option"]').find((o) => o.text().includes(pick));
+    expect(found).toBeDefined();
+    return found!;
+  });
+  await option.trigger('click');
+  await click(page, 'Add');
 }
 
 describe('changing a group’s members', () => {
@@ -124,6 +146,30 @@ describe('changing a group’s members', () => {
     await row!.trigger('click');
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe('/groups/g9');
+  });
+
+  it('takes a nested group out without asking, and Undo puts it back', async () => {
+    const { page } = await openMembers();
+
+    await click(page, 'Remove', 1);
+    expect(api.groups.removeGroup).toHaveBeenCalledWith('g9', { groupId: 'g1' });
+    expect(page.text()).toContain('Removed Interns from Engineering');
+
+    await click(page, 'Undo');
+    expect(api.groups.addGroup).toHaveBeenCalledWith('g9', { groupId: 'g1' });
+  });
+
+  it('adds a user or a group found by name', async () => {
+    const { page } = await openMembers();
+
+    await addMember(page, 'jo', 'John Smith');
+    expect(api.users.addGroup).toHaveBeenCalledWith('u2', { groupId: 'g1' });
+    expect(page.text()).toContain('Added John Smith to Engineering');
+
+    await addMember(page, 'con', 'Contractors');
+    expect(api.groups.addGroup).toHaveBeenCalledWith('g5', { groupId: 'g1' });
+    expect(page.text()).toContain('Added Contractors to Engineering');
+    expect(api.groups.get).toHaveBeenCalledTimes(3);
   });
 
   it('keeps a failed remove on the Members tab until dismissed', async () => {

@@ -134,8 +134,9 @@ describe('useAddToGroup', () => {
     expect(onChanged).toHaveBeenCalledWith(
       'add',
       {
-        userId: 'u1',
-        userLabel: 'Jane Doe',
+        memberKind: 'user',
+        memberId: 'u1',
+        memberLabel: 'Jane Doe',
         groupId: 'g9',
         groupLabel: 'CN=g9,DC=corp,DC=example',
       },

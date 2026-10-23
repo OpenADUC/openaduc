@@ -702,7 +702,7 @@ const {
   },
 });
 
-const isThisUsers = (f: MembershipFailure) => f.op.membership.userId === props.id;
+const isThisUsers = (f: MembershipFailure) => f.op.membership.memberId === props.id;
 const { onPage: removePageFailure } = placeFailure(removeFailure, { belongsHere: isThisUsers });
 const { inDialog: addDialogFailure, onPage: addPageFailure } = placeFailure(addFailure, {
   belongsHere: isThisUsers,
