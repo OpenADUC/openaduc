@@ -20,6 +20,7 @@ const api = {
     activity: vi.fn(async () => ({ rows: [] })),
     update: vi.fn(async () => ({ user })),
     resetPassword: vi.fn(async () => ({})),
+    unlock: vi.fn(async () => ({})),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -269,5 +270,27 @@ describe('resetting a locked-out user’s password', () => {
     await click(page, 'Reset password');
     expect(page.text()).toContain('Force change at next sign-in');
     expect(page.text()).not.toContain('Also unlock the account');
+  });
+});
+
+describe('unlocking from the Account tab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user });
+  });
+
+  it('unlocks after the step-up its click prompts, then shows the account unlocked', async () => {
+    api.users.get.mockResolvedValueOnce({ user: aUserDetail({ locked: true }) });
+    const { page, auth } = await openTab('account', ['read:user', 'write:user.unlock'], false);
+
+    await click(page, 'Unlock account');
+    expect(auth.stepUpRequested).toBe(true);
+    expect(api.users.unlock).not.toHaveBeenCalled();
+
+    await auth.stepUp('pw');
+    await flushPromises();
+    expect(api.users.unlock).toHaveBeenCalledWith('u1');
+    expect(api.users.get).toHaveBeenCalledTimes(2);
+    expect(page.findAll('button').some((b) => b.text() === 'Not locked')).toBe(true);
   });
 });

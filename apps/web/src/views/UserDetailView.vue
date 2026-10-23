@@ -16,8 +16,8 @@ import TreeSelect from 'primevue/treeselect';
 import type { MenuItem } from 'primevue/menuitem';
 import type { TreeNode } from 'primevue/treenode';
 import { useToast } from 'primevue/usetoast';
+import type { ToastMessageOptions } from 'primevue/toast';
 import { api, type AuditEventRow } from '../api/index.js';
-import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
@@ -34,12 +34,16 @@ import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
-import type { GroupSummary, UserDetail } from '@openaduc/shared';
+import type { UserDetail } from '@openaduc/shared';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useCompactTabs } from './_detail/useCompactTabs';
 import { useRouteTab } from './_detail/useRouteTab';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
+import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
+import { useUserMove } from '../design/composables/useUserMove.js';
+import { useGroupMembership, type Membership } from '../design/composables/useGroupMembership.js';
+import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
   useUserAttributeEdit,
   type MultiValuedAttribute,
@@ -473,69 +477,44 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 
 // ---- Hero actions (unlock / enable / disable) ----------------------------
 
-const actionRunning = ref<'unlock' | 'enable' | 'disable' | 'move' | null>(null);
-
-async function doUnlock(): Promise<void> {
-  if (!user.value) return;
-  actionRunning.value = 'unlock';
-  // Snapshot the lock context before the call so the toast can mention it
-  // even though the post-unlock reload clears the fields.
-  const wasLockedAt = user.value.lockedAt;
-  const wouldHaveAutoUnlockedAt = user.value.autoUnlockAt;
-  try {
-    await api.users.unlock(user.value.id);
-    const detailParts: string[] = [
-      `${user.value.displayName ?? user.value.samAccountName} can sign in now.`,
-    ];
-    if (wasLockedAt) {
-      detailParts.push(`Was locked at ${fmtAbsolute(wasLockedAt)}.`);
-    }
-    if (wouldHaveAutoUnlockedAt) {
-      detailParts.push(`Would have auto-unlocked at ${fmtAbsolute(wouldHaveAutoUnlockedAt)}.`);
-    }
-    toast.add({
-      severity: 'success',
-      summary: 'Account unlocked',
-      detail: detailParts.join(' '),
-      life: 5000,
-    });
+const { running: accountActionRunning, run: runAccountAction } = useAccountActions<UserDetail>({
+  onDone: async (action, u) => {
+    toast.add(accountActionToast(action, u));
     await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, doUnlock)) return;
+  },
+  onFailed: (action, _u, message) =>
     toast.add({
       severity: 'error',
-      summary: 'Unlock failed',
-      detail: err instanceof ApiError ? err.message : String(err),
+      summary: `${ACCOUNT_ACTION_VERB[action]} failed`,
+      detail: message,
       life: 6000,
-    });
-  } finally {
-    actionRunning.value = null;
+    }),
+});
+
+const ACCOUNT_ACTION_VERB: Record<AccountAction, string> = {
+  unlock: 'Unlock',
+  enable: 'Enable',
+  disable: 'Disable',
+};
+
+// The account is as it was before the action, so an unlock can still say
+// when it was locked even though the reload clears that.
+function accountActionToast(action: AccountAction, u: UserDetail): ToastMessageOptions {
+  if (action !== 'unlock') {
+    return {
+      severity: 'success',
+      summary: action === 'disable' ? 'Account disabled' : 'Account enabled',
+      life: 3000,
+    };
   }
+  const detail = [`${u.displayName ?? u.samAccountName} can sign in now.`];
+  if (u.lockedAt) detail.push(`Was locked at ${fmtAbsolute(u.lockedAt)}.`);
+  if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
+  return { severity: 'success', summary: 'Account unlocked', detail: detail.join(' '), life: 5000 };
 }
 
-async function doToggleEnabled(disable: boolean): Promise<void> {
-  if (!user.value) return;
-  actionRunning.value = disable ? 'disable' : 'enable';
-  try {
-    if (disable) await api.users.disable(user.value.id);
-    else await api.users.enable(user.value.id);
-    toast.add({
-      severity: 'success',
-      summary: disable ? 'Account disabled' : 'Account enabled',
-      life: 3000,
-    });
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, () => doToggleEnabled(disable))) return;
-    toast.add({
-      severity: 'error',
-      summary: disable ? 'Disable failed' : 'Enable failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    actionRunning.value = null;
-  }
+function runOnUser(action: AccountAction): void {
+  if (user.value) runAccountAction(action, user.value);
 }
 
 // ---- Reset password dialog ------------------------------------------------
@@ -561,42 +540,40 @@ async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
 // ---- Move to OU ----------------------------------------------------------
 
 const moveDialogOpen = ref(false);
-const moveSubmitting = ref(false);
-const moveError = ref<string | null>(null);
-// PrimeVue TreeSelect uses a record keyed by node `key` for selection state.
-// We always operate on a single OU, so the record will have at most one entry.
-const moveSelection = ref<Record<string, boolean>>({});
-// Loaded once when the dialog opens. Tree is rebuilt reactively from this.
-const moveOus = ref<
-  { distinguishedName: string; name: string; parentDn: string | null; stale: boolean }[]
->([]);
-const moveOusLoading = ref(false);
-
-// Current parent OU of the loaded user (null while no user / DN can't be split).
-const currentOuDn = computed<string | null>(() => {
-  const dn = user.value?.distinguishedName;
-  if (!dn) return null;
-  // Same comma-aware split the API uses; duplicated here so we don't need a
-  // server round-trip just to compute the parent.
-  let i = 0;
-  while (i < dn.length) {
-    const ch = dn[i];
-    if (ch === '\\') {
-      i += 2;
-      continue;
-    }
-    if (ch === ',') return dn.slice(i + 1).trim() || null;
-    i++;
-  }
-  return null;
+const {
+  ous: moveOus,
+  loading: moveOusLoading,
+  currentOuDn,
+  destination: moveDestination,
+  atCurrent: moveTargetIsCurrent,
+  ready: moveReady,
+  submitting: moveSubmitting,
+  error: moveError,
+  load: loadMove,
+  submit: submitMove,
+} = useUserMove({
+  onMoved: async (_u, to) => {
+    toast.add({
+      severity: 'success',
+      summary: 'User moved',
+      detail: `Now under ${to}`,
+      life: 4000,
+    });
+    moveDialogOpen.value = false;
+    await load();
+  },
 });
 
-// Build a PrimeVue TreeNode forest from the flat OU list. OUs whose
-// `parentDn` is unknown to us (e.g. the directory root, or a non-OU
-// container) become roots of the tree.
+// PrimeVue TreeSelect keys its single selection by node key, which is the DN.
+const moveSelection = computed<Record<string, boolean>>({
+  get: () => (moveDestination.value ? { [moveDestination.value]: true } : {}),
+  set: (keys) => (moveDestination.value = Object.keys(keys).find((k) => keys[k]) ?? null),
+});
+
+// OUs whose parent isn't in the list (the domain root, a non-OU container)
+// become roots of the tree.
 const moveOuTree = computed<TreeNode[]>(() => {
   const all = moveOus.value;
-  if (all.length === 0) return [];
   const byDn = new Map<string, TreeNode & { children: TreeNode[] }>();
   for (const ou of all) {
     byDn.set(ou.distinguishedName.toLowerCase(), {
@@ -615,7 +592,6 @@ const moveOuTree = computed<TreeNode[]>(() => {
     if (parent) parent.children!.push(node);
     else roots.push(node);
   }
-  // Sort each level alphabetically by label.
   const sortRec = (nodes: TreeNode[]): void => {
     nodes.sort((a, b) => (a.label ?? '').localeCompare(b.label ?? ''));
     for (const n of nodes) if (n.children) sortRec(n.children);
@@ -624,167 +600,75 @@ const moveOuTree = computed<TreeNode[]>(() => {
   return roots;
 });
 
-const selectedTargetDn = computed<string | null>(() => {
-  const keys = Object.keys(moveSelection.value).filter((k) => moveSelection.value[k]);
-  return keys[0] ?? null;
-});
-
-const moveTargetIsCurrent = computed(() => {
-  const target = selectedTargetDn.value;
-  const current = currentOuDn.value;
-  return target !== null && current !== null && target.toLowerCase() === current.toLowerCase();
-});
-
-async function openMoveDialog(): Promise<void> {
-  moveError.value = null;
-  moveSelection.value = {};
-  moveDialogOpen.value = true;
-  if (moveOus.value.length === 0) {
-    moveOusLoading.value = true;
-    try {
-      const resp = await api.ous.list();
-      moveOus.value = resp.ous;
-    } catch (err) {
-      moveError.value = err instanceof ApiError ? err.message : 'failed to load OUs';
-    } finally {
-      moveOusLoading.value = false;
-    }
-  }
-  // Pre-select the user's current OU so the operator can see where they are
-  // before picking a destination. The TreeSelect renders its parent chain
-  // expanded automatically when a key is preselected.
-  const cur = currentOuDn.value;
-  if (cur) moveSelection.value = { [cur]: true };
-}
-
-async function onMoveSubmit(): Promise<void> {
+function openMoveDialog(): void {
   if (!user.value) return;
-  const target = selectedTargetDn.value;
-  if (!target) {
-    moveError.value = 'pick a destination OU';
-    return;
-  }
-  if (moveTargetIsCurrent.value) {
-    moveError.value = 'user is already in that OU';
-    return;
-  }
-  moveError.value = null;
-  moveSubmitting.value = true;
-  actionRunning.value = 'move';
-  try {
-    await api.users.move(user.value.id, { targetOuDn: target });
-    toast.add({
-      severity: 'success',
-      summary: 'User moved',
-      detail: `Now under ${target}`,
-      life: 4000,
-    });
-    moveDialogOpen.value = false;
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, onMoveSubmit)) return;
-    moveError.value = err instanceof ApiError ? err.message : 'move failed';
-  } finally {
-    moveSubmitting.value = false;
-    actionRunning.value = null;
-  }
+  moveDialogOpen.value = true;
+  void loadMove(user.value.id);
 }
 
 // ---- Group membership: remove + add --------------------------------------
 
-const groupBusy = ref<string | null>(null);
+const groupToast = (summary: string) => toast.add({ severity: 'success', summary, life: 3000 });
+const groupFailed = (summary: string, detail: string) =>
+  toast.add({ severity: 'error', summary, detail, life: 6000 });
 
 // Removing a group is destructive and a single click on the chip's "x" was
 // too easy to trigger by accident. Funnel removals through a confirmation
 // dialog with an explicit Cancel/Remove choice.
-const removeConfirm = ref<{ groupId: string; label: string } | null>(null);
+const removeConfirm = ref<Membership | null>(null);
+const { pending: groupPending, remove: removeMembership } = useGroupMembership({
+  onChanged: async (_change, m) => {
+    groupToast(`Removed from ${m.groupLabel}`);
+    removeConfirm.value = null;
+    await load();
+  },
+  onFailed: (_change, _m, message) => groupFailed('Remove failed', message),
+});
 
 function requestRemoveGroup(groupId: string, label: string): void {
-  if (!user.value || groupBusy.value !== null) return;
-  removeConfirm.value = { groupId, label };
+  if (!user.value || groupPending.value) return;
+  removeConfirm.value = {
+    userId: user.value.id,
+    userLabel: user.value.displayName ?? user.value.samAccountName,
+    groupId,
+    groupLabel: label,
+  };
 }
 
 function cancelRemoveGroup(): void {
   removeConfirm.value = null;
 }
 
-async function confirmRemoveGroup(): Promise<void> {
-  const pending = removeConfirm.value;
-  if (!pending || !user.value) return;
-  groupBusy.value = pending.groupId;
-  try {
-    await api.users.removeGroup(user.value.id, { groupId: pending.groupId });
-    toast.add({ severity: 'success', summary: `Removed from ${pending.label}`, life: 3000 });
-    removeConfirm.value = null;
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, confirmRemoveGroup)) return;
-    toast.add({
-      severity: 'error',
-      summary: 'Remove failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    groupBusy.value = null;
-  }
+function confirmRemoveGroup(): void {
+  if (removeConfirm.value) removeMembership(removeConfirm.value);
 }
 
 const addGroupOpen = ref(false);
-const groupSearchQuery = ref('');
-const groupSearchResults = ref<GroupSummary[]>([]);
-const groupSearchLoading = ref(false);
-let groupSearchTimer: ReturnType<typeof setTimeout> | undefined;
-
-function openAddGroupDialog(): void {
-  groupSearchQuery.value = '';
-  groupSearchResults.value = [];
-  addGroupOpen.value = true;
-}
-
-watch(groupSearchQuery, (q) => {
-  if (groupSearchTimer) clearTimeout(groupSearchTimer);
-  if (q.trim().length < 2) {
-    groupSearchResults.value = [];
-    return;
-  }
-  groupSearchTimer = setTimeout(async () => {
-    groupSearchLoading.value = true;
-    try {
-      const resp = await api.groups.search({ q: q.trim(), pageSize: 12 });
-      groupSearchResults.value = resp.rows;
-    } catch {
-      groupSearchResults.value = [];
-    } finally {
-      groupSearchLoading.value = false;
-    }
-  }, 200);
-});
-
-async function doAddGroup(group: GroupSummary): Promise<void> {
-  if (!user.value) return;
-  groupBusy.value = group.id;
-  try {
-    await api.users.addGroup(user.value.id, { groupId: group.id });
-    toast.add({ severity: 'success', summary: `Added to ${group.name}`, life: 3000 });
+const {
+  loading: addGroupLoading,
+  error: addGroupError,
+  query: groupSearchQuery,
+  queryTooShort: groupQueryTooShort,
+  results: groupSearchResults,
+  searching: groupSearchLoading,
+  isMember,
+  adding: addingGroupId,
+  load: loadAddGroup,
+  add: addToGroup,
+} = useAddToGroup({
+  onAdded: async (m) => {
+    groupToast(`Added to ${m.groupLabel}`);
     addGroupOpen.value = false;
     await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, () => doAddGroup(group))) return;
-    toast.add({
-      severity: 'error',
-      summary: 'Add failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    groupBusy.value = null;
-  }
-}
+  },
+  onFailed: (message) => groupFailed('Add failed', message),
+});
 
-const existingGroupIds = computed(
-  () => new Set((user.value?.groupMemberships ?? []).map((g) => g.id)),
-);
+function openAddGroupDialog(): void {
+  if (!user.value) return;
+  addGroupOpen.value = true;
+  void loadAddGroup(user.value.id);
+}
 
 // Filter + alphabetical sort + direct/inherited split for the Groups tab.
 // AD returns memberships in arbitrary order; sorting by display name keeps
@@ -881,14 +765,14 @@ const actionItems = computed<MenuItem[]>(() => {
   if (!u) return items;
   // The only disable case is "an action of this kind is already running" so
   // the operator can't double-fire.
-  const busy = actionRunning.value !== null;
+  const busy = accountActionRunning.value !== null || moveSubmitting.value;
 
   if (canUnlock.value && u.locked) {
     items.push({
-      label: actionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
+      label: accountActionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
       icon: 'pi pi-unlock',
       disabled: busy,
-      command: () => auth.requireStepUp(doUnlock),
+      command: () => runOnUser('unlock'),
     });
   }
   if (canResetPassword.value) {
@@ -902,24 +786,24 @@ const actionItems = computed<MenuItem[]>(() => {
   if (canEnableDisable.value) {
     if (u.enabled) {
       items.push({
-        label: actionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
+        label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
         icon: 'pi pi-ban',
         class: 'menu-item-danger',
         disabled: busy,
-        command: () => auth.requireStepUp(() => doToggleEnabled(true)),
+        command: () => runOnUser('disable'),
       });
     } else {
       items.push({
-        label: actionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
+        label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
         icon: 'pi pi-check',
         disabled: busy,
-        command: () => auth.requireStepUp(() => doToggleEnabled(false)),
+        command: () => runOnUser('enable'),
       });
     }
   }
   if (canMove.value) {
     items.push({
-      label: actionRunning.value === 'move' ? 'Moving…' : 'Move to OU…',
+      label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi pi-folder-open',
       disabled: busy,
       command: openMoveDialog,
@@ -1207,7 +1091,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
             severity="secondary"
             text
             size="small"
-            :loading="actionRunning !== null"
+            :loading="accountActionRunning !== null || moveSubmitting"
             aria-haspopup="true"
             aria-controls="user-actions-menu"
             @click="toggleActionsMenu"
@@ -1683,7 +1567,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :key="g.id"
                 :name="g.name || g.distinguishedName"
                 :nested="false"
-                :removable="canManageGroups && groupBusy !== g.id"
+                :removable="canManageGroups && groupPending?.membership.groupId !== g.id"
                 :to="{ name: 'group-detail', params: { id: g.id } }"
                 @remove="requestRemoveGroup(g.id, g.name || g.distinguishedName)"
               />
@@ -1741,12 +1625,12 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               v-if="canUnlock"
               :label="user.locked ? 'Unlock account' : 'Not locked'"
               icon="pi pi-unlock"
-              :disabled="!user.locked || actionRunning !== null"
+              :disabled="!user.locked || accountActionRunning !== null"
               :severity="user.locked ? 'warn' : 'secondary'"
               :outlined="!user.locked"
               size="small"
-              :loading="actionRunning === 'unlock'"
-              @click="auth.requireStepUp(doUnlock)"
+              :loading="accountActionRunning === 'unlock'"
+              @click="runOnUser('unlock')"
             />
           </div>
         </Card>
@@ -1960,7 +1844,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       </p>
     </div>
 
-    <!-- Move to OU dialog: TreeSelect over the cached OU list. The current
+    <!-- Move to OU dialog: TreeSelect over the directory's OUs. The current
          parent OU is preselected so the operator can see where they are
          before picking a destination. -->
     <Dialog
@@ -2011,20 +1895,20 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           label="Move"
           icon="pi pi-folder-open"
           :loading="moveSubmitting"
-          :disabled="!selectedTargetDn || moveTargetIsCurrent"
-          @click="onMoveSubmit"
+          :disabled="!moveReady"
+          @click="submitMove"
         />
       </template>
     </Dialog>
 
-    <!-- Add group dialog: simple debounced search against /groups, with
-         the user's existing memberships filtered out of results. -->
+    <!-- Add group dialog: search by name; groups the user is already in are
+         shown but can't be added. -->
     <Dialog
       :visible="addGroupOpen"
       modal
       header="Add to group"
       :style="{ width: '32rem' }"
-      :closable="groupBusy === null"
+      :closable="addingGroupId === null"
       @update:visible="(v) => !v && (addGroupOpen = false)"
     >
       <p class="dialog-prose secondary">Search by name. Adding commits immediately.</p>
@@ -2032,10 +1916,10 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       <div class="group-search-results">
         <div v-if="groupSearchLoading" class="hint">Searching…</div>
         <EmptyState
-          v-else-if="groupSearchQuery.trim().length < 2"
+          v-else-if="groupQueryTooShort"
           icon="pi pi-search"
           title="Type to search"
-          message="At least 2 characters."
+          :message="`At least ${MIN_GROUP_QUERY} characters.`"
           compact
         />
         <EmptyState
@@ -2049,24 +1933,26 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
             v-for="g in groupSearchResults"
             :key="g.id"
             class="group-result"
-            :class="{ disabled: existingGroupIds.has(g.id) }"
+            :class="{ disabled: isMember(g.id) }"
           >
             <div class="group-result-meta">
               <span class="group-result-name">{{ g.name || g.distinguishedName }}</span>
               <span class="group-result-dn mono">{{ g.distinguishedName }}</span>
             </div>
             <Button
-              v-if="!existingGroupIds.has(g.id)"
+              v-if="!isMember(g.id)"
               label="Add"
               icon="pi pi-plus"
               size="small"
-              :loading="groupBusy === g.id"
-              @click="doAddGroup(g)"
+              :loading="addingGroupId === g.id"
+              :disabled="addingGroupId !== null || addGroupLoading"
+              @click="addToGroup(g)"
             />
             <span v-else class="hint">already a member</span>
           </li>
         </ul>
       </div>
+      <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
       <template #footer>
         <Button label="Close" text severity="secondary" @click="addGroupOpen = false" />
       </template>
@@ -2079,13 +1965,13 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       title="Remove group membership?"
       :message="
         removeConfirm
-          ? `Remove ${user?.displayName || user?.samAccountName || 'this user'} from “${removeConfirm.label}”?`
+          ? `Remove ${user?.displayName || user?.samAccountName || 'this user'} from “${removeConfirm.groupLabel}”?`
           : ''
       "
       detail="The change is committed to the directory immediately."
       confirm-label="Remove"
       severity="danger"
-      :busy="groupBusy !== null && removeConfirm !== null && groupBusy === removeConfirm.groupId"
+      :busy="groupPending !== null"
       @update:visible="(v) => !v && cancelRemoveGroup()"
       @cancel="cancelRemoveGroup"
       @confirm="confirmRemoveGroup"
