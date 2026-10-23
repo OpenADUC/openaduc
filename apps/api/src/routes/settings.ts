@@ -335,7 +335,8 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
         action: 'settings.roles.update',
         result: 'success',
         actorAuthMethod: 'ad-password',
-        providerId,
+        // The role mapping applies to every directory.
+        providerId: null,
         targetType: 'config',
         targetId: 'roles',
         before,
