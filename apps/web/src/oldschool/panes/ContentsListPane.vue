@@ -16,20 +16,15 @@ import { useAuthStore } from '../../stores/auth.js';
 import { useToast } from 'primevue/usetoast';
 import WinIcon from '../primitives/WinIcon.vue';
 import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
+import {
+  useAccountActions,
+  type AccountAction,
+} from '../../design/composables/useAccountActions.js';
 import type { OuContentsResponse } from '@openaduc/shared';
 
 const store = useOldSchool();
 const auth = useAuthStore();
 const toast = useToast();
-
-function showToastSuccess(summary: string): void {
-  toast.add({ severity: 'success', summary, life: 2500 });
-}
-function showToastError(err: unknown): void {
-  const detail =
-    err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
-  toast.add({ severity: 'error', summary: 'Operation failed', detail, life: 5000 });
-}
 
 const emptyContents: OuContentsResponse = {
   users: [],
@@ -203,19 +198,19 @@ function buildItems(r: Row): CtxItem[] {
 
 const can = (capability: string): boolean => auth.hasCapability(capability);
 
-function runWrite(call: () => Promise<unknown>, success: string, reason: string): void {
-  const apply = async (): Promise<void> => {
-    try {
-      await call();
-      showToastSuccess(success);
-      store.bumpData();
-    } catch (err) {
-      if (auth.retryAfterStepUp(err, apply)) return;
-      showToastError(err);
-    }
-  };
-  auth.requireStepUp(apply, reason);
-}
+const DONE: Record<AccountAction, (name: string) => string> = {
+  enable: (name) => `Object "${name}" has been enabled.`,
+  disable: (name) => `Object "${name}" has been disabled.`,
+  unlock: (name) => `${name} unlocked.`,
+};
+const { run: runAccountAction } = useAccountActions<Row>({
+  onDone: (action, r) => {
+    toast.add({ severity: 'success', summary: DONE[action](r.name), life: 2500 });
+    store.bumpData();
+  },
+  onFailed: (_action, _r, message) =>
+    toast.add({ severity: 'error', summary: 'Operation failed', detail: message, life: 5000 }),
+});
 
 function userItems(r: Row): CtxItem[] {
   const items: CtxItem[] = [{ label: 'Copy…', disabled: true, onSelect: () => undefined }];
@@ -230,21 +225,11 @@ function userItems(r: Row): CtxItem[] {
       r.disabled
         ? {
             label: 'Enable Account',
-            onSelect: () =>
-              runWrite(
-                () => api.users.enable(r.id),
-                `Object "${r.name}" has been enabled.`,
-                'Enabling a user account requires step-up authentication.',
-              ),
+            onSelect: () => runAccountAction('enable', r),
           }
         : {
             label: 'Disable Account',
-            onSelect: () =>
-              runWrite(
-                () => api.users.disable(r.id),
-                `Object "${r.name}" has been disabled.`,
-                'Disabling a user account requires step-up authentication.',
-              ),
+            onSelect: () => runAccountAction('disable', r),
           },
     );
   }
@@ -260,12 +245,7 @@ function userItems(r: Row): CtxItem[] {
       r.locked
         ? {
             label: 'Unlock Account',
-            onSelect: () =>
-              runWrite(
-                () => api.users.unlock(r.id),
-                `${r.name} unlocked.`,
-                'Unlocking a user account requires step-up authentication.',
-              ),
+            onSelect: () => runAccountAction('unlock', r),
           }
         : { label: 'Unlock Account', disabled: true },
     );
