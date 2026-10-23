@@ -35,6 +35,8 @@ export function useDirectorySearch(options: { pageSize: number }) {
   const results = ref<SearchResults>(none());
   const failed = ref<SearchKind[]>([]);
   const loading = ref(false);
+  /** The text the results answer, so a caller can tell they're out of date. */
+  const answers = ref<string | null>(null);
   const requests = latestRequest();
 
   // OUs have no search endpoint; the list is small enough to filter here.
@@ -72,9 +74,7 @@ export function useDirectorySearch(options: { pageSize: number }) {
     const isCurrent = requests.begin();
     const q = text.trim();
     if (!q) {
-      results.value = none();
-      failed.value = [];
-      loading.value = false;
+      clear();
       return;
     }
     loading.value = true;
@@ -86,6 +86,7 @@ export function useDirectorySearch(options: { pageSize: number }) {
     const settled = await Promise.allSettled(searched.map(searchInto));
     if (!isCurrent()) return;
     results.value = next;
+    answers.value = q;
     failed.value = searched.filter((_, i) => settled[i]!.status === 'rejected');
     loading.value = false;
   }
@@ -94,6 +95,7 @@ export function useDirectorySearch(options: { pageSize: number }) {
   function clear(): void {
     requests.begin();
     results.value = none();
+    answers.value = null;
     failed.value = [];
     loading.value = false;
   }
@@ -104,5 +106,5 @@ export function useDirectorySearch(options: { pageSize: number }) {
     ouList = null;
   }
 
-  return { results, failed, loading, canSearch, search, clear, reset };
+  return { results, answers, failed, loading, canSearch, search, clear, reset };
 }

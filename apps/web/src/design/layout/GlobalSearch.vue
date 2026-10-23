@@ -1,35 +1,67 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
-import type { DirectoryOu } from '@openaduc/shared';
+import { useToast } from 'primevue/usetoast';
+import type { Capability, DirectoryOu, UserSummary } from '@openaduc/shared';
 import {
   useDirectorySearch,
   type SearchKind,
   type SearchResults,
 } from '../composables/useDirectorySearch.js';
+import { useAccountActions } from '../composables/useAccountActions.js';
+import { useResultKeys } from '../composables/useResultKeys.js';
+import type { ResetOutcome } from '../composables/usePasswordReset.js';
+import AppToast from '../feedback/AppToast.vue';
+import InlineFailure from '../feedback/InlineFailure.vue';
+import ResetPasswordDialog from '../feedback/ResetPasswordDialog.vue';
+import {
+  accountActionFailedSummary,
+  accountActionToast,
+  passwordResetToast,
+} from '../feedback/userToasts.js';
 import Avatar from '../primitives/Avatar.vue';
 import { dnPath, rdns } from '../lib/dn.js';
+import { nameOf } from '../lib/format.js';
+import {
+  QUICK_ACTIONS,
+  parseQuickQuery,
+  quickActionsFor,
+  quickVerbs,
+} from '../lib/quickActions.js';
+import { USER_ACTIONS, userActionLabel, type UserAction } from '../lib/userActions.js';
+import { useAuthStore } from '../../stores/auth.js';
 
-interface ResultRow {
+interface FoundRow {
   kind: SearchKind;
   id: string;
   primary: string;
   secondary: string | null;
   to: RouteLocationRaw;
+  user?: UserSummary;
+}
+
+interface ResultRow extends FoundRow {
+  key: string;
+  actions: UserAction[];
 }
 
 const PER_KIND = 6;
+// Its own toasts, as not every page mounts one.
+const TOAST_GROUP = 'quick-search';
 
 const router = useRouter();
+const auth = useAuthStore();
+const toast = useToast();
 const finder = useDirectorySearch({ pageSize: PER_KIND });
 const { loading } = finder;
+const can = (capability: Capability) => auth.hasCapability(capability);
 
 const open = ref(false);
 const query = ref('');
 const inputRef = ref<HTMLInputElement | null>(null);
 const resultsRef = ref<HTMLElement | null>(null);
-const highlight = ref(0);
+const uid = useId();
 
 // Where an OU sits, for its result row: OU=Sales,OU=Corp,DC=corp,DC=example
 // reads "corp.example / Corp".
@@ -42,7 +74,7 @@ const KINDS: {
   kind: SearchKind;
   label: string;
   icon?: string;
-  rows: (found: SearchResults) => ResultRow[];
+  rows: (found: SearchResults) => FoundRow[];
 }[] = [
   {
     kind: 'user',
@@ -54,6 +86,7 @@ const KINDS: {
         primary: u.displayName ?? u.samAccountName,
         secondary: u.email ?? u.userPrincipalName ?? u.title ?? null,
         to: `/users/${u.id}`,
+        user: u,
       })),
   },
   {
@@ -97,23 +130,140 @@ const KINDS: {
   },
 ];
 
-const results = computed(() => KINDS.flatMap((k) => k.rows(finder.results.value)));
+// "unlock jdoe" searches users for "jdoe" and offers to unlock them.
+const parsed = computed(() => parseQuickQuery(query.value, can));
+const verb = computed(() => parsed.value.action);
+const verbs = computed(() => quickVerbs(can));
+
+const userKey = (id: string) => `user-${id}`;
+
+function actionsFor(u: UserSummary): UserAction[] {
+  const offered = quickActionsFor(u, can);
+  const only = verb.value;
+  return only ? offered.filter((a) => a === only) : offered;
+}
+
+const results = computed<ResultRow[]>(() =>
+  KINDS.flatMap((k) => k.rows(finder.results.value)).map((r) => ({
+    ...r,
+    key: `${r.kind}-${r.id}`,
+    actions: r.user ? actionsFor(r.user) : [],
+  })),
+);
 const failed = computed(() =>
   KINDS.filter((k) => finder.failed.value.includes(k.kind)).map((k) => k.label),
 );
-watch(results, () => (highlight.value = 0));
 
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+const debouncing = ref(false);
 
-function runSearch(text: string): void {
-  if (text.trim().length < 2) finder.clear();
-  else void finder.search(text);
+function runSearch(): Promise<void> {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debouncing.value = false;
+  const { action, text } = parsed.value;
+  if (text.length < 2) {
+    finder.clear();
+    return Promise.resolve();
+  }
+  return finder.search(text, action ? ['user'] : undefined);
 }
 
-watch(query, (next) => {
+watch(query, () => {
   if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => runSearch(next), 200);
+  debouncing.value = true;
+  debounceTimer = setTimeout(() => void runSearch(), 200);
 });
+
+// Whether the results answer the text in the box, so Enter can't act on
+// the top match of what was typed before.
+function ready(): boolean {
+  const { text } = parsed.value;
+  return (
+    !debouncing.value && !loading.value && finder.answers.value === (text.length >= 2 ? text : null)
+  );
+}
+
+const keys = useResultKeys<UserAction, ResultRow>({
+  rows: results,
+  preselect: () => verb.value !== null,
+  ready,
+});
+const { highlight, actionAt, highlighted, selectedAction } = keys;
+
+// Said when Enter came before the results did; gone once they land.
+const waitNotice = ref<string | null>(null);
+watch(results, () => (waitNotice.value = null));
+
+function showsActions(row: ResultRow): boolean {
+  return verb.value !== null || isHighlighted(row);
+}
+
+// Why a user found by a verb isn't offered it, e.g. Unlock for an account
+// that isn't locked.
+function notFitting(row: ResultRow): string | null {
+  const only = verb.value;
+  if (!row.user || !only || row.actions.length > 0) return null;
+  return QUICK_ACTIONS[only].notFitting;
+}
+
+async function refreshOn(id: string): Promise<void> {
+  if (!open.value) return;
+  keys.keepHighlightOn(userKey(id));
+  await runSearch();
+}
+
+// The same workflow as the user's page: step-up first, the same calls and
+// audit events, and Undo on the toast. A failure stays at the top of the
+// panel, whatever the query has become since, until retried or dismissed.
+const accountActions = useAccountActions<UserSummary>({
+  onDone: async (action, u, offer) => {
+    toast.add({ ...accountActionToast(action, u, offer), group: TOAST_GROUP });
+    await refreshOn(u.id);
+  },
+});
+
+const lastRun = shallowRef<{ action: UserAction; user: UserSummary } | null>(null);
+const running = computed(() => {
+  const run = lastRun.value;
+  return run && accountActions.runningOn(run.user.id) === run.action ? run : null;
+});
+
+const actionFailure = computed(() => {
+  const f = accountActions.failure.value;
+  if (!f) return null;
+  return {
+    summary: accountActionFailedSummary(f.op.action, f.op.account),
+    message: f.message,
+    busy: accountActions.runningOn(f.op.account.id) !== null,
+  };
+});
+
+const resetTarget = ref<UserSummary | null>(null);
+const resetOpen = ref(false);
+
+function onPasswordReset(outcome: ResetOutcome): void {
+  toast.add({ ...passwordResetToast(outcome), group: TOAST_GROUP });
+  if (resetTarget.value) void refreshOn(resetTarget.value.id);
+}
+
+watch(resetOpen, (isOpen) => {
+  if (!isOpen && open.value) focusInput();
+});
+
+function act(action: UserAction, u: UserSummary): void {
+  if (action === 'reset-password') {
+    resetTarget.value = u;
+    resetOpen.value = true;
+    return;
+  }
+  if (accountActions.runningOn(u.id) !== null) return;
+  lastRun.value = { action, user: u };
+  accountActions.run(action, u);
+}
+
+function actionLabel(action: UserAction, u: UserSummary): string {
+  return userActionLabel(action, accountActions.runningOn(u.id));
+}
 
 function focusInput(): void {
   void nextTick(() => inputRef.value?.focus());
@@ -126,10 +276,12 @@ function openSearch(): void {
 
 function close(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
+  debouncing.value = false;
   finder.reset();
   open.value = false;
   query.value = '';
-  highlight.value = 0;
+  waitNotice.value = null;
+  keys.reset();
 }
 
 function pick(row: ResultRow): void {
@@ -137,25 +289,26 @@ function pick(row: ResultRow): void {
   void router.push(row.to);
 }
 
+function caretAtEnd(input: HTMLInputElement): boolean {
+  return input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+}
+
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    close();
-    return;
-  }
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    highlight.value = Math.min(highlight.value + 1, results.value.length - 1);
-    return;
-  }
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    highlight.value = Math.max(highlight.value - 1, 0);
-    return;
-  }
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    const row = results.value[highlight.value];
-    if (row) pick(row);
+  const intent = keys.keydown(e, caretAtEnd(e.target as HTMLInputElement));
+  switch (intent?.kind) {
+    case 'close':
+      close();
+      break;
+    case 'open':
+      pick(intent.row);
+      break;
+    case 'run':
+      if (intent.row.user) act(intent.action, intent.row.user);
+      break;
+    case 'wait':
+      if (debouncing.value) void runSearch();
+      waitNotice.value = `Still searching for “${parsed.value.text}”. Press Enter again once the results show.`;
+      break;
   }
 }
 
@@ -184,23 +337,81 @@ watch(highlight, () =>
 );
 
 function isHighlighted(row: ResultRow): boolean {
-  return results.value.indexOf(row) === highlight.value;
+  return highlighted.value === row;
 }
+
+const listboxId = `${uid}-results`;
+const optionId = (row: ResultRow) => `${uid}-${results.value.indexOf(row)}`;
+const actionId = (row: ResultRow, action: UserAction) => `${optionId(row)}-${action}`;
+
+const activeDescendant = computed(() => {
+  const row = highlighted.value;
+  if (!row) return undefined;
+  const action = selectedAction.value;
+  return action ? actionId(row, action) : optionId(row);
+});
+
+const TYPE_MORE = 'Type at least 2 characters to search.';
+
+const emptyText = computed(() => {
+  const { action, text } = parsed.value;
+  if (loading.value && results.value.length === 0) return 'Searching…';
+  if (action && !text) return QUICK_ACTIONS[action].ask;
+  if (!loading.value && text.length >= 2 && results.value.length === 0 && failed.value.length === 0)
+    return `${action ? 'No users match' : 'No matches for'} "${text}"`;
+  if (text.length < 2) return TYPE_MORE;
+  return null;
+});
+
+const verbHelp = computed(() => {
+  const v = verbs.value;
+  if (parsed.value.action || v.length === 0) return null;
+  const list = v.length > 1 ? `${v.slice(0, -1).join(', ')} or ${v.at(-1)}` : v[0];
+  return `Start with ${list} to act on a user. Start with " to search for those words as written.`;
+});
+
+// Read out politely, as focus never leaves the search box.
+const announcement = computed(() => {
+  if (waitNotice.value) return waitNotice.value;
+  const run = running.value;
+  if (run) return `${USER_ACTIONS[run.action].running} ${nameOf(run.user)}`;
+  if (emptyText.value && emptyText.value !== TYPE_MORE) return emptyText.value;
+  const row = highlighted.value;
+  const action = selectedAction.value;
+  if (row && action) return `${USER_ACTIONS[action].label}, ${row.primary}. Press Enter.`;
+  return '';
+});
 </script>
 
 <template>
   <div class="gs-wrap">
-    <button type="button" class="gs-trigger" :title="'Search (Ctrl+K)'" @click="openSearch">
-      <i class="pi pi-search" />
+    <button
+      type="button"
+      class="gs-trigger"
+      :title="'Search (Ctrl+K)'"
+      :aria-label="
+        actionFailure
+          ? 'Search the directory. An action from quick search failed.'
+          : 'Search the directory'
+      "
+      @click="openSearch"
+    >
+      <i class="pi pi-search" aria-hidden="true" />
       <span class="gs-trigger-label">Search the directory…</span>
-      <span class="gs-trigger-kbd kbd">⌘K</span>
+      <i
+        v-if="actionFailure"
+        class="pi pi-exclamation-circle gs-trigger-failed"
+        aria-hidden="true"
+        title="An action from quick search failed"
+      />
+      <span class="gs-trigger-kbd kbd" aria-hidden="true">⌘K</span>
     </button>
 
     <Teleport to="body">
       <div v-if="open" class="gs-overlay" @click.self="close">
         <div class="gs-panel" role="dialog" aria-modal="true" aria-label="Global search">
           <div class="gs-input-row">
-            <i class="pi pi-search gs-input-icon" />
+            <i class="pi pi-search gs-input-icon" aria-hidden="true" />
             <input
               ref="inputRef"
               v-model="query"
@@ -209,63 +420,137 @@ function isHighlighted(row: ResultRow): boolean {
               placeholder="Search the directory…"
               autocomplete="off"
               spellcheck="false"
+              role="combobox"
+              aria-autocomplete="list"
+              :aria-expanded="results.length > 0"
+              :aria-controls="listboxId"
+              :aria-activedescendant="activeDescendant"
               @keydown="onKeydown"
             />
+            <span v-if="verb" class="gs-verb">{{ QUICK_ACTIONS[verb].verb }}</span>
             <button type="button" class="gs-close" title="Close (Esc)" @click="close">
               <i class="pi pi-times" />
             </button>
           </div>
 
+          <div class="sr-only" role="status" aria-live="polite">{{ announcement }}</div>
+
           <div ref="resultsRef" class="gs-results">
+            <div v-if="actionFailure" class="gs-failure">
+              <InlineFailure
+                :summary="actionFailure.summary"
+                :message="actionFailure.message"
+                :busy="actionFailure.busy"
+                @retry="accountActions.retry"
+                @dismiss="accountActions.dismiss"
+              />
+            </div>
             <div v-if="failed.length > 0 && !loading" class="gs-failed" role="status">
               <i class="pi pi-exclamation-triangle" />
               Couldn't search {{ failed.join(' or ') }}.
             </div>
-            <div v-if="loading && results.length === 0" class="gs-empty">Searching…</div>
-            <div
-              v-else-if="
-                !loading && query.trim().length >= 2 && results.length === 0 && failed.length === 0
-              "
-              class="gs-empty"
-            >
-              No matches for "{{ query }}"
-            </div>
-            <div v-else-if="query.trim().length < 2" class="gs-empty">
-              Type at least 2 characters to search.
+            <div v-if="waitNotice" class="gs-wait">{{ waitNotice }}</div>
+            <div v-if="emptyText" class="gs-empty">
+              {{ emptyText }}
+              <template v-if="parsed.text.length < 2 && verbHelp">
+                <br />
+                {{ verbHelp }}
+              </template>
             </div>
 
-            <template v-else>
-              <div v-for="g in groupedResults" :key="g.kind" class="gs-group">
-                <div class="gs-group-label">{{ g.label }}</div>
-                <button
+            <div v-show="!emptyText" :id="listboxId" role="listbox" aria-label="Results">
+              <div
+                v-for="g in groupedResults"
+                :key="g.kind"
+                class="gs-group"
+                role="group"
+                :aria-label="g.label"
+              >
+                <div class="gs-group-label" aria-hidden="true">{{ g.label }}</div>
+                <div
                   v-for="row in g.rows"
-                  :key="`${g.kind}-${row.id}`"
-                  type="button"
+                  :key="row.key"
                   class="gs-row"
+                  role="presentation"
                   :class="{ active: isHighlighted(row) }"
-                  @mouseenter="highlight = results.indexOf(row)"
+                  @mouseenter="keys.hover(results.indexOf(row))"
+                  @mousedown.prevent
                   @click="pick(row)"
                 >
-                  <span v-if="g.icon" class="gs-row-icon"><i :class="['pi', g.icon]" /></span>
-                  <Avatar v-else :name="row.primary" :seed="row.id" :size="28" />
-                  <div class="gs-row-meta">
-                    <div class="gs-row-primary">{{ row.primary }}</div>
-                    <div v-if="row.secondary" class="gs-row-secondary">{{ row.secondary }}</div>
+                  <div
+                    :id="optionId(row)"
+                    class="gs-row-main"
+                    role="option"
+                    :aria-selected="isHighlighted(row) && actionAt === null"
+                  >
+                    <span v-if="g.icon" class="gs-row-icon"><i :class="['pi', g.icon]" /></span>
+                    <Avatar v-else :name="row.primary" :seed="row.id" :size="28" />
+                    <div class="gs-row-meta">
+                      <div class="gs-row-primary">{{ row.primary }}</div>
+                      <div v-if="row.secondary" class="gs-row-secondary">{{ row.secondary }}</div>
+                    </div>
                   </div>
-                  <i class="pi pi-arrow-right gs-row-go" />
-                </button>
+                  <span v-if="notFitting(row)" class="gs-row-note">{{ notFitting(row) }}</span>
+                  <div
+                    v-if="row.user && showsActions(row) && row.actions.length > 0"
+                    class="gs-actions"
+                    role="presentation"
+                  >
+                    <div
+                      v-for="a in row.actions"
+                      :id="actionId(row, a)"
+                      :key="a"
+                      class="gs-action"
+                      role="option"
+                      :aria-label="`${actionLabel(a, row.user)}, ${row.primary}`"
+                      :aria-selected="isHighlighted(row) && selectedAction === a"
+                      :aria-disabled="accountActions.runningOn(row.user.id) !== null"
+                      :class="{
+                        selected: isHighlighted(row) && selectedAction === a,
+                        busy: accountActions.runningOn(row.user.id) !== null,
+                      }"
+                      @click.stop="act(a, row.user)"
+                    >
+                      <i
+                        :class="[
+                          'pi',
+                          accountActions.runningOn(row.user.id) === a
+                            ? 'pi-spin pi-spinner'
+                            : USER_ACTIONS[a].icon,
+                        ]"
+                        aria-hidden="true"
+                      />{{ actionLabel(a, row.user) }}
+                    </div>
+                  </div>
+                  <i v-else class="pi pi-arrow-right gs-row-go" aria-hidden="true" />
+                </div>
               </div>
-            </template>
+            </div>
           </div>
 
-          <footer class="gs-foot">
+          <footer class="gs-foot" aria-hidden="true">
             <span><span class="kbd">↑↓</span> navigate</span>
-            <span><span class="kbd">↵</span> open</span>
-            <span><span class="kbd">esc</span> close</span>
+            <span v-if="(highlighted?.actions.length ?? 0) > 0 && actionAt === null">
+              <span class="kbd">→</span> / <span class="kbd">tab</span> actions
+            </span>
+            <span v-else-if="(highlighted?.actions.length ?? 0) > 1">
+              <span class="kbd">←→</span> choose
+            </span>
+            <span>
+              <span class="kbd">↵</span>
+              {{ selectedAction ? QUICK_ACTIONS[selectedAction].verb : 'open' }}
+            </span>
+            <span>
+              <span class="kbd">esc</span>
+              {{ actionAt !== null && !verb ? 'back' : 'close' }}
+            </span>
           </footer>
         </div>
       </div>
     </Teleport>
+
+    <ResetPasswordDialog v-model:visible="resetOpen" :user="resetTarget" @reset="onPasswordReset" />
+    <AppToast :group="TOAST_GROUP" />
   </div>
 </template>
 
@@ -310,6 +595,11 @@ function isHighlighted(row: ResultRow): boolean {
 
 .gs-trigger-kbd {
   font-size: 10.5px;
+  flex-shrink: 0;
+}
+
+.gs-trigger-failed {
+  color: var(--red);
   flex-shrink: 0;
 }
 
@@ -359,6 +649,16 @@ function isHighlighted(row: ResultRow): boolean {
   font-family: var(--font-sans);
 }
 
+.gs-verb {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .gs-close {
   background: transparent;
   border: 0;
@@ -376,6 +676,17 @@ function isHighlighted(row: ResultRow): boolean {
 .gs-results {
   overflow: auto;
   flex: 1;
+}
+
+.gs-failure {
+  margin: 8px 8px 0;
+}
+
+.gs-wait {
+  margin: 8px 8px 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--text-2);
 }
 
 .gs-failed {
@@ -438,6 +749,14 @@ function isHighlighted(row: ResultRow): boolean {
   color: var(--text-2);
 }
 
+.gs-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .gs-row-meta {
   flex: 1;
   min-width: 0;
@@ -469,10 +788,58 @@ function isHighlighted(row: ResultRow): boolean {
   color: var(--accent-text);
 }
 
+.gs-row-note {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.gs-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.gs-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.gs-action:hover:not(.busy) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.gs-action.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.gs-action.busy {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.gs-action .pi {
+  font-size: 11px;
+}
+
 .gs-foot {
   border-top: 1px solid var(--border);
   display: flex;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 6px 14px;
   padding: 10px 16px;
   font-size: 11.5px;
   color: var(--text-3);
