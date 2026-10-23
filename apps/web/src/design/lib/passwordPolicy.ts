@@ -1,9 +1,4 @@
 // SPDX-License-Identifier: BUSL-1.1
-// A new password checked against the domain's policy before AD sees it,
-// and generated to pass. Follows AD's rules: the minimum length, and with
-// complexity on, three kinds of character and none of the account's names.
-// AD also refuses recently used passwords, which only it can check.
-
 import { RESET_PASSWORD_MIN_LENGTH, type DirectoryPolicy } from '@openaduc/shared';
 
 export type PasswordPolicy = Pick<DirectoryPolicy, 'minPwdLength' | 'complexityRequired'>;

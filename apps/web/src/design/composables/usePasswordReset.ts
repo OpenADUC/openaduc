@@ -1,12 +1,4 @@
 // SPDX-License-Identifier: BUSL-1.1
-// State behind both reset-password dialogs (the modern one and the Old
-// School "Reset Password" window).
-//
-// Checks the new password against the domain's policy as the operator
-// types, and can generate one that passes. For a locked account, "also
-// unlock" starts ticked and travels in the same request, so the API
-// changes both in one directory modify.
-
 import { computed, ref, watch } from 'vue';
 import type { DirectoryPolicy, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
@@ -30,7 +22,6 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
   const loading = ref(false);
   const password = ref('');
   const shown = ref(false);
-  // Whether the last copy worked; null until one is tried for this value.
   const copied = ref<boolean | null>(null);
   watch(password, () => (copied.value = null));
   const forceChangeAtNextLogin = ref(true);

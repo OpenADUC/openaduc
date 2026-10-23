@@ -1,8 +1,4 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
-<!--
-  Reset a user's password, and unlock the account in the same change when
-  it's locked. The check, generator and submit live in usePasswordReset.
--->
 <script setup lang="ts">
 import { watch } from 'vue';
 import Dialog from 'primevue/dialog';
