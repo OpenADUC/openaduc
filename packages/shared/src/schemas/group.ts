@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { listFreshnessSchema } from './freshness.js';
 import { samAccountNameSchemaOf } from './user.js';
+import { ROLES } from '../capabilities.js';
 
 export const groupSummarySchema = z.object({
   id: z.string(),
@@ -144,6 +145,14 @@ export const groupDeleteBlockReasonSchema = z.enum([
   'builtin_group',
   // adminCount=1: AdminSDHolder protects it as an administrative group.
   'protected_group',
+  // Mapped to an OpenADUC role: deleting it would take that role away.
+  'role_group',
+  // Directly a member of a protected group (Domain Admins, Administrators,
+  // … or any adminCount=1 group), which AdminSDHolder may not have
+  // flagged yet.
+  'member_of_protected_group',
+  // Some account's primary group (its primaryGroupID): AD refuses.
+  'primary_group',
 ]);
 export type GroupDeleteBlockReason = z.infer<typeof groupDeleteBlockReasonSchema>;
 
@@ -171,8 +180,16 @@ export const groupDeletePreflightResponseSchema = z.object({
       id: z.string().nullable(),
       name: z.string().nullable(),
       distinguishedName: z.string(),
+      // A protected group (see member_of_protected_group).
+      protected: z.boolean(),
     }),
   ),
+  // Accounts (users, computers) whose primary group this is. They aren't
+  // in `member`, so memberCount leaves them out. Null when AD couldn't be
+  // asked.
+  primaryGroupMembers: z.number().int().nullable(),
   blockedReason: groupDeleteBlockReasonSchema.nullable(),
+  // The OpenADUC role the group grants, when that's why it's blocked.
+  role: z.enum(ROLES).nullable(),
 });
 export type GroupDeletePreflightResponse = z.infer<typeof groupDeletePreflightResponseSchema>;

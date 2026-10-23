@@ -29,8 +29,17 @@ const falcon = (
   samAccountName: 'project.falcon',
   distinguishedName: 'CN=Project Falcon,OU=Groups,DC=corp,DC=test',
   memberCount: 3,
-  memberOf: [{ id: 'g2', name: 'All Staff', distinguishedName: 'CN=All Staff,DC=corp,DC=test' }],
+  memberOf: [
+    {
+      id: 'g2',
+      name: 'All Staff',
+      distinguishedName: 'CN=All Staff,DC=corp,DC=test',
+      protected: false,
+    },
+  ],
+  primaryGroupMembers: 0,
   blockedReason: null,
+  role: null,
   ...over,
 });
 
@@ -78,6 +87,36 @@ describe('useGroupDeletion', () => {
     expect(deletion.confirmed.value).toBe(false);
     expect(deletion.blockedText.value).toMatch(/protected administrative group/);
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('names the role a role group grants, and the protected group it sits in', async () => {
+    const { deletion: role } = await loaded(
+      falcon({ blockedReason: 'role_group', role: 'operator' }),
+    );
+    expect(role.blockedText.value).toMatch(/grants OpenADUC’s operator role/);
+
+    const { deletion: nested } = await loaded(
+      falcon({
+        blockedReason: 'member_of_protected_group',
+        memberOf: [
+          {
+            id: 'g3',
+            name: 'Domain Admins',
+            distinguishedName: 'CN=Domain Admins',
+            protected: true,
+          },
+          { id: 'g2', name: 'All Staff', distinguishedName: 'CN=All Staff', protected: false },
+        ],
+      }),
+    );
+    expect(nested.blockedText.value).toBe(
+      'It’s a member of Domain Admins, a protected group. Take it out first.',
+    );
+
+    const { deletion: primary } = await loaded(
+      falcon({ blockedReason: 'primary_group', primaryGroupMembers: 2 }),
+    );
+    expect(primary.blockedText.value).toMatch(/primary group of 2 accounts/);
   });
 
   it('prompts step-up before the first delete, then deletes', async () => {

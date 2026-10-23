@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { Attribute, Change } from 'ldapts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  DC,
   asAdministrator,
   configureDirectory,
   reseedDirectory,
+  sambaTool,
+  setGroupMember,
+  setUserAttribute,
   startApi,
   type TestApi,
   type TestClient,
@@ -16,6 +21,10 @@ const ENGINEERING = `CN=Engineering,${GROUPS_OU}`;
 const CREATED = `CN=Project Falcon,${GROUPS_OU}`;
 const DISTRIBUTION = `CN=Falcon Mail,${GROUPS_OU}`;
 const PROTECTED = `CN=Tier Zero,${GROUPS_OU}`;
+const NESTED = `CN=Tier Nested,${GROUPS_OU}`;
+const PRIMARY = `CN=Primary Home,${GROUPS_OU}`;
+const PRIMARY_USER = `CN=prim.test,${STAFF_OU}`;
+const DOMAIN_ADMINS = 'CN=Domain Admins,CN=Users,DC=openaduc,DC=test';
 
 const newGroup = {
   parentDn: GROUPS_OU,
@@ -43,7 +52,7 @@ const directoryGroup = (dn: string) =>
 
 const removeTestGroups = () =>
   asAdministrator(async (client) => {
-    for (const dn of [CREATED, DISTRIBUTION, PROTECTED])
+    for (const dn of [PRIMARY_USER, CREATED, DISTRIBUTION, PROTECTED, NESTED, PRIMARY])
       await client.del(dn).catch(() => undefined);
   });
 
@@ -228,8 +237,12 @@ describe('creating and deleting groups', () => {
         samAccountName: 'Engineering',
         distinguishedName: ENGINEERING,
         memberCount: 2,
-        memberOf: [{ id: allStaff, name: 'All Staff', distinguishedName: ALL_STAFF }],
+        memberOf: [
+          { id: allStaff, name: 'All Staff', distinguishedName: ALL_STAFF, protected: false },
+        ],
+        primaryGroupMembers: 0,
         blockedReason: null,
+        role: null,
       });
     });
 
@@ -270,6 +283,12 @@ describe('creating and deleting groups', () => {
         .where('group_object_guid', '=', id)
         .execute();
       expect(memberships).toEqual([]);
+      const aliceRow = await api.app.db
+        .selectFrom('user_cache_records')
+        .select('raw_attributes_json')
+        .where('object_guid', '=', alice)
+        .executeTakeFirstOrThrow();
+      expect(JSON.stringify(aliceRow.raw_attributes_json)).not.toContain('Project Falcon');
       const [row] = await auditRows('group.delete');
       expect(row).toMatchObject({
         result: 'success',
@@ -284,19 +303,47 @@ describe('creating and deleting groups', () => {
       });
     });
 
-    it('refuses built-in and protected groups, saying why, before touching AD', async () => {
-      await asAdministrator((client) =>
-        client.add(PROTECTED, {
+    it('refuses groups AD, Windows or OpenADUC rely on, saying why, and audits the refusal', async () => {
+      await asAdministrator(async (client) => {
+        await client.add(PROTECTED, {
           objectClass: ['top', 'group'],
           sAMAccountName: 'tier.zero',
           adminCount: '1',
-        }),
-      );
+        });
+        await client.add(NESTED, { objectClass: ['top', 'group'], sAMAccountName: 'tier.nested' });
+        await client.modify(
+          DOMAIN_ADMINS,
+          new Change({
+            operation: 'add',
+            modification: new Attribute({ type: 'member', values: [NESTED] }),
+          }),
+        );
+        await client.add(PRIMARY, {
+          objectClass: ['top', 'group'],
+          sAMAccountName: 'primary.home',
+        });
+      });
+      sambaTool('user', 'create', 'prim.test', DC.password, '--userou=OU=Staff,OU=OpenADUC Test');
+      await setGroupMember(PRIMARY, 'prim.test', true);
       await api.app.services.sync.runOnce(api.directoryId!, 'groups.full');
+      const primarySid = (await api.app.db
+        .selectFrom('group_cache_records')
+        .select('sid')
+        .where('distinguished_name', '=', PRIMARY)
+        .executeTakeFirstOrThrow())!.sid!;
+      await setUserAttribute('prim.test', 'primaryGroupID', [primarySid.split('-').at(-1)!]);
+
       const cases = [
         ['Domain Admins', 'critical_system_object', /critical system object/],
         ['Administrators', 'critical_system_object', /critical system object/],
         ['Tier Zero', 'protected_group', /protected administrative group/],
+        ['OpenADUC Operators', 'role_group', /grants OpenADUC's operator role/],
+        [
+          'Tier Nested',
+          'member_of_protected_group',
+          /member of the protected group CN=Domain Admins/,
+        ],
+        ['Primary Home', 'primary_group', /primary group of 1 account/],
       ] as const;
 
       for (const [name, reason, message] of cases) {
@@ -305,12 +352,38 @@ describe('creating and deleting groups', () => {
         const sam = preflight.json<{ samAccountName: string }>().samAccountName;
         const res = await admin.delete(`/api/groups/${id}`, { confirmSamAccountName: sam });
 
-        expect(preflight.json<{ blockedReason: string }>().blockedReason).toBe(reason);
+        expect([name, preflight.json<{ blockedReason: string }>().blockedReason]).toEqual([
+          name,
+          reason,
+        ]);
         expect(res.statusCode).toBe(409);
         expect(res.json<{ error: { message: string } }>().error.message).toMatch(message);
       }
-      expect(await directoryGroup(PROTECTED)).not.toBeNull();
-      expect((await auditRows('group.delete')).map((r) => r.result)).toEqual(['success']);
+      const operators = (await groupId('OpenADUC Operators'))!;
+      expect((await admin.get(`/api/groups/${operators}/delete-preflight`)).json()).toMatchObject({
+        role: 'operator',
+      });
+      const nested = (await groupId('Tier Nested'))!;
+      expect(
+        (await admin.get(`/api/groups/${nested}/delete-preflight`)).json<{
+          memberOf: { distinguishedName: string; protected: boolean }[];
+        }>().memberOf,
+      ).toContainEqual(
+        expect.objectContaining({ distinguishedName: DOMAIN_ADMINS, protected: true }),
+      );
+      const primary = (await groupId('Primary Home'))!;
+      expect((await admin.get(`/api/groups/${primary}/delete-preflight`)).json()).toMatchObject({
+        primaryGroupMembers: 1,
+      });
+      for (const dn of [PROTECTED, NESTED, PRIMARY])
+        expect(await directoryGroup(dn)).not.toBeNull();
+      const refusals = (await auditRows('group.delete')).filter((r) => r.result === 'failure');
+      expect(
+        refusals.map((r) => (r.metadata_json as { blockedReason: string }).blockedReason),
+      ).toEqual(cases.map(([, reason]) => reason));
+      expect(refusals[3]?.metadata_json).toMatchObject({
+        errorMessage: "this group grants OpenADUC's operator role",
+      });
     });
   });
 

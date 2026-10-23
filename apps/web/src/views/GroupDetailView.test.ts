@@ -60,8 +60,17 @@ const api = {
       samAccountName: 'engineering',
       distinguishedName: 'CN=Engineering,DC=corp,DC=example',
       memberCount: 2,
-      memberOf: [{ id: 'g7', name: 'All Staff', distinguishedName: 'CN=All Staff,DC=corp' }],
+      memberOf: [
+        {
+          id: 'g7',
+          name: 'All Staff',
+          distinguishedName: 'CN=All Staff,DC=corp',
+          protected: false,
+        },
+      ],
+      primaryGroupMembers: 0,
       blockedReason: null,
+      role: null,
     })),
     remove: vi.fn(async () => ({ ok: true })),
   },
