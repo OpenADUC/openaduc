@@ -85,7 +85,7 @@ async function ok(): Promise<void> {
   if (props.objectKind !== 'user') return;
   if (!selected.value) return;
   err.value = null;
-  auth.requireEdit(async () => {
+  auth.requireStepUp(async () => {
     try {
       await api.users.move(props.id, { targetOuDn: selected.value! });
       toast.add({ severity: 'success', summary: `${props.label} moved.`, life: 3000 });

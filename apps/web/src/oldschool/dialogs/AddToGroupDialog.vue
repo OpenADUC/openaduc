@@ -55,7 +55,7 @@ function ok(): void {
   const g = selected.value;
   if (!g) return;
   err.value = null;
-  auth.requireEdit(async () => {
+  auth.requireStepUp(async () => {
     try {
       await api.users.addGroup(props.userId, { groupId: g.id });
       toast.add({

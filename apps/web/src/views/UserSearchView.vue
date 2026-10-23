@@ -675,7 +675,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'unlock'"
             :disabled="bulkRunning"
-            @click="auth.requireEdit(() => startBulk('unlock'))"
+            @click="auth.requireStepUp(() => startBulk('unlock'))"
           />
           <Button
             v-if="canBulkDisable"
@@ -685,7 +685,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'disable'"
             :disabled="bulkRunning"
-            @click="auth.requireEdit(() => requestBulk('disable'))"
+            @click="auth.requireStepUp(() => requestBulk('disable'))"
           />
           <Button
             v-if="canBulkDisable"
@@ -695,7 +695,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'enable'"
             :disabled="bulkRunning"
-            @click="auth.requireEdit(() => startBulk('enable'))"
+            @click="auth.requireStepUp(() => startBulk('enable'))"
           />
           <Button
             v-if="canBulkDelete"
@@ -708,7 +708,7 @@ onMounted(() => {
             :title="
               selectedDisabledCount === 0 ? 'Only disabled accounts can be deleted' : undefined
             "
-            @click="auth.requireEdit(openBulkDelete)"
+            @click="auth.requireStepUp(openBulkDelete)"
           />
           <Button
             label="Clear"

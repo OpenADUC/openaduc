@@ -18,11 +18,10 @@ export class ApiError extends Error {
 /**
  * Hook called whenever the API responds 403 with code `step_up_required`.
  * Wired by the auth store at startup to open the global StepUpDialog
- * and clear stale local edit-mode state — so any privileged action that
+ * and clear stale local elevated state — so any privileged action that
  * fails because the cached step-up password is gone (process restart,
- * AD password rotation, TTL expiry that the client missed) re-prompts
- * automatically instead of forcing the operator to manually toggle
- * editing off and on.
+ * AD password rotation, an idle end the client missed) re-prompts
+ * automatically.
  *
  * The originating ApiError is still thrown — the calling view can show
  * its action-specific toast — but the dialog opens in parallel so the
@@ -48,7 +47,7 @@ export function setUnauthorizedHandler(fn: () => void): void {
 /**
  * Hook called with the elevated session's idle end whenever a response
  * carries it. The server moves it on each request, so the auth store
- * listens here to keep its countdown in step.
+ * listens here to keep its idle end in step.
  */
 let onElevatedIdleEnd: ((iso: string) => void) | null = null;
 export function setElevatedIdleEndHandler(fn: (iso: string) => void): void {

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1
      Classic "Reset Password" dialog. Two password fields,
      "User must change password at next logon" checkbox, "Unlock the
-     user's account" checkbox. Routes through useAuth.requireEdit so
+     user's account" checkbox. Routes through useAuth.requireStepUp so
      the step-up flow runs before the API call. -->
 <script setup lang="ts">
 import { computed, ref } from 'vue';
@@ -36,7 +36,7 @@ async function submit(): Promise<void> {
     return;
   }
   err.value = null;
-  auth.requireEdit(async () => {
+  auth.requireStepUp(async () => {
     try {
       await api.users.resetPassword(props.id, {
         newPassword: newPwd.value,
