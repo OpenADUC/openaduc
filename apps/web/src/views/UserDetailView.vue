@@ -8,17 +8,14 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
-import Menu from 'primevue/menu';
 import Textarea from 'primevue/textarea';
 import Message from 'primevue/message';
 import Toast from 'primevue/toast';
 import TreeSelect from 'primevue/treeselect';
-import type { MenuItem } from 'primevue/menuitem';
 import type { TreeNode } from 'primevue/treenode';
 import { useToast } from 'primevue/usetoast';
 import { api, type AuditEventRow } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
-import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Card from '../design/primitives/Card.vue';
 import GroupChip from '../design/primitives/GroupChip.vue';
@@ -34,9 +31,8 @@ import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 import type { UserDetail } from '@openaduc/shared';
-import { useStickyHeader } from './_detail/useStickyHeader';
-import { useCompactTabs } from './_detail/useCompactTabs';
-import { useRouteTab } from './_detail/useRouteTab';
+import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
+import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
@@ -351,23 +347,10 @@ useRecordCrumb(
 
 const rawFilter = ref('');
 
-// Drives the compact-on-scroll hero. `setHero` is bound to the hero
-// section's :ref; the composable then wires a scroll listener on the
-// nearest scroll ancestor and a ResizeObserver on the hero.
-// `heroCompact` flips when the operator scrolls; `heroHeight` tracks
-// the rendered height so the tab bar's sticky offset can follow the
-// hero's bottom edge mid-animation.
-const { setHero, compact: heroCompact, heroHeight } = useStickyHeader();
-const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
-
 const canUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 const canEdit = computed(() => auth.hasCapability('write:user.attributes'));
-const canEnableDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
 const canResetPassword = computed(() => auth.hasCapability('write:user.resetPassword'));
 const canManageGroups = computed(() => auth.hasCapability('write:group.membership'));
-const canMove = computed(() => auth.hasCapability('write:user.move'));
-const canRename = computed(() => auth.hasCapability('write:user.rename'));
-const canDelete = computed(() => auth.hasCapability('write:user.delete'));
 // The Raw LDAP tab shows only when the API sent the attributes, which it
 // does for view:raw_attributes holders (admins).
 const canViewRaw = computed(() => !!user.value?.rawAttributes);
@@ -724,112 +707,100 @@ const filteredRawRows = computed<AttrRow[]>(() => {
   });
 });
 
-// ---- Hero launcher links -------------------------------------------------
+// ---- Header ----------------------------------------------------------------
 
-const mailtoHref = computed(() => (user.value?.email ? `mailto:${user.value.email}` : null));
-// `msteams:/l/chat/0/0?users=…` is the documented deep-link form. Browsers
-// hand this off to the OS handler — the same way `mailto:` does — so
-// clicking opens the Teams desktop app (or prompts to open it).
-const teamsHref = computed(() =>
-  user.value?.email ? `msteams:/l/chat/0/0?users=${encodeURIComponent(user.value.email)}` : null,
-);
-
-// Render a DN with the leading `CN=…` segment stripped so it doesn't repeat
-// the heading. Falls back to the full DN if the CN doesn't match the
-// displayed name.
-const dnPath = computed(() => {
-  const dn = user.value?.distinguishedName ?? '';
-  if (!dn) return '';
-  const m = /^CN=([^,]+),(.*)$/i.exec(dn);
-  if (!m) return dn;
-  const cn = m[1]!.replace(/\\,/g, ',');
-  const rest = m[2]!;
-  const heading = (user.value?.displayName ?? user.value?.samAccountName ?? '').trim();
-  return cn === heading ? rest : dn;
+// The email when there is one, else the UPN or SAM name.
+const identifier = computed(() => {
+  const u = user.value;
+  if (!u) return null;
+  if (u.email) return { text: u.email, copyLabel: 'email' };
+  return { text: u.userPrincipalName ?? u.samAccountName };
 });
 
-// Actions dropdown — replaces the row of action buttons that used to live
-// under the hero.
-const actionsMenu = ref<InstanceType<typeof Menu> | null>(null);
+// `msteams:/l/chat/0/0?users=…` is the documented deep-link form. Browsers
+// hand it to the OS handler, as with `mailto:`, so it opens the Teams app.
+const links = computed<ObjectLink[]>(() => {
+  const email = user.value?.email;
+  if (!email) return [];
+  return [
+    { label: 'Email', icon: 'pi-envelope', href: `mailto:${email}`, title: 'Send email' },
+    {
+      label: 'Teams',
+      icon: 'pi-comments',
+      href: `msteams:/l/chat/0/0?users=${encodeURIComponent(email)}`,
+      title: 'Open Teams chat',
+    },
+  ];
+});
 
-function toggleActionsMenu(event: Event): void {
-  actionsMenu.value?.toggle(event);
-}
-
-const actionItems = computed<MenuItem[]>(() => {
-  const items: MenuItem[] = [];
+const actions = computed<ObjectAction[]>(() => {
   const u = user.value;
-  if (!u) return items;
+  if (!u) return [];
   // The only disable case is "an action of this kind is already running" so
   // the operator can't double-fire.
   const busy = accountActionRunning.value !== null || moveSubmitting.value;
-
-  if (canUnlock.value && u.locked) {
-    items.push({
+  return [
+    {
       label: accountActionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
       icon: 'pi pi-unlock',
+      capability: 'write:user.unlock',
+      available: u.locked,
       disabled: busy,
-      command: () => runOnUser('unlock'),
-    });
-  }
-  if (canResetPassword.value) {
-    items.push({
+      run: () => runOnUser('unlock'),
+    },
+    {
       label: 'Reset password…',
       icon: 'pi pi-key',
-      class: 'menu-item-danger',
-      command: openResetDialog,
-    });
-  }
-  if (canEnableDisable.value) {
-    if (u.enabled) {
-      items.push({
-        label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
-        icon: 'pi pi-ban',
-        class: 'menu-item-danger',
-        disabled: busy,
-        command: () => runOnUser('disable'),
-      });
-    } else {
-      items.push({
-        label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
-        icon: 'pi pi-check',
-        disabled: busy,
-        command: () => runOnUser('enable'),
-      });
-    }
-  }
-  if (canMove.value) {
-    items.push({
+      capability: 'write:user.resetPassword',
+      danger: true,
+      run: openResetDialog,
+    },
+    u.enabled
+      ? {
+          label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
+          icon: 'pi pi-ban',
+          capability: 'write:user.enableDisable',
+          danger: true,
+          disabled: busy,
+          run: () => runOnUser('disable'),
+        }
+      : {
+          label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
+          icon: 'pi pi-check',
+          capability: 'write:user.enableDisable',
+          disabled: busy,
+          run: () => runOnUser('enable'),
+        },
+    {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi pi-folder-open',
+      capability: 'write:user.move',
       disabled: busy,
-      command: openMoveDialog,
-    });
-  }
-  if (canRename.value) {
-    items.push({
+      run: openMoveDialog,
+    },
+    {
       label: 'Rename…',
       icon: 'pi pi-id-card',
+      capability: 'write:user.rename',
       disabled: busy,
-      command: () => {
+      run: () => {
         renameDialogOpen.value = true;
       },
-    });
-  }
-  // Delete is offered only once the account is disabled, which is also
-  // what the server enforces.
-  if (canDelete.value && !u.enabled) {
-    items.push({
+    },
+    // Delete is offered only once the account is disabled, which is also
+    // what the server enforces.
+    {
       label: 'Delete…',
       icon: 'pi pi-trash',
-      class: 'menu-item-danger',
+      capability: 'write:user.delete',
+      available: !u.enabled,
+      danger: true,
       disabled: busy,
-      command: () => {
+      run: () => {
         deleteDialogOpen.value = true;
       },
-    });
-  }
-  return items;
+    },
+  ];
 });
 
 // ---- Rename / delete -------------------------------------------------------
@@ -875,29 +846,17 @@ function addressLines(u: UserDetail | null): string[] {
 
 const overviewLocation = computed(() => addressLines(user.value));
 
-// Tab specs drive the nav rendering so we can hide capability-gated tabs
-// without scattering v-ifs across the template.
-interface TabSpec {
-  id: TabId;
-  label: string;
-  icon: string; // PrimeIcon variant class, e.g. 'pi-th-large'
-  count?: number;
-  visible: boolean;
-  // When true, the tab always renders icon-only (label hidden, native
-  // tooltip on hover). Used for tabs whose icon is universal enough to
-  // stand on its own — Overview and Debug — so the bar has more room
-  // for word labels on the more ambiguous tabs.
-  iconOnly?: boolean;
-}
-const tabs = computed<TabSpec[]>(() => {
+// Overview and Debug are icon-only: their icons stand on their own, which
+// leaves room for labels on the others.
+const tabs = computed<ObjectPageTab<TabId>[]>(() => {
   const u = user.value;
-  const list: TabSpec[] = [
+  const list: ObjectPageTab<TabId>[] = [
     { id: 'overview', label: 'Overview', icon: 'pi-th-large', visible: true, iconOnly: true },
     { id: 'organization', label: 'Organization', icon: 'pi-sitemap', visible: true },
     { id: 'contact', label: 'Contact', icon: 'pi-envelope', visible: true },
     { id: 'account', label: 'Account', icon: 'pi-id-card', visible: true },
   ];
-  const groupsTab: TabSpec = {
+  const groupsTab: ObjectPageTab<TabId> = {
     id: 'groups',
     label: 'Groups',
     icon: 'pi-users',
@@ -924,14 +883,6 @@ const tabs = computed<TabSpec[]>(() => {
   return list;
 });
 
-// The tab lives in the URL; a hidden or unknown one falls back to Overview
-// once the user has loaded (Sign-ins and Debug depend on the record).
-const activeTab = useRouteTab<TabId>({
-  tabs: () => tabs.value,
-  fallback: 'overview',
-  ready: () => !!user.value,
-});
-
 // First N groups for the Overview summary
 const groupsTop = computed(() => (user.value?.groupMemberships ?? []).slice(0, 5));
 const activityTop = computed(() => activityEvents.value.slice(0, 5));
@@ -940,416 +891,484 @@ const activityTop = computed(() => activityEvents.value.slice(0, 5));
 watch(user, (u) => {
   if (u && !activityLoaded.value && !activityLoading.value) void loadActivity();
 });
-
-const copied = ref<{ email: boolean; dn: boolean }>({ email: false, dn: false });
-async function copy(kind: 'email' | 'dn'): Promise<void> {
-  const u = user.value;
-  if (!u) return;
-  const text = kind === 'email' ? (u.email ?? '') : u.distinguishedName;
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    copied.value = { ...copied.value, [kind]: true };
-    setTimeout(() => {
-      copied.value = { ...copied.value, [kind]: false };
-    }, 1800);
-  } catch {
-    toast.add({ severity: 'warn', summary: 'Clipboard unavailable', life: 2500 });
-  }
-}
 </script>
 
 <template>
   <Toast />
-  <div class="page-inner detail-page" :style="{ '--detail-sticky-offset': `${heroHeight}px` }">
+  <div class="page-inner detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
     <DetailLoading v-if="!user && loading">Loading user…</DetailLoading>
-    <div v-if="user" class="detail-stack">
-      <!-- Hero. Two-column layout: avatar + identity + identifier line +
-           launchers + DN, with a compact meta strip on the right. Actions
-           live on the tab bar (not here) so the hero stays focused on
-           "who is this" rather than "what can I do." -->
-      <section :ref="setHero" class="detail-hero" :class="{ 'is-compact': heroCompact }">
-        <Avatar
-          :name="user.displayName ?? user.samAccountName"
-          :seed="user.samAccountName"
-          :size="heroCompact ? 28 : 80"
-          :photo-url="photoUrl"
-        />
+    <ObjectPageLayout
+      v-if="user"
+      kind="user"
+      :name="displayName"
+      :avatar="{
+        name: user.displayName ?? user.samAccountName,
+        seed: user.samAccountName,
+        photoUrl,
+      }"
+      :subtitle="subtitle"
+      :identifier="identifier"
+      :dn="user.distinguishedName"
+      :links="links"
+      :tabs="tabs"
+      fallback-tab="overview"
+      :actions="actions"
+      :actions-busy="accountActionRunning !== null || moveSubmitting"
+      :refreshing="refreshing"
+      :freshness="user.freshness"
+      @refresh="refreshFromAd"
+    >
+      <template #badges>
+        <StatusBadge :user="user" size="lg" />
+        <span
+          v-if="user.isPrivileged"
+          class="badge badge-amber badge-lg"
+          title="AD adminCount=1 — this account is or was a member of a protected group. AD does not clear adminCount automatically when removed, so verify current group memberships before relying on this."
+        >
+          <i class="pi pi-shield" /> privileged
+        </span>
+        <span
+          v-if="user.passwordNeverExpires"
+          class="badge badge-violet badge-lg"
+          title="DONT_EXPIRE_PASSWORD set"
+        >
+          <i class="pi pi-shield" /> never expires
+        </span>
+        <span v-if="user.freshness.isStale" class="badge badge-amber badge-lg stale-flag">
+          <span class="badge-dot" /> Cache stale
+        </span>
+      </template>
 
-        <div class="detail-hero-main">
-          <div class="detail-hero-row">
-            <h1 class="detail-hero-name">{{ displayName }}</h1>
-            <StatusBadge :user="user" size="lg" />
-            <span
-              v-if="user.isPrivileged"
-              class="badge badge-amber badge-lg"
-              title="AD adminCount=1 — this account is or was a member of a protected group. AD does not clear adminCount automatically when removed, so verify current group memberships before relying on this."
-            >
-              <i class="pi pi-shield" /> privileged
-            </span>
-            <span
-              v-if="user.passwordNeverExpires"
-              class="badge badge-violet badge-lg"
-              title="DONT_EXPIRE_PASSWORD set"
-            >
-              <i class="pi pi-shield" /> never expires
-            </span>
-            <span v-if="user.freshness.isStale" class="badge badge-amber badge-lg stale-flag">
-              <span class="badge-dot" /> Cache stale
-            </span>
-          </div>
-
-          <div v-if="subtitle" class="detail-hero-title">{{ subtitle }}</div>
-
-          <!-- Primary identifier line. Prefers the email; falls back
-               to UPN/SAM only when no email is set. -->
-          <button
-            v-if="user.email"
-            type="button"
-            class="copybtn copybtn-inline"
-            :title="copied.email ? 'Copied!' : 'Copy email'"
-            @click="copy('email')"
-          >
-            <i :class="copied.email ? 'pi pi-check' : 'pi pi-copy'" />
-            <span class="mono">{{ user.email }}</span>
-          </button>
-          <div v-else class="detail-hero-upn mono">
-            {{ user.userPrincipalName ?? user.samAccountName }}
-          </div>
-
-          <!-- Email / Teams launchers + DN copy live on a single row to
-               keep the hero tight. -->
-          <div class="detail-hero-actions-row">
-            <a v-if="mailtoHref" class="copybtn launcher" :href="mailtoHref" title="Send email">
-              <i class="pi pi-envelope" />
-              <span>Email</span>
-            </a>
-            <a v-if="teamsHref" class="copybtn launcher" :href="teamsHref" title="Open Teams chat">
-              <i class="pi pi-comments" />
-              <span>Teams</span>
-            </a>
-            <button
-              type="button"
-              class="copybtn launcher hero-path"
-              :title="copied.dn ? 'Copied!' : 'Copy distinguished name'"
-              @click="copy('dn')"
-            >
-              <i :class="copied.dn ? 'pi pi-check' : 'pi pi-sitemap'" />
-              <span class="mono hero-path-text">{{ dnPath }}</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Tabs. Actions menu lives at the right end of the bar so it's
-           always one click away regardless of which tab is active. -->
-      <nav
-        :ref="setTabsNav"
-        class="ds-tabs ds-tabs-with-actions"
-        :class="{ compact: tabsCompact, 'hero-compact': heroCompact }"
-      >
-        <!-- Only the tabs are in the tablist; refresh and Actions sit beside it. -->
-        <div class="ds-tablist" role="tablist" aria-label="User sections">
-          <button
-            v-for="t in tabs.filter((t) => t.visible)"
-            :key="t.id"
-            type="button"
-            role="tab"
-            class="ds-tab"
-            :class="{ active: activeTab === t.id, 'icon-only': t.iconOnly }"
-            :aria-selected="activeTab === t.id"
-            :title="tabsCompact || t.iconOnly ? t.label : undefined"
-            :aria-label="t.label"
-            @click="activeTab = t.id"
-          >
-            <i :class="['pi', t.icon]" aria-hidden="true" />
-            <span class="ds-tab-label">{{ t.label }}</span>
-            <span v-if="t.count !== undefined" class="ds-tab-count mono">{{ t.count }}</span>
-          </button>
-        </div>
-        <div class="ds-tabs-spacer" />
-        <Button
-          icon="pi pi-refresh"
-          text
-          severity="secondary"
-          size="small"
-          :loading="refreshing"
-          title="Refresh from directory"
-          class="ds-tabs-refresh"
-          @click="refreshFromAd"
-        />
-        <div v-if="actionItems.length > 0" class="ds-tabs-actions">
-          <Button
-            label="Actions"
-            icon="pi pi-chevron-down"
-            icon-pos="right"
-            severity="secondary"
-            text
-            size="small"
-            :loading="accountActionRunning !== null || moveSubmitting"
-            aria-haspopup="true"
-            aria-controls="user-actions-menu"
-            @click="toggleActionsMenu"
-          />
-          <Menu id="user-actions-menu" ref="actionsMenu" :model="actionItems" :popup="true" />
-        </div>
-      </nav>
-
-      <!-- Overview — at-a-glance summary that aggregates the most-asked-about
+      <template #default="{ tab: activeTab, select: selectTab }">
+        <!-- Overview — at-a-glance summary that aggregates the most-asked-about
            pieces from each detail tab so the operator does not have to hunt. -->
-      <div v-if="activeTab === 'overview'" class="detail-grid">
-        <Card title="Organization">
-          <dl class="kv-grid">
-            <dt class="fld-label">Title</dt>
-            <dd>{{ user.title ?? '—' }}</dd>
-            <dt class="fld-label">Department</dt>
-            <dd>{{ user.department ?? '—' }}</dd>
-            <dt class="fld-label">Company</dt>
-            <dd>{{ user.company ?? '—' }}</dd>
-            <dt class="fld-label">Manager</dt>
-            <dd>
-              <router-link
-                v-if="user.manager?.id"
-                :to="{ name: 'user-detail', params: { id: user.manager.id } }"
-                class="reports-link"
-              >
-                <i class="pi pi-user" />
-                <span>{{ user.manager.displayName ?? user.manager.distinguishedName }}</span>
-              </router-link>
-              <span v-else-if="user.manager">{{
-                user.manager.displayName ?? user.manager.distinguishedName
-              }}</span>
-              <span v-else>—</span>
-            </dd>
-          </dl>
-        </Card>
-
-        <Card title="Contact">
-          <dl class="kv-grid">
-            <dt class="fld-label">Email</dt>
-            <dd class="mono kv-wrap">{{ user.email ?? '—' }}</dd>
-            <dt class="fld-label">Mobile</dt>
-            <dd class="mono">{{ user.mobile ?? '—' }}</dd>
-            <dt class="fld-label">Work phone</dt>
-            <dd class="mono">{{ user.phone ?? '—' }}</dd>
-            <dt class="fld-label kv-top">Location</dt>
-            <dd>
-              <template v-if="overviewLocation.length > 0">
-                <div v-for="line in overviewLocation" :key="line" class="address-line">
-                  {{ line }}
-                </div>
-              </template>
-              <template v-else>—</template>
-            </dd>
-          </dl>
-        </Card>
-
-        <Card title="Account">
-          <dl class="kv-grid">
-            <dt class="fld-label">Status</dt>
-            <dd><StatusBadge :user="user" /></dd>
-            <dt class="fld-label">Last logon</dt>
-            <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
-            <template v-if="user.entra">
-              <dt class="fld-label" title="Most recent interactive sign-in reported by Entra ID">
-                Last sign-in (Entra)
-              </dt>
-              <dd class="mono">
-                <template v-if="user.entra.lastSignInAt">{{
-                  fmtAbsolute(user.entra.lastSignInAt)
-                }}</template>
-                <span
-                  v-else-if="user.entra.lastStatus === 'p1_required'"
-                  class="entra-na"
-                  title="signInActivity requires an Entra ID P1 license"
-                  >P1 required</span
-                >
-                <span v-else class="entra-na">—</span>
-              </dd>
-            </template>
-            <template v-if="user.entra && user.entra.mfa">
-              <dt
-                class="fld-label"
-                title="MFA registration state from /reports/authenticationMethods"
-              >
-                MFA
-              </dt>
+        <div v-if="activeTab === 'overview'" class="detail-grid">
+          <Card title="Organization">
+            <dl class="kv-grid">
+              <dt class="fld-label">Title</dt>
+              <dd>{{ user.title ?? '—' }}</dd>
+              <dt class="fld-label">Department</dt>
+              <dd>{{ user.department ?? '—' }}</dd>
+              <dt class="fld-label">Company</dt>
+              <dd>{{ user.company ?? '—' }}</dd>
+              <dt class="fld-label">Manager</dt>
               <dd>
-                <span
-                  v-if="user.entra.mfa.isRegistered === true"
-                  class="badge badge-green"
-                  :title="
-                    user.entra.mfa.defaultMethod
-                      ? `Default: ${user.entra.mfa.defaultMethod}`
-                      : undefined
-                  "
+                <router-link
+                  v-if="user.manager?.id"
+                  :to="{ name: 'user-detail', params: { id: user.manager.id } }"
+                  class="reports-link"
                 >
-                  <i class="pi pi-shield" /> registered
-                </span>
-                <span
-                  v-else-if="user.entra.mfa.isRegistered === false && user.entra.mfa.isCapable"
-                  class="badge badge-amber"
-                  title="User can register MFA but hasn't yet"
-                >
-                  capable, not registered
-                </span>
-                <span
-                  v-else-if="user.entra.mfa.isRegistered === false"
-                  class="badge badge-red"
-                  title="User cannot register MFA in this tenant"
-                >
-                  not capable
-                </span>
-                <span v-else class="entra-na">unknown</span>
-                <div v-if="user.entra.mfa.methods.length > 0" class="mfa-methods mono">
-                  {{ user.entra.mfa.methods.join(', ') }}
-                </div>
+                  <i class="pi pi-user" />
+                  <span>{{ user.manager.displayName ?? user.manager.distinguishedName }}</span>
+                </router-link>
+                <span v-else-if="user.manager">{{
+                  user.manager.displayName ?? user.manager.distinguishedName
+                }}</span>
+                <span v-else>—</span>
               </dd>
+            </dl>
+          </Card>
+
+          <Card title="Contact">
+            <dl class="kv-grid">
+              <dt class="fld-label">Email</dt>
+              <dd class="mono kv-wrap">{{ user.email ?? '—' }}</dd>
+              <dt class="fld-label">Mobile</dt>
+              <dd class="mono">{{ user.mobile ?? '—' }}</dd>
+              <dt class="fld-label">Work phone</dt>
+              <dd class="mono">{{ user.phone ?? '—' }}</dd>
+              <dt class="fld-label kv-top">Location</dt>
+              <dd>
+                <template v-if="overviewLocation.length > 0">
+                  <div v-for="line in overviewLocation" :key="line" class="address-line">
+                    {{ line }}
+                  </div>
+                </template>
+                <template v-else>—</template>
+              </dd>
+            </dl>
+          </Card>
+
+          <Card title="Account">
+            <dl class="kv-grid">
+              <dt class="fld-label">Status</dt>
+              <dd><StatusBadge :user="user" /></dd>
+              <dt class="fld-label">Last logon</dt>
+              <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
+              <template v-if="user.entra">
+                <dt class="fld-label" title="Most recent interactive sign-in reported by Entra ID">
+                  Last sign-in (Entra)
+                </dt>
+                <dd class="mono">
+                  <template v-if="user.entra.lastSignInAt">{{
+                    fmtAbsolute(user.entra.lastSignInAt)
+                  }}</template>
+                  <span
+                    v-else-if="user.entra.lastStatus === 'p1_required'"
+                    class="entra-na"
+                    title="signInActivity requires an Entra ID P1 license"
+                    >P1 required</span
+                  >
+                  <span v-else class="entra-na">—</span>
+                </dd>
+              </template>
+              <template v-if="user.entra && user.entra.mfa">
+                <dt
+                  class="fld-label"
+                  title="MFA registration state from /reports/authenticationMethods"
+                >
+                  MFA
+                </dt>
+                <dd>
+                  <span
+                    v-if="user.entra.mfa.isRegistered === true"
+                    class="badge badge-green"
+                    :title="
+                      user.entra.mfa.defaultMethod
+                        ? `Default: ${user.entra.mfa.defaultMethod}`
+                        : undefined
+                    "
+                  >
+                    <i class="pi pi-shield" /> registered
+                  </span>
+                  <span
+                    v-else-if="user.entra.mfa.isRegistered === false && user.entra.mfa.isCapable"
+                    class="badge badge-amber"
+                    title="User can register MFA but hasn't yet"
+                  >
+                    capable, not registered
+                  </span>
+                  <span
+                    v-else-if="user.entra.mfa.isRegistered === false"
+                    class="badge badge-red"
+                    title="User cannot register MFA in this tenant"
+                  >
+                    not capable
+                  </span>
+                  <span v-else class="entra-na">unknown</span>
+                  <div v-if="user.entra.mfa.methods.length > 0" class="mfa-methods mono">
+                    {{ user.entra.mfa.methods.join(', ') }}
+                  </div>
+                </dd>
+              </template>
+              <dt class="fld-label">Password set</dt>
+              <dd class="mono">{{ fmtAbsolute(user.passwordLastSetAt) }}</dd>
+              <dt class="fld-label">Expires</dt>
+              <dd class="mono">
+                {{ user.passwordNeverExpires ? 'never' : fmtAbsolute(user.passwordExpiresAt) }}
+              </dd>
+            </dl>
+          </Card>
+
+          <Card>
+            <template #head>
+              <h3 class="dc-card-title">
+                Groups
+                <span class="ds-tab-count mono">{{ user.groupMemberships.length }}</span>
+              </h3>
             </template>
-            <dt class="fld-label">Password set</dt>
-            <dd class="mono">{{ fmtAbsolute(user.passwordLastSetAt) }}</dd>
-            <dt class="fld-label">Expires</dt>
-            <dd class="mono">
-              {{ user.passwordNeverExpires ? 'never' : fmtAbsolute(user.passwordExpiresAt) }}
-            </dd>
-          </dl>
-        </Card>
-
-        <Card>
-          <template #head>
-            <h3 class="dc-card-title">
-              Groups
-              <span class="ds-tab-count mono">{{ user.groupMemberships.length }}</span>
-            </h3>
-          </template>
-          <template #actions>
-            <Button
-              label="View all"
-              text
-              size="small"
-              severity="secondary"
-              @click="activeTab = 'groups'"
+            <template #actions>
+              <Button
+                label="View all"
+                text
+                size="small"
+                severity="secondary"
+                @click="selectTab('groups')"
+              />
+            </template>
+            <EmptyState
+              v-if="user.groupMemberships.length === 0"
+              icon="pi pi-users"
+              title="No memberships"
+              compact
             />
-          </template>
-          <EmptyState
-            v-if="user.groupMemberships.length === 0"
-            icon="pi pi-users"
-            title="No memberships"
-            compact
-          />
-          <div v-else class="group-grid">
-            <GroupChip
-              v-for="g in groupsTop"
-              :key="g.id"
-              :name="g.name || g.distinguishedName"
-              :nested="!g.direct"
-              :to="{ name: 'group-detail', params: { id: g.id } }"
-            />
-            <span v-if="user.groupMemberships.length > groupsTop.length" class="hint">
-              + {{ user.groupMemberships.length - groupsTop.length }} more
-            </span>
-          </div>
-        </Card>
+            <div v-else class="group-grid">
+              <GroupChip
+                v-for="g in groupsTop"
+                :key="g.id"
+                :name="g.name || g.distinguishedName"
+                :nested="!g.direct"
+                :to="{ name: 'group-detail', params: { id: g.id } }"
+              />
+              <span v-if="user.groupMemberships.length > groupsTop.length" class="hint">
+                + {{ user.groupMemberships.length - groupsTop.length }} more
+              </span>
+            </div>
+          </Card>
 
-        <!-- Recent sign-ins (Entra) takes priority on the overview —
+          <!-- Recent sign-ins (Entra) takes priority on the overview —
              operators investigating a user usually want to know "did
              they sign in, when, from where" first. Falls back to a
              Recent activity card (top 5 of the per-user audit log)
              when no Entra integration is configured; "View all" on
              that card jumps to /audit. -->
-        <Card v-if="user.entra && auth.actor?.directoryId" class="overview-activity">
-          <template #head>
-            <h3 class="dc-card-title">Recent sign-ins</h3>
-          </template>
-          <template #actions>
-            <Button
-              label="View all"
-              text
-              size="small"
-              severity="secondary"
-              @click="activeTab = 'signins'"
-            />
-          </template>
-          <SignInEventsList
-            :directory-id="auth.actor.directoryId"
-            :user-id="user.id"
-            :page-size="5"
-            hide-user-column
-            @select="onSignInSelect"
-          />
-        </Card>
-        <Card v-else class="overview-activity">
-          <template #head>
-            <h3 class="dc-card-title">Recent activity</h3>
-          </template>
-          <template #actions>
-            <router-link to="/audit" class="p-button p-button-text p-button-secondary p-button-sm">
-              <span class="p-button-label">View all</span>
-            </router-link>
-          </template>
-          <Message v-if="activityError" severity="warn" :closable="false">{{
-            activityError
-          }}</Message>
-          <ActivityFeed
-            :events="activityTop"
-            :loading="activityLoading && activityTop.length === 0"
-          />
-        </Card>
-      </div>
-
-      <!-- Organization — Person / Identifiers / Job + Reporting Structure +
-           "More from directory" attribute roll-up. -->
-      <Card v-else-if="activeTab === 'organization'">
-        <section v-for="sec in VIEW_SECTIONS.organization" :key="sec" class="ident-section">
-          <h3 class="ident-section-title">{{ SECTION_LABEL[sec] }}</h3>
-
-          <div v-if="scalarFieldsForSection(sec).length > 0 || sec === 'ids'" class="attr-grid">
-            <div
-              v-for="f in scalarFieldsForSection(sec)"
-              :key="f.key"
-              class="fld"
-              :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
-            >
-              <div class="fld-label">
-                {{ f.label }}
-                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
-              </div>
-              <Textarea
-                v-if="canEdit && f.multiline"
-                v-model="draft[f.key]"
-                :invalid="!!problems[f.key]"
-                :placeholder="f.label"
-                :disabled="saving"
-                auto-resize
-                rows="2"
-                :class="['attr-input', { mono: f.mono }]"
-              />
-              <InputText
-                v-else-if="canEdit"
-                v-model="draft[f.key]"
-                :invalid="!!problems[f.key]"
-                :type="f.type ?? 'text'"
-                :class="['attr-input', { mono: f.mono }]"
-                :placeholder="f.label"
-                :disabled="saving"
+          <Card v-if="user.entra && auth.actor?.directoryId" class="overview-activity">
+            <template #head>
+              <h3 class="dc-card-title">Recent sign-ins</h3>
+            </template>
+            <template #actions>
+              <Button
+                label="View all"
+                text
                 size="small"
-                fluid
+                severity="secondary"
+                @click="selectTab('signins')"
               />
-              <div
-                v-else
-                class="fld-value readonly-val"
-                :class="{ empty: !user[f.key], 'readonly-multiline': f.multiline }"
+            </template>
+            <SignInEventsList
+              :directory-id="auth.actor.directoryId"
+              :user-id="user.id"
+              :page-size="5"
+              hide-user-column
+              @select="onSignInSelect"
+            />
+          </Card>
+          <Card v-else class="overview-activity">
+            <template #head>
+              <h3 class="dc-card-title">Recent activity</h3>
+            </template>
+            <template #actions>
+              <router-link
+                to="/audit"
+                class="p-button p-button-text p-button-secondary p-button-sm"
               >
-                <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
+                <span class="p-button-label">View all</span>
+              </router-link>
+            </template>
+            <Message v-if="activityError" severity="warn" :closable="false">{{
+              activityError
+            }}</Message>
+            <ActivityFeed
+              :events="activityTop"
+              :loading="activityLoading && activityTop.length === 0"
+            />
+          </Card>
+        </div>
+
+        <!-- Organization — Person / Identifiers / Job + Reporting Structure +
+           "More from directory" attribute roll-up. -->
+        <Card v-else-if="activeTab === 'organization'">
+          <section v-for="sec in VIEW_SECTIONS.organization" :key="sec" class="ident-section">
+            <h3 class="ident-section-title">{{ SECTION_LABEL[sec] }}</h3>
+
+            <div v-if="scalarFieldsForSection(sec).length > 0 || sec === 'ids'" class="attr-grid">
+              <div
+                v-for="f in scalarFieldsForSection(sec)"
+                :key="f.key"
+                class="fld"
+                :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
+              >
+                <div class="fld-label">
+                  {{ f.label }}
+                  <span
+                    v-if="changed(f.key)"
+                    class="fld-modified-dot"
+                    title="Unsaved change"
+                  ></span>
+                </div>
+                <Textarea
+                  v-if="canEdit && f.multiline"
+                  v-model="draft[f.key]"
+                  :invalid="!!problems[f.key]"
+                  :placeholder="f.label"
+                  :disabled="saving"
+                  auto-resize
+                  rows="2"
+                  :class="['attr-input', { mono: f.mono }]"
+                />
+                <InputText
+                  v-else-if="canEdit"
+                  v-model="draft[f.key]"
+                  :invalid="!!problems[f.key]"
+                  :type="f.type ?? 'text'"
+                  :class="['attr-input', { mono: f.mono }]"
+                  :placeholder="f.label"
+                  :disabled="saving"
+                  size="small"
+                  fluid
+                />
+                <div
+                  v-else
+                  class="fld-value readonly-val"
+                  :class="{ empty: !user[f.key], 'readonly-multiline': f.multiline }"
+                >
+                  <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
+                </div>
+                <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                  problems[f.key]
+                }}</small>
               </div>
-              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
-                problems[f.key]
-              }}</small>
+
+              <template v-if="sec === 'ids'">
+                <div class="fld">
+                  <div class="fld-label">Username</div>
+                  <div class="fld-value mono readonly-val">{{ user.samAccountName }}</div>
+                </div>
+                <div class="fld">
+                  <div class="fld-label">UPN</div>
+                  <div class="fld-value mono readonly-val">{{ user.userPrincipalName ?? '—' }}</div>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <ReportingStructureCard
+            :manager="user.manager"
+            :direct-reports="user.directReports"
+            :self-name="displayName"
+          />
+
+          <section v-if="extraAttrRows.length > 0" class="ident-section">
+            <h3 class="ident-section-title">
+              More from directory
+              <span class="hint"
+                >{{ extraAttrRows.length }} attribute{{
+                  extraAttrRows.length === 1 ? '' : 's'
+                }}</span
+              >
+            </h3>
+            <div class="extras-grid">
+              <div v-for="row in extraAttrRows" :key="row.key" class="extras-row">
+                <div class="extras-key mono">{{ row.key }}</div>
+                <div class="extras-vals">
+                  <div
+                    v-for="(val, idx) in row.values"
+                    :key="`${row.key}-${idx}`"
+                    class="extras-val"
+                  >
+                    {{ val }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </Card>
+
+        <!-- Contact — Email / Phones / Address + Communication placeholder +
+           Directory Visibility. -->
+        <Card v-else-if="activeTab === 'contact'">
+          <section v-for="sec in VIEW_SECTIONS.contact" :key="sec" class="ident-section">
+            <h3 class="ident-section-title">{{ SECTION_LABEL[sec] }}</h3>
+
+            <div v-if="scalarFieldsForSection(sec).length > 0" class="attr-grid">
+              <div
+                v-for="f in scalarFieldsForSection(sec)"
+                :key="f.key"
+                class="fld"
+                :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
+              >
+                <div class="fld-label">
+                  {{ f.label }}
+                  <span
+                    v-if="changed(f.key)"
+                    class="fld-modified-dot"
+                    title="Unsaved change"
+                  ></span>
+                </div>
+                <Textarea
+                  v-if="canEdit && f.multiline"
+                  v-model="draft[f.key]"
+                  :invalid="!!problems[f.key]"
+                  :placeholder="f.label"
+                  :disabled="saving"
+                  auto-resize
+                  rows="3"
+                  :class="['attr-input', { mono: f.mono }]"
+                />
+                <InputText
+                  v-else-if="canEdit"
+                  v-model="draft[f.key]"
+                  :invalid="!!problems[f.key]"
+                  :type="f.type ?? 'text'"
+                  :class="['attr-input', { mono: f.mono }]"
+                  :placeholder="f.label"
+                  :disabled="saving"
+                  size="small"
+                  fluid
+                />
+                <div
+                  v-else
+                  class="fld-value readonly-val"
+                  :class="{ empty: !user[f.key], 'readonly-multiline': f.multiline }"
+                >
+                  <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
+                </div>
+                <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                  problems[f.key]
+                }}</small>
+              </div>
             </div>
 
-            <template v-if="sec === 'ids'">
+            <div v-if="arrayFieldsForSection(sec).length > 0" class="attr-multi-grid">
+              <div
+                v-for="f in arrayFieldsForSection(sec)"
+                :key="f.key"
+                class="fld attr-multi"
+                :class="{ 'fld-modified': changed(f.key) }"
+              >
+                <div class="fld-label">
+                  {{ f.label }}
+                  <span v-if="(user[f.key]?.length ?? 0) > 0" class="ds-tab-count mono">
+                    {{ user[f.key]!.length }}
+                  </span>
+                  <span
+                    v-if="changed(f.key)"
+                    class="fld-modified-dot"
+                    title="Unsaved change"
+                  ></span>
+                </div>
+                <Textarea
+                  v-if="canEdit"
+                  v-model="draft[f.key]"
+                  :invalid="!!problems[f.key]"
+                  :placeholder="f.placeholder"
+                  :disabled="saving"
+                  auto-resize
+                  rows="2"
+                  class="attr-input"
+                />
+                <div
+                  v-else-if="(user[f.key]?.length ?? 0) === 0"
+                  class="fld-value readonly-val empty"
+                >
+                  <span>—</span>
+                </div>
+                <div v-else class="multi-chips">
+                  <span
+                    v-for="(val, idx) in user[f.key]"
+                    :key="`${f.key}-${idx}`"
+                    class="multi-chip mono"
+                    >{{ val }}</span
+                  >
+                </div>
+                <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                  problems[f.key]
+                }}</small>
+              </div>
+            </div>
+
+            <div v-if="sec === 'email' && user.emailAliases.length > 0" class="ident-subblock">
+              <div class="fld-label">
+                Aliases
+                <span class="ds-tab-count mono">{{ user.emailAliases.length }}</span>
+              </div>
+              <div class="multi-chips">
+                <span v-for="alias in user.emailAliases" :key="alias" class="multi-chip mono">{{
+                  alias
+                }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="ident-section">
+            <h3 class="ident-section-title">Directory visibility</h3>
+            <div class="attr-grid">
+              <div class="fld">
+                <div class="fld-label">Display name</div>
+                <div class="fld-value readonly-val">{{ user.displayName ?? '—' }}</div>
+              </div>
               <div class="fld">
                 <div class="fld-label">Username</div>
                 <div class="fld-value mono readonly-val">{{ user.samAccountName }}</div>
@@ -1358,25 +1377,281 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 <div class="fld-label">UPN</div>
                 <div class="fld-value mono readonly-val">{{ user.userPrincipalName ?? '—' }}</div>
               </div>
-            </template>
+            </div>
+          </section>
+        </Card>
+
+        <!-- Groups -->
+        <Card v-else-if="activeTab === 'groups'">
+          <div class="groups-toolbar">
+            <div class="groups-toolbar-left">
+              <span class="p-input-icon-left groups-filter">
+                <i class="pi pi-search" />
+                <InputText v-model="groupFilter" placeholder="Filter groups…" size="small" />
+              </span>
+              <span class="groups-count">
+                {{ groupsFiltered.length
+                }}<span v-if="groupsFiltered.length !== user.groupMemberships.length">
+                  of {{ user.groupMemberships.length }}</span
+                >
+              </span>
+            </div>
+            <Button
+              v-if="canManageGroups"
+              label="Add group"
+              icon="pi pi-plus"
+              size="small"
+              @click="openAddGroupDialog"
+            />
           </div>
-        </section>
 
-        <ReportingStructureCard
-          :manager="user.manager"
-          :direct-reports="user.directReports"
-          :self-name="displayName"
-        />
+          <EmptyState
+            v-if="user.groupMemberships.length === 0"
+            icon="pi pi-users"
+            title="No memberships in cache"
+            message="Run a sync if this seems wrong."
+          />
+          <EmptyState
+            v-else-if="groupsFiltered.length === 0"
+            icon="pi pi-filter"
+            title="No groups match"
+            message="Try a different filter."
+            compact
+          />
+          <template v-else>
+            <section v-if="groupsDirect.length > 0" class="group-section">
+              <h4 class="group-section-title">
+                Direct
+                <span class="group-section-count mono">{{ groupsDirect.length }}</span>
+              </h4>
+              <div class="group-grid">
+                <GroupChip
+                  v-for="g in groupsDirect"
+                  :key="g.id"
+                  :name="g.name || g.distinguishedName"
+                  :nested="false"
+                  :removable="canManageGroups && groupPending?.membership.groupId !== g.id"
+                  :to="{ name: 'group-detail', params: { id: g.id } }"
+                  @remove="requestRemoveGroup(g)"
+                />
+              </div>
+            </section>
+            <section v-if="groupsInherited.length > 0" class="group-section">
+              <h4 class="group-section-title">
+                Inherited via nested groups
+                <span class="group-section-count mono">{{ groupsInherited.length }}</span>
+              </h4>
+              <div class="group-grid">
+                <GroupChip
+                  v-for="g in groupsInherited"
+                  :key="g.id"
+                  :name="g.name || g.distinguishedName"
+                  :nested="true"
+                  :to="{ name: 'group-detail', params: { id: g.id } }"
+                />
+              </div>
+            </section>
+          </template>
+        </Card>
 
-        <section v-if="extraAttrRows.length > 0" class="ident-section">
-          <h3 class="ident-section-title">
-            More from directory
-            <span class="hint"
-              >{{ extraAttrRows.length }} attribute{{ extraAttrRows.length === 1 ? '' : 's' }}</span
-            >
-          </h3>
-          <div class="extras-grid">
-            <div v-for="row in extraAttrRows" :key="row.key" class="extras-row">
+        <!-- Account — sign-in & lockout, password & security, lifecycle, plus
+           a placeholder for Devices / Authentication Methods that surfaces
+           only once the Entra integration lands. -->
+        <div v-else-if="activeTab === 'account'" class="detail-grid">
+          <Card title="Sign-in & Identity">
+            <dl class="kv-grid">
+              <dt class="fld-label">Status</dt>
+              <dd><StatusBadge :user="user" /></dd>
+              <dt class="fld-label">Locked</dt>
+              <dd>{{ user.locked ? 'Yes' : 'No' }}</dd>
+              <template v-if="user.lockedAt">
+                <dt class="fld-label">Locked at</dt>
+                <dd class="mono">{{ fmtAbsolute(user.lockedAt) }}</dd>
+              </template>
+              <template v-if="user.locked">
+                <dt class="fld-label">Auto-unlocks</dt>
+                <dd class="mono">
+                  <template v-if="user.autoUnlockAt">
+                    {{ fmtAbsolute(user.autoUnlockAt) }}
+                    <span class="text-muted"> · {{ fmtRelative(user.autoUnlockAt) }}</span>
+                  </template>
+                  <template v-else>
+                    <span class="text-muted">manual unlock required</span>
+                  </template>
+                </dd>
+              </template>
+              <dt class="fld-label">Last logon</dt>
+              <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
+            </dl>
+            <div class="card-actions">
+              <Button
+                v-if="canUnlock"
+                :label="user.locked ? 'Unlock account' : 'Not locked'"
+                icon="pi pi-unlock"
+                :disabled="!user.locked || accountActionRunning !== null"
+                :severity="user.locked ? 'warn' : 'secondary'"
+                :outlined="!user.locked"
+                size="small"
+                :loading="accountActionRunning === 'unlock'"
+                @click="runOnUser('unlock')"
+              />
+            </div>
+          </Card>
+
+          <Card title="Password & Security">
+            <dl class="kv-grid">
+              <dt class="fld-label">Last set</dt>
+              <dd class="mono">{{ fmtAbsolute(user.passwordLastSetAt) }}</dd>
+              <dt class="fld-label">Last bad password</dt>
+              <dd class="mono">
+                {{ user.lastBadPasswordAt ? fmtAbsolute(user.lastBadPasswordAt) : 'never' }}
+              </dd>
+              <dt class="fld-label">Expires</dt>
+              <dd class="mono">
+                {{ user.passwordNeverExpires ? 'never' : fmtAbsolute(user.passwordExpiresAt) }}
+              </dd>
+            </dl>
+            <div class="card-actions">
+              <Button
+                v-if="canResetPassword"
+                label="Reset password"
+                icon="pi pi-key"
+                severity="danger"
+                outlined
+                size="small"
+                @click="openResetDialog"
+              />
+            </div>
+          </Card>
+
+          <Card title="Lifecycle">
+            <dl class="kv-grid">
+              <dt class="fld-label">Account expires</dt>
+              <dd class="mono">
+                {{ user.accountExpiresAt ? fmtAbsolute(user.accountExpiresAt) : 'never' }}
+              </dd>
+              <dt class="fld-label">Last modified</dt>
+              <dd class="mono">{{ fmtAbsolute(user.modifiedAtSource) }}</dd>
+              <dt class="fld-label">Privileged</dt>
+              <dd>{{ user.isPrivileged ? 'Yes (adminCount=1)' : 'No' }}</dd>
+            </dl>
+          </Card>
+
+          <Card title="Authentication & MFA">
+            <!-- MFA data when an Entra integration is configured AND the
+               entra.mfa.registration runner has visited this user.
+               Note: registered devices come from a separate Graph
+               endpoint (/users/{id}/registeredDevices) we haven't
+               wired yet — listed as a follow-up. -->
+            <template v-if="user.entra && user.entra.mfa">
+              <dl class="kv-grid">
+                <dt class="fld-label">Status</dt>
+                <dd>
+                  <span v-if="user.entra.mfa.isRegistered === true" class="badge badge-green">
+                    <i class="pi pi-shield" /> registered
+                  </span>
+                  <span
+                    v-else-if="user.entra.mfa.isRegistered === false && user.entra.mfa.isCapable"
+                    class="badge badge-amber"
+                    title="User can register MFA but hasn't yet"
+                  >
+                    capable, not registered
+                  </span>
+                  <span v-else-if="user.entra.mfa.isRegistered === false" class="badge badge-red">
+                    not capable
+                  </span>
+                  <span v-else class="entra-na">unknown</span>
+                </dd>
+                <dt class="fld-label">Methods registered</dt>
+                <dd>
+                  <ul v-if="user.entra.mfa.methods.length > 0" class="mfa-method-list">
+                    <li v-for="m in user.entra.mfa.methods" :key="m">
+                      <i class="pi pi-lock" /> {{ m }}
+                    </li>
+                  </ul>
+                  <span v-else class="entra-na">none</span>
+                </dd>
+                <dt class="fld-label">Default method</dt>
+                <dd>{{ user.entra.mfa.defaultMethod ?? '—' }}</dd>
+                <dt class="fld-label">Passwordless capable</dt>
+                <dd>
+                  {{
+                    user.entra.mfa.isPasswordlessCapable === null
+                      ? '—'
+                      : user.entra.mfa.isPasswordlessCapable
+                        ? 'Yes'
+                        : 'No'
+                  }}
+                </dd>
+                <dt class="fld-label">Last refreshed</dt>
+                <dd class="mono">
+                  {{ user.entra.mfa.fetchedAt ? fmtAbsolute(user.entra.mfa.fetchedAt) : '—' }}
+                </dd>
+              </dl>
+            </template>
+            <EmptyState
+              v-else-if="user.entra"
+              icon="pi pi-clock"
+              title="MFA data not yet synced"
+              message="Enable the MFA registration feature in Settings → Integrations and run the entra.mfa.registration task to populate this card."
+              compact
+            />
+            <EmptyState
+              v-else
+              icon="pi pi-shield"
+              title="Requires Entra integration"
+              message="Configure the Microsoft Graph integration in Settings → Integrations to surface MFA registration here. Registered devices coming in a future release."
+              compact
+            />
+          </Card>
+        </div>
+
+        <!-- Sign-ins — Microsoft Entra audit log for this user, served
+           from the local entra_signin_events cache (delta-synced every
+           15min by entra.signins.events). Filtering by user_object_guid
+           is reliable; the live-Graph approach was unreliable due to
+           UPN case-sensitivity in Graph's $filter. -->
+        <Card v-else-if="activeTab === 'signins' && user?.entra && auth.actor?.directoryId">
+          <SignInEventsList
+            :directory-id="auth.actor.directoryId"
+            :user-id="user.id"
+            hide-user-column
+            @select="onSignInSelect"
+          />
+        </Card>
+
+        <!-- Raw LDAP — every populated attribute on the entry, as AD returned
+           it. Source of truth for deciding which attributes to promote into
+           the typed grids; admin-only via the view:raw_attributes capability. -->
+        <Card v-else-if="activeTab === 'raw' && canViewRaw">
+          <div class="raw-toolbar">
+            <InputText
+              v-model="rawFilter"
+              placeholder="Filter by attribute name or value…"
+              size="small"
+              fluid
+            />
+            <span class="hint">
+              {{ filteredRawRows.length }} of {{ rawAttrRows.length }} attribute{{
+                rawAttrRows.length === 1 ? '' : 's'
+              }}
+            </span>
+          </div>
+          <EmptyState
+            v-if="rawAttrRows.length === 0"
+            icon="pi pi-inbox"
+            title="No raw attributes"
+            message="The directory returned no populated attributes for this user."
+          />
+          <EmptyState
+            v-else-if="filteredRawRows.length === 0"
+            icon="pi pi-filter"
+            title="No matches"
+            message="Try a different filter."
+            compact
+          />
+          <div v-else class="extras-grid">
+            <div v-for="row in filteredRawRows" :key="row.key" class="extras-row">
               <div class="extras-key mono">{{ row.key }}</div>
               <div class="extras-vals">
                 <div v-for="(val, idx) in row.values" :key="`${row.key}-${idx}`" class="extras-val">
@@ -1385,462 +1660,46 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               </div>
             </div>
           </div>
-        </section>
-      </Card>
-
-      <!-- Contact — Email / Phones / Address + Communication placeholder +
-           Directory Visibility. -->
-      <Card v-else-if="activeTab === 'contact'">
-        <section v-for="sec in VIEW_SECTIONS.contact" :key="sec" class="ident-section">
-          <h3 class="ident-section-title">{{ SECTION_LABEL[sec] }}</h3>
-
-          <div v-if="scalarFieldsForSection(sec).length > 0" class="attr-grid">
-            <div
-              v-for="f in scalarFieldsForSection(sec)"
-              :key="f.key"
-              class="fld"
-              :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
-            >
-              <div class="fld-label">
-                {{ f.label }}
-                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
-              </div>
-              <Textarea
-                v-if="canEdit && f.multiline"
-                v-model="draft[f.key]"
-                :invalid="!!problems[f.key]"
-                :placeholder="f.label"
-                :disabled="saving"
-                auto-resize
-                rows="3"
-                :class="['attr-input', { mono: f.mono }]"
-              />
-              <InputText
-                v-else-if="canEdit"
-                v-model="draft[f.key]"
-                :invalid="!!problems[f.key]"
-                :type="f.type ?? 'text'"
-                :class="['attr-input', { mono: f.mono }]"
-                :placeholder="f.label"
-                :disabled="saving"
-                size="small"
-                fluid
-              />
-              <div
-                v-else
-                class="fld-value readonly-val"
-                :class="{ empty: !user[f.key], 'readonly-multiline': f.multiline }"
-              >
-                <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
-              </div>
-              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
-                problems[f.key]
-              }}</small>
-            </div>
-          </div>
-
-          <div v-if="arrayFieldsForSection(sec).length > 0" class="attr-multi-grid">
-            <div
-              v-for="f in arrayFieldsForSection(sec)"
-              :key="f.key"
-              class="fld attr-multi"
-              :class="{ 'fld-modified': changed(f.key) }"
-            >
-              <div class="fld-label">
-                {{ f.label }}
-                <span v-if="(user[f.key]?.length ?? 0) > 0" class="ds-tab-count mono">
-                  {{ user[f.key]!.length }}
-                </span>
-                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
-              </div>
-              <Textarea
-                v-if="canEdit"
-                v-model="draft[f.key]"
-                :invalid="!!problems[f.key]"
-                :placeholder="f.placeholder"
-                :disabled="saving"
-                auto-resize
-                rows="2"
-                class="attr-input"
-              />
-              <div
-                v-else-if="(user[f.key]?.length ?? 0) === 0"
-                class="fld-value readonly-val empty"
-              >
-                <span>—</span>
-              </div>
-              <div v-else class="multi-chips">
-                <span
-                  v-for="(val, idx) in user[f.key]"
-                  :key="`${f.key}-${idx}`"
-                  class="multi-chip mono"
-                  >{{ val }}</span
-                >
-              </div>
-              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
-                problems[f.key]
-              }}</small>
-            </div>
-          </div>
-
-          <div v-if="sec === 'email' && user.emailAliases.length > 0" class="ident-subblock">
-            <div class="fld-label">
-              Aliases
-              <span class="ds-tab-count mono">{{ user.emailAliases.length }}</span>
-            </div>
-            <div class="multi-chips">
-              <span v-for="alias in user.emailAliases" :key="alias" class="multi-chip mono">{{
-                alias
-              }}</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="ident-section">
-          <h3 class="ident-section-title">Directory visibility</h3>
-          <div class="attr-grid">
-            <div class="fld">
-              <div class="fld-label">Display name</div>
-              <div class="fld-value readonly-val">{{ user.displayName ?? '—' }}</div>
-            </div>
-            <div class="fld">
-              <div class="fld-label">Username</div>
-              <div class="fld-value mono readonly-val">{{ user.samAccountName }}</div>
-            </div>
-            <div class="fld">
-              <div class="fld-label">UPN</div>
-              <div class="fld-value mono readonly-val">{{ user.userPrincipalName ?? '—' }}</div>
-            </div>
-          </div>
-        </section>
-      </Card>
-
-      <!-- Groups -->
-      <Card v-else-if="activeTab === 'groups'">
-        <div class="groups-toolbar">
-          <div class="groups-toolbar-left">
-            <span class="p-input-icon-left groups-filter">
-              <i class="pi pi-search" />
-              <InputText v-model="groupFilter" placeholder="Filter groups…" size="small" />
-            </span>
-            <span class="groups-count">
-              {{ groupsFiltered.length
-              }}<span v-if="groupsFiltered.length !== user.groupMemberships.length">
-                of {{ user.groupMemberships.length }}</span
-              >
-            </span>
-          </div>
-          <Button
-            v-if="canManageGroups"
-            label="Add group"
-            icon="pi pi-plus"
-            size="small"
-            @click="openAddGroupDialog"
-          />
-        </div>
-
-        <EmptyState
-          v-if="user.groupMemberships.length === 0"
-          icon="pi pi-users"
-          title="No memberships in cache"
-          message="Run a sync if this seems wrong."
-        />
-        <EmptyState
-          v-else-if="groupsFiltered.length === 0"
-          icon="pi pi-filter"
-          title="No groups match"
-          message="Try a different filter."
-          compact
-        />
-        <template v-else>
-          <section v-if="groupsDirect.length > 0" class="group-section">
-            <h4 class="group-section-title">
-              Direct
-              <span class="group-section-count mono">{{ groupsDirect.length }}</span>
-            </h4>
-            <div class="group-grid">
-              <GroupChip
-                v-for="g in groupsDirect"
-                :key="g.id"
-                :name="g.name || g.distinguishedName"
-                :nested="false"
-                :removable="canManageGroups && groupPending?.membership.groupId !== g.id"
-                :to="{ name: 'group-detail', params: { id: g.id } }"
-                @remove="requestRemoveGroup(g)"
-              />
-            </div>
-          </section>
-          <section v-if="groupsInherited.length > 0" class="group-section">
-            <h4 class="group-section-title">
-              Inherited via nested groups
-              <span class="group-section-count mono">{{ groupsInherited.length }}</span>
-            </h4>
-            <div class="group-grid">
-              <GroupChip
-                v-for="g in groupsInherited"
-                :key="g.id"
-                :name="g.name || g.distinguishedName"
-                :nested="true"
-                :to="{ name: 'group-detail', params: { id: g.id } }"
-              />
-            </div>
-          </section>
-        </template>
-      </Card>
-
-      <!-- Account — sign-in & lockout, password & security, lifecycle, plus
-           a placeholder for Devices / Authentication Methods that surfaces
-           only once the Entra integration lands. -->
-      <div v-else-if="activeTab === 'account'" class="detail-grid">
-        <Card title="Sign-in & Identity">
-          <dl class="kv-grid">
-            <dt class="fld-label">Status</dt>
-            <dd><StatusBadge :user="user" /></dd>
-            <dt class="fld-label">Locked</dt>
-            <dd>{{ user.locked ? 'Yes' : 'No' }}</dd>
-            <template v-if="user.lockedAt">
-              <dt class="fld-label">Locked at</dt>
-              <dd class="mono">{{ fmtAbsolute(user.lockedAt) }}</dd>
-            </template>
-            <template v-if="user.locked">
-              <dt class="fld-label">Auto-unlocks</dt>
-              <dd class="mono">
-                <template v-if="user.autoUnlockAt">
-                  {{ fmtAbsolute(user.autoUnlockAt) }}
-                  <span class="text-muted"> · {{ fmtRelative(user.autoUnlockAt) }}</span>
-                </template>
-                <template v-else>
-                  <span class="text-muted">manual unlock required</span>
-                </template>
-              </dd>
-            </template>
-            <dt class="fld-label">Last logon</dt>
-            <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
-          </dl>
-          <div class="card-actions">
-            <Button
-              v-if="canUnlock"
-              :label="user.locked ? 'Unlock account' : 'Not locked'"
-              icon="pi pi-unlock"
-              :disabled="!user.locked || accountActionRunning !== null"
-              :severity="user.locked ? 'warn' : 'secondary'"
-              :outlined="!user.locked"
-              size="small"
-              :loading="accountActionRunning === 'unlock'"
-              @click="runOnUser('unlock')"
-            />
-          </div>
         </Card>
 
-        <Card title="Password & Security">
-          <dl class="kv-grid">
-            <dt class="fld-label">Last set</dt>
-            <dd class="mono">{{ fmtAbsolute(user.passwordLastSetAt) }}</dd>
-            <dt class="fld-label">Last bad password</dt>
-            <dd class="mono">
-              {{ user.lastBadPasswordAt ? fmtAbsolute(user.lastBadPasswordAt) : 'never' }}
-            </dd>
-            <dt class="fld-label">Expires</dt>
-            <dd class="mono">
-              {{ user.passwordNeverExpires ? 'never' : fmtAbsolute(user.passwordExpiresAt) }}
-            </dd>
-          </dl>
-          <div class="card-actions">
-            <Button
-              v-if="canResetPassword"
-              label="Reset password"
-              icon="pi pi-key"
-              severity="danger"
-              outlined
-              size="small"
-              @click="openResetDialog"
-            />
-          </div>
-        </Card>
-
-        <Card title="Lifecycle">
-          <dl class="kv-grid">
-            <dt class="fld-label">Account expires</dt>
-            <dd class="mono">
-              {{ user.accountExpiresAt ? fmtAbsolute(user.accountExpiresAt) : 'never' }}
-            </dd>
-            <dt class="fld-label">Last modified</dt>
-            <dd class="mono">{{ fmtAbsolute(user.modifiedAtSource) }}</dd>
-            <dt class="fld-label">Privileged</dt>
-            <dd>{{ user.isPrivileged ? 'Yes (adminCount=1)' : 'No' }}</dd>
-          </dl>
-        </Card>
-
-        <Card title="Authentication & MFA">
-          <!-- MFA data when an Entra integration is configured AND the
-               entra.mfa.registration runner has visited this user.
-               Note: registered devices come from a separate Graph
-               endpoint (/users/{id}/registeredDevices) we haven't
-               wired yet — listed as a follow-up. -->
-          <template v-if="user.entra && user.entra.mfa">
-            <dl class="kv-grid">
-              <dt class="fld-label">Status</dt>
-              <dd>
-                <span v-if="user.entra.mfa.isRegistered === true" class="badge badge-green">
-                  <i class="pi pi-shield" /> registered
-                </span>
-                <span
-                  v-else-if="user.entra.mfa.isRegistered === false && user.entra.mfa.isCapable"
-                  class="badge badge-amber"
-                  title="User can register MFA but hasn't yet"
-                >
-                  capable, not registered
-                </span>
-                <span v-else-if="user.entra.mfa.isRegistered === false" class="badge badge-red">
-                  not capable
-                </span>
-                <span v-else class="entra-na">unknown</span>
-              </dd>
-              <dt class="fld-label">Methods registered</dt>
-              <dd>
-                <ul v-if="user.entra.mfa.methods.length > 0" class="mfa-method-list">
-                  <li v-for="m in user.entra.mfa.methods" :key="m">
-                    <i class="pi pi-lock" /> {{ m }}
-                  </li>
-                </ul>
-                <span v-else class="entra-na">none</span>
-              </dd>
-              <dt class="fld-label">Default method</dt>
-              <dd>{{ user.entra.mfa.defaultMethod ?? '—' }}</dd>
-              <dt class="fld-label">Passwordless capable</dt>
-              <dd>
-                {{
-                  user.entra.mfa.isPasswordlessCapable === null
-                    ? '—'
-                    : user.entra.mfa.isPasswordlessCapable
-                      ? 'Yes'
-                      : 'No'
-                }}
-              </dd>
-              <dt class="fld-label">Last refreshed</dt>
-              <dd class="mono">
-                {{ user.entra.mfa.fetchedAt ? fmtAbsolute(user.entra.mfa.fetchedAt) : '—' }}
-              </dd>
-            </dl>
-          </template>
-          <EmptyState
-            v-else-if="user.entra"
-            icon="pi pi-clock"
-            title="MFA data not yet synced"
-            message="Enable the MFA registration feature in Settings → Integrations and run the entra.mfa.registration task to populate this card."
-            compact
-          />
-          <EmptyState
-            v-else
-            icon="pi pi-shield"
-            title="Requires Entra integration"
-            message="Configure the Microsoft Graph integration in Settings → Integrations to surface MFA registration here. Registered devices coming in a future release."
-            compact
-          />
-        </Card>
-      </div>
-
-      <!-- Sign-ins — Microsoft Entra audit log for this user, served
-           from the local entra_signin_events cache (delta-synced every
-           15min by entra.signins.events). Filtering by user_object_guid
-           is reliable; the live-Graph approach was unreliable due to
-           UPN case-sensitivity in Graph's $filter. -->
-      <Card v-else-if="activeTab === 'signins' && user?.entra && auth.actor?.directoryId">
-        <SignInEventsList
-          :directory-id="auth.actor.directoryId"
-          :user-id="user.id"
-          hide-user-column
-          @select="onSignInSelect"
-        />
-      </Card>
-
-      <!-- Raw LDAP — every populated attribute on the entry, as AD returned
-           it. Source of truth for deciding which attributes to promote into
-           the typed grids; admin-only via the view:raw_attributes capability. -->
-      <Card v-else-if="activeTab === 'raw' && canViewRaw">
-        <div class="raw-toolbar">
-          <InputText
-            v-model="rawFilter"
-            placeholder="Filter by attribute name or value…"
-            size="small"
-            fluid
-          />
-          <span class="hint">
-            {{ filteredRawRows.length }} of {{ rawAttrRows.length }} attribute{{
-              rawAttrRows.length === 1 ? '' : 's'
-            }}
-          </span>
-        </div>
-        <EmptyState
-          v-if="rawAttrRows.length === 0"
-          icon="pi pi-inbox"
-          title="No raw attributes"
-          message="The directory returned no populated attributes for this user."
-        />
-        <EmptyState
-          v-else-if="filteredRawRows.length === 0"
-          icon="pi pi-filter"
-          title="No matches"
-          message="Try a different filter."
-          compact
-        />
-        <div v-else class="extras-grid">
-          <div v-for="row in filteredRawRows" :key="row.key" class="extras-row">
-            <div class="extras-key mono">{{ row.key }}</div>
-            <div class="extras-vals">
-              <div v-for="(val, idx) in row.values" :key="`${row.key}-${idx}`" class="extras-val">
-                {{ val }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      <!-- Save / discard bar — page-level so it covers edits made on
+        <!-- Save / discard bar — page-level so it covers edits made on
            either the Identity or the Location tab. Sticky to the bottom of
            the viewport while scrolling so it's always reachable on tall
            attribute lists. -->
-      <transition name="save-bar">
-        <div v-if="canEdit && dirty" class="save-bar save-bar-floating">
-          <span class="save-bar-summary">
-            <i class="pi pi-pencil" />
-            <strong>{{ changes.length }}</strong>
-            unsaved change{{ changes.length === 1 ? '' : 's' }}
-          </span>
-          <span class="save-bar-fields">
-            <span v-for="d in changes" :key="d.key" class="dirty-chip">
-              {{ d.key }}
+        <transition name="save-bar">
+          <div v-if="canEdit && dirty" class="save-bar save-bar-floating">
+            <span class="save-bar-summary">
+              <i class="pi pi-pencil" />
+              <strong>{{ changes.length }}</strong>
+              unsaved change{{ changes.length === 1 ? '' : 's' }}
             </span>
-          </span>
-          <span class="save-bar-actions">
-            <Button
-              label="Discard"
-              text
-              severity="secondary"
-              size="small"
-              :disabled="saving"
-              @click="resetDraft(user)"
-            />
-            <Button
-              label="Save changes"
-              icon="pi pi-check"
-              size="small"
-              :loading="saving"
-              :disabled="!valid"
-              @click="saveAttributes()"
-            />
-          </span>
-        </div>
-      </transition>
-
-      <p class="freshness-foot">
-        <span class="hint">
-          Live refreshed {{ fmtRelative(user.freshness.liveRefreshedAt) }} · Cache written
-          {{ fmtRelative(user.freshness.cachedAt) }}
-        </span>
-      </p>
-    </div>
-
+            <span class="save-bar-fields">
+              <span v-for="d in changes" :key="d.key" class="dirty-chip">
+                {{ d.key }}
+              </span>
+            </span>
+            <span class="save-bar-actions">
+              <Button
+                label="Discard"
+                text
+                severity="secondary"
+                size="small"
+                :disabled="saving"
+                @click="resetDraft(user)"
+              />
+              <Button
+                label="Save changes"
+                icon="pi pi-check"
+                size="small"
+                :loading="saving"
+                :disabled="!valid"
+                @click="saveAttributes()"
+              />
+            </span>
+          </div>
+        </transition>
+      </template>
+    </ObjectPageLayout>
     <!-- Move to OU dialog: TreeSelect over the directory's OUs. The current
          parent OU is preselected so the operator can see where they are
          before picking a destination. -->
@@ -2008,209 +1867,11 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* --detail-sticky-offset is set inline (reactive to hero height) so
-     the sticky tab bar pins flush with the hero's current bottom edge,
-     including mid-shrink-animation. */
   /* Disable browser scroll anchoring inside the detail page. When the
      hero shrinks during the compact transition, anchoring would auto-
      adjust scrollTop to "stabilize" content — but that fights our
      detection and produces a flicker loop right at the trigger point. */
   overflow-anchor: none;
-}
-
-.detail-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* Hero ------------------------------------------------------------------- */
-.detail-hero {
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--accent) 5%, var(--surface)),
-    var(--surface)
-  );
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: start;
-  gap: 16px;
-  min-width: 0;
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  transition:
-    padding 200ms ease,
-    gap 200ms ease,
-    border-radius 200ms ease,
-    box-shadow 200ms ease;
-}
-
-/* Compact state: padding tightens, avatar shrinks via the reactive
-   :size prop on Avatar (animated by Avatar's own width/height
-   transition), and the secondary rows below the name collapse to
-   zero. Corners square off and the bottom border drops so the hero
-   merges seamlessly into the sticky tab bar below — they read as
-   one pinned banner. The drop shadow on the tab bar carries the
-   "content scrolls under" signal for the merged unit. */
-.detail-hero.is-compact {
-  padding: 6px 14px;
-  align-items: center;
-  gap: 10px;
-  border-radius: 0;
-  border-bottom: 0;
-  box-shadow: none;
-}
-
-.detail-hero-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.detail-hero-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.detail-hero-name {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--text);
-  transition: font-size 200ms ease;
-}
-
-.detail-hero.is-compact .detail-hero-name {
-  font-size: 14px;
-}
-
-/* Secondary rows collapse together via max-height + opacity. */
-.detail-hero-title,
-.detail-hero-upn,
-.detail-hero-actions-row,
-.copybtn-inline {
-  overflow: hidden;
-  max-height: 60px;
-  opacity: 1;
-  transition:
-    max-height 200ms ease,
-    opacity 150ms ease,
-    margin 200ms ease;
-}
-
-.detail-hero.is-compact .detail-hero-title,
-.detail-hero.is-compact .detail-hero-upn,
-.detail-hero.is-compact .detail-hero-actions-row,
-.detail-hero.is-compact .copybtn-inline {
-  max-height: 0;
-  opacity: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
-.detail-hero-title {
-  color: var(--text-2);
-  font-size: 13px;
-  margin-top: 4px;
-}
-
-.detail-hero-upn {
-  color: var(--text-3);
-  font-size: 12.5px;
-  margin-top: 2px;
-}
-
-.detail-hero-actions-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.copybtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12px;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.copybtn:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--surface-3);
-}
-
-.copybtn .mono {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.copybtn .dn-short {
-  max-width: 320px;
-}
-
-/* DN copy chip: same shape as Email/Teams launchers, but the DN text
-   inside is allowed to grow (with ellipsis) so the operator can scan
-   the OU path at a glance without expanding the chip. */
-.hero-path {
-  flex: 1 1 auto;
-  min-width: 120px;
-  max-width: 100%;
-  justify-content: flex-start;
-}
-
-.hero-path .hero-path-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  flex: 1 1 auto;
-}
-
-/* Inline copy button used at the top of the hero meta as the primary
-   identifier line. Looks like text + a copy icon — no button chrome —
-   so it doesn't visually compete with the launcher row below. */
-.copybtn-inline {
-  height: auto;
-  padding: 2px 0;
-  margin-top: 2px;
-  border: 0;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12.5px;
-}
-
-.copybtn-inline:hover {
-  background: transparent;
-  color: var(--text);
-  border-color: transparent;
-}
-
-.copybtn-inline .mono {
-  font-size: 12.5px;
 }
 
 .overview-activity {
@@ -2221,114 +1882,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   margin-left: 4px;
 }
 
-@media (max-width: 767.98px) {
-  .detail-hero {
-    grid-template-columns: 1fr;
-    justify-items: start;
-  }
-}
-
-/* The tablist wrapper doesn't take part in the tab bar's flex layout. */
-.ds-tablist {
-  display: contents;
-}
-
-/* Tab bar actions — Actions menu and refresh icon scoot to the right. */
-.ds-tabs-with-actions {
-  align-items: center;
-}
-
-.ds-tabs-spacer {
-  flex: 1 1 auto;
-}
-
-.ds-tabs-actions {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 4px;
-}
-
-/* Tint the Disable item in the Actions menu so destructive intent is
-   obvious without forcing the operator to read the label twice. */
-:deep(.p-menu .menu-item-danger .p-menuitem-link) {
-  color: var(--red);
-}
-
-:deep(.p-menu .menu-item-danger .p-menuitem-icon) {
-  color: var(--red);
-}
-
-/* Tabs ------------------------------------------------------------------- */
-.ds-tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: var(--detail-sticky-offset, 40px);
-  z-index: 5;
-  background: var(--surface);
-  /* Pronounced drop shadow when the tab bar pins under the compact
-     hero: makes it clear that page content scrolls beneath. Carries
-     the visual signal for the entire merged hero+tabs unit since
-     the hero's own shadow drops in compact. */
-  box-shadow: 0 10px 18px -10px rgba(0, 0, 0, 0.28);
-  /* No transition on `top`: the offset is updated continuously by
-     ResizeObserver during the hero shrink, so the tab bar follows
-     the hero's bottom edge frame-by-frame. A CSS transition here
-     would make the tab bar lag behind the hero. */
-}
-
-/* When the hero is compact, the hero's bottom border drops and its
-   side borders remain. Mirror those side borders on the tab bar so
-   the merged hero + tab bar reads as one continuous bordered
-   rectangle pinned at the top — without this, the tab bar appears
-   ~2 px wider than the hero on each side because the hero is inset
-   by its own border while the tab bar runs edge to edge. */
-.ds-tabs.hero-compact {
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-}
-
-.ds-tab {
-  background: transparent;
-  border: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 12px;
-  color: var(--text-3);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-  border-radius: 6px 6px 0 0;
-  font-family: var(--font-sans);
-}
-
-.ds-tab > .pi {
-  font-size: 14px;
-  line-height: 1;
-}
-
-.ds-tab:hover {
-  color: var(--text);
-}
-
-.ds-tab.active {
-  color: var(--text);
-}
-
-.ds-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-  border-radius: 2px;
-}
-
+/* Counts beside card titles, styled like the tab bar's. */
 .ds-tab-count {
   font-size: 11px;
   margin-left: 6px;
@@ -2336,61 +1890,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   background: var(--surface-3);
   padding: 1px 5px;
   border-radius: 3px;
-}
-
-.ds-tab.active .ds-tab-count {
-  color: var(--text-2);
-}
-
-/* Compact mode: the nav's ResizeObserver detects overflow and flips
-   .ds-tabs.compact, which hides the text label so each tab shrinks to
-   its icon (and count badge, if any). The icon remains the click target
-   and the button's title attribute exposes the full label on hover. */
-.ds-tabs.compact .ds-tab {
-  padding: 9px 10px;
-}
-
-.ds-tabs.compact .ds-tab-label {
-  display: none;
-}
-
-.ds-tabs.compact .ds-tab-count {
-  margin-left: 4px;
-}
-
-/* Per-tab icon-only opt-in (Overview, Debug). Same effect as the
-   compact-mode rule above, but applied unconditionally on those tabs
-   so the bar stays narrower and labels stay visible on the more
-   ambiguous tabs at narrower widths. */
-.ds-tab.icon-only {
-  padding: 9px 10px;
-}
-.ds-tab.icon-only .ds-tab-label {
-  display: none;
-}
-
-/* Measurement state: useCompactTabs.update() applies this briefly
-   inside a single rAF to read the true natural width of the bar's
-   children. The flex spacer is hidden and every other child has
-   `flex: none` so nothing shrinks; labels are forced visible so the
-   measurement reflects the expanded layout. The class is removed
-   before the next paint, so the user never sees this state. */
-.ds-tabs.measuring .ds-tabs-spacer {
-  display: none;
-}
-.ds-tabs.measuring .ds-tab,
-.ds-tabs.measuring .ds-tabs-refresh,
-.ds-tabs.measuring .ds-tabs-actions {
-  flex: none;
-}
-.ds-tabs.measuring .ds-tab-label {
-  display: inline;
-}
-/* Per-tab icon-only opt-in stays icon-only even during measurement —
-   the measurement is asking "would the always-labeled tabs fit?", so
-   the always-icon tabs should keep their compact width. */
-.ds-tabs.measuring .ds-tab.icon-only .ds-tab-label {
-  display: none;
 }
 
 /* Body ------------------------------------------------------------------- */
@@ -2833,41 +2332,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 220px;
-}
-
-/* Hero launcher links — share .copybtn styling but render as anchors. */
-.copybtn.launcher {
-  text-decoration: none;
-  color: var(--text);
-  border-color: color-mix(in oklab, var(--accent) 30%, var(--border-strong));
-  background: color-mix(in oklab, var(--accent) 8%, var(--surface-2));
-}
-
-.copybtn.launcher:hover {
-  background: color-mix(in oklab, var(--accent) 15%, var(--surface-3));
-}
-
-.freshness-foot {
-  margin: 4px 0 0;
-}
-
-/* On narrow screens auto-fit collapses naturally; nothing extra needed. */
-
-@media (max-width: 880px) {
-  .detail-hero-top {
-    flex-wrap: wrap;
-  }
-
-  .detail-hero-main {
-    flex: 1 1 100%;
-  }
-
-  .detail-hero-aside {
-    flex: 1 1 100%;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-  }
 }
 
 /* Save bar --------------------------------------------------------------- */
