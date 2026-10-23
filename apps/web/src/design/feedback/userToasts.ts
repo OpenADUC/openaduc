@@ -4,6 +4,7 @@ import type { ToastMessageOptions } from 'primevue/toast';
 import type { AccountAction } from '../composables/useAccountActions.js';
 import type { ResetOutcome } from '../composables/usePasswordReset.js';
 import type { UndoOffer } from '../lib/undoableWrite.js';
+import { expiryText } from '../lib/accountExpiry.js';
 import { fmtAbsolute } from '../lib/format.js';
 import { undoable, type UndoableToastMessage } from './undoToast.js';
 
@@ -62,3 +63,9 @@ export function passwordResetToast(outcome: ResetOutcome): ToastMessageOptions {
     life: 4000,
   };
 }
+
+export const expirySetSummary = (name: string, expiresAt: string | null) =>
+  `${name} now ${expiryText(expiresAt)}`;
+
+export const expiryFailedSummary = (name: string) =>
+  `Couldn’t change when ${name}’s account expires`;

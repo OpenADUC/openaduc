@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { expiryText } from '../../design/lib/accountExpiry.js';
 import {
   useAccountExpiry,
   type ExpiryRun,
   type ExpirySubject,
 } from '../../design/composables/useAccountExpiry.js';
+import { expiryFailedSummary, expirySetSummary } from '../../design/feedback/userToasts.js';
 import { useUndoableDialog } from './useUndoableDialog';
 
 /** The Account expiry dialog on a user's page (see useUndoableDialog). */
@@ -18,10 +18,10 @@ export function useExpiryDialog(options: {
     workflow: (landed) =>
       useAccountExpiry({
         onSet: (account, expiresAt, offer) =>
-          landed(`${account.name} now ${expiryText(expiresAt)}`, offer),
+          landed(expirySetSummary(account.name, expiresAt), offer),
       }),
     onLanded: options.onSet,
-    failedSummary: (op) => `Couldn’t change when ${op.account.name}’s account expires`,
+    failedSummary: (op) => expiryFailedSummary(op.account.name),
   });
   const expiry = dialog.workflow;
 
