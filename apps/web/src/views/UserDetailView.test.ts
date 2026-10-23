@@ -326,11 +326,11 @@ describe('a single reversible change', () => {
     await runAction(page, 'Disable account');
     expect(api.users.disable).toHaveBeenCalledWith('u1');
     expect(page.find('[role="dialog"]').exists()).toBe(false);
-    expect(page.text()).toContain('Account disabled');
+    expect(page.text()).toContain('Disabled Jane Doe');
 
     await click(page, 'Undo');
     expect(api.users.enable).toHaveBeenCalledWith('u1');
-    expect(page.text()).toContain('Account enabled');
+    expect(page.text()).toContain('Enabled Jane Doe');
     expect(page.findAll('button').some((b) => b.text() === 'Undo')).toBe(false);
   });
 
@@ -338,14 +338,14 @@ describe('a single reversible change', () => {
     api.users.get.mockResolvedValue({ user: inSales });
     const { page } = await openTab('groups', ['read:user', 'write:group.membership'], true);
 
-    await page.get('.gchip-x').trigger('click');
+    await page.get('button[aria-label="Remove from Sales"]').trigger('click');
     await flushPromises();
     expect(api.users.removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
-    expect(page.text()).toContain('Removed from Sales');
+    expect(page.text()).toContain('Removed Jane Doe from Sales');
 
     await click(page, 'Undo');
     expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
-    expect(page.text()).toContain('Added to Sales');
+    expect(page.text()).toContain('Added Jane Doe to Sales');
   });
 });
 
@@ -363,7 +363,7 @@ describe('a failed change', () => {
 
     await runAction(page, 'Disable account');
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(page.get('.inline-failure').text()).toContain('Disable failed');
+    expect(page.get('.inline-failure').text()).toContain('Couldn’t disable Jane Doe');
     expect(page.get('.inline-failure').text()).toContain('DC unreachable');
 
     await click(page, 'Retry');
@@ -376,14 +376,31 @@ describe('a failed change', () => {
     api.users.removeGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
     const { page } = await openTab('groups', ['read:user', 'write:group.membership'], true);
 
-    await page.get('.gchip-x').trigger('click');
+    await page.get('button[aria-label="Remove from Sales"]').trigger('click');
     await flushPromises();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(page.get('.inline-failure').text()).toContain('Couldn’t remove from Sales');
+    expect(page.get('.inline-failure').text()).toContain('Couldn’t remove Jane Doe from Sales');
 
     await page.get('.inline-failure button[aria-label="Close"]').trigger('click');
     await flushPromises();
     expect(page.find('.inline-failure').exists()).toBe(false);
     expect(api.users.removeGroup).toHaveBeenCalledOnce();
+  });
+
+  it('doesn’t show on another user’s page, even when it comes in after the switch', async () => {
+    let refuse!: (err: Error) => void;
+    api.users.disable.mockImplementationOnce(() => new Promise((_, r) => (refuse = r)));
+    const { page, router } = await openTab(
+      'overview',
+      ['read:user', 'write:user.enableDisable'],
+      true,
+    );
+
+    await runAction(page, 'Disable account');
+    await router.push('/users/u2?tab=overview');
+    await flushPromises();
+    refuse(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    await flushPromises();
+    expect(page.find('.inline-failure').exists()).toBe(false);
   });
 });

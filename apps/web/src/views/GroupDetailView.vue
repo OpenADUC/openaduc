@@ -24,7 +24,13 @@ import { undoable } from '../design/feedback/undoToast.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
-import { membershipOf, useGroupMembership } from '../design/composables/useGroupMembership.js';
+import {
+  membershipChangeText,
+  membershipDoneText,
+  membershipOf,
+  useGroupMembership,
+} from '../design/composables/useGroupMembership.js';
+import { placeFailure } from '../design/lib/failurePlacement.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -48,21 +54,10 @@ const {
   retry,
   dismiss,
 } = useGroupMembership({
-  onChanged: async (change, m, undo) => {
+  onChanged: async (change, m, offer) => {
     if (change === 'add') closeAdd();
     toast.add(
-      undoable(
-        {
-          severity: 'success',
-          summary: change === 'add' ? 'Added to group' : 'Removed from group',
-          detail:
-            change === 'add'
-              ? `${m.userLabel} → ${m.groupLabel}`
-              : `${m.userLabel} ← ${m.groupLabel}`,
-          life: 3000,
-        },
-        undo,
-      ),
+      undoable({ severity: 'success', summary: membershipDoneText(change, m), life: 3000 }, offer),
     );
     await load();
   },
@@ -70,17 +65,15 @@ const {
 
 // A failed add shows in the add dialog while it's open; any other failed
 // change (a remove, an Undo) shows on the Members tab.
-const addFailure = computed(() =>
-  addOpen.value && failure.value?.change === 'add' ? failure.value : null,
-);
+const { inDialog: addFailure, onPage: pageFailure } = placeFailure(failure, {
+  belongsHere: (f) => f.op.membership.groupId === props.id,
+  dialog: { open: () => addOpen.value, made: (f) => f.op.change === 'add' && !f.undo },
+});
 const membersFailure = computed(() => {
-  const f = failure.value;
-  if (!f || addFailure.value) return null;
+  const f = pageFailure.value;
+  if (!f) return null;
   return {
-    summary:
-      f.change === 'add'
-        ? `Couldn’t add ${f.membership.userLabel}`
-        : `Couldn’t remove ${f.membership.userLabel}`,
+    summary: `Couldn’t ${membershipChangeText(f.op.change, f.op.membership)}`,
     message: f.message,
   };
 });
@@ -113,13 +106,13 @@ function refreshFromAd(): Promise<void> {
 }
 
 watch(() => props.id, load);
+// Another group's page reuses this one; what failed on the last one is moot.
+watch(() => props.id, dismiss);
 onMounted(load);
 
 // ---- Add member -----------------------------------------------------------
 
 function openAdd(): void {
-  // The dialog shows a failed add, so one it didn't make would read as its own.
-  if (failure.value?.change === 'add') dismiss();
   addOpen.value = true;
   addQuery.value = '';
   addResults.value = [];
@@ -450,7 +443,8 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
         <p v-else-if="addQuery.trim() && !addLoading" class="hint">No users matched.</p>
         <p v-if="addLoading" class="hint">Searching…</p>
         <Message v-if="addFailure" severity="error" closable @close="dismiss">
-          Couldn’t add {{ addFailure.membership.userLabel }}: {{ addFailure.message }}
+          Couldn’t {{ membershipChangeText(addFailure.op.change, addFailure.op.membership) }}:
+          {{ addFailure.message }}
         </Message>
       </div>
       <template #footer>

@@ -186,12 +186,12 @@ const DONE: Record<AccountAction, (name: string) => string> = {
   unlock: (name) => `${name} unlocked.`,
 };
 const { runningOn, run: runAccountAction } = useAccountActions<Row>({
-  onDone: (action, r, undo) => {
-    toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, undo));
+  onDone: (action, r, offer) => {
+    toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
     store.bumpData();
   },
-  onFailed: (action, r, message) =>
-    store.reportError(`Windows cannot ${action} object ${r.name} because:\n${message}`),
+  onFailed: ({ op: { action, account }, message }) =>
+    store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
 });
 
 function userItems(r: Row): CtxItem[] {

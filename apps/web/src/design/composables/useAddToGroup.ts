@@ -4,11 +4,13 @@ import type { GroupSummary, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { latestRequest } from '../lib/latestRequest.js';
+import type { UndoOffer } from '../lib/undoableWrite.js';
 import {
   membershipOf,
   useGroupMembership,
   type Membership,
   type MembershipChange,
+  type MembershipFailure,
 } from './useGroupMembership.js';
 
 export const MIN_GROUP_QUERY = 2;
@@ -20,20 +22,16 @@ export type ExistingMembership = 'direct' | 'nested';
 
 /**
  * Find a group by name and add a user to it. Callbacks are as for
- * `useGroupMembership`: an add's `undo` removes the user again, so a change
+ * `useGroupMembership`: an add's Undo removes the user again, so a change
  * can be a remove. Loading for an account forgets the last failure.
  */
 export function useAddToGroup(options: {
   onChanged: (
     change: MembershipChange,
     membership: Membership,
-    undo: (() => void) | null,
+    offer: UndoOffer,
   ) => void | Promise<void>;
-  onFailed?: (
-    change: MembershipChange,
-    membership: Membership,
-    message: string,
-  ) => void | Promise<void>;
+  onFailed?: (failure: MembershipFailure) => void | Promise<void>;
 }) {
   const user = ref<UserDetail | null>(null);
   const loading = ref(false);
