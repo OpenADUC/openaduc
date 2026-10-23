@@ -18,6 +18,7 @@ const {
   loading,
   password,
   shown,
+  copied,
   forceChangeAtNextLogin,
   alsoUnlock,
   offerUnlock,
@@ -45,13 +46,8 @@ const {
 // A typo guard for a password the operator can't see.
 const confirmPwd = ref('');
 const confirmed = computed(() => shown.value || confirmPwd.value === password.value);
-const copyFailed = ref(false);
 
 onMounted(() => load(props.id));
-
-async function onCopy(): Promise<void> {
-  copyFailed.value = !(await copy());
-}
 </script>
 
 <template>
@@ -95,7 +91,7 @@ async function onCopy(): Promise<void> {
 
       <div style="margin-top: 8px; display: flex; gap: 6px; align-items: center">
         <button type="button" class="os-btn" @click="generate">Generate</button>
-        <button type="button" class="os-btn" :disabled="!password" @click="onCopy">Copy</button>
+        <button type="button" class="os-btn" :disabled="!password" @click="copy">Copy</button>
         <label class="os-check"><input type="checkbox" v-model="shown" /> Show</label>
       </div>
 
@@ -114,7 +110,7 @@ async function onCopy(): Promise<void> {
       </div>
 
       <div v-if="error" class="os-error" style="margin-top: 12px">{{ error }}</div>
-      <div v-else-if="copyFailed" class="os-error" style="margin-top: 12px">
+      <div v-else-if="copied === false" class="os-error" style="margin-top: 12px">
         Couldn’t copy. Select the password and copy it.
       </div>
       <div v-else-if="historyNote" class="os-info" style="margin-top: 12px">

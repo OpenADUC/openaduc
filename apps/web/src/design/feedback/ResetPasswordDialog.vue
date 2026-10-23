@@ -4,7 +4,7 @@
   it's locked. The check, generator and submit live in usePasswordReset.
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { watch } from 'vue';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
@@ -29,6 +29,7 @@ const {
   loading,
   password,
   shown,
+  copied,
   forceChangeAtNextLogin,
   alsoUnlock,
   offerUnlock,
@@ -48,23 +49,14 @@ const {
   },
 });
 
-const copied = ref<boolean | null>(null);
-
 watch(
   () => props.visible,
   (open) => {
     if (!open || !props.user) return;
-    copied.value = null;
     void load(props.user.id);
   },
   { immediate: true },
 );
-
-watch(password, () => (copied.value = null));
-
-async function onCopy(): Promise<void> {
-  copied.value = await copy();
-}
 
 function close(): void {
   if (!submitting.value) emit('update:visible', false);
@@ -111,7 +103,7 @@ function close(): void {
         severity="secondary"
         aria-label="Copy password"
         :disabled="!password"
-        @click="onCopy"
+        @click="copy"
       />
     </div>
     <div class="rp-tools">
