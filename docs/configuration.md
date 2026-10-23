@@ -30,15 +30,16 @@ The full env schema lives in [`apps/api/src/config/env.ts`](../apps/api/src/conf
 
 ## Sessions and step-up
 
-OpenADUC uses cookie-based sessions plus a separate **step-up** session minted when an admin re-authenticates to perform a write. Both have independent timeouts.
+OpenADUC uses cookie-based sessions plus a separate **elevated session** minted when an operator steps up (re-enters their password) to perform a write. Both have independent timeouts.
 
-| Variable                         | Default | Description                                                                                                 |
-| -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `SESSION_IDLE_TIMEOUT_MINUTES`   | `60`    | Sign-out after this many minutes of inactivity.                                                             |
-| `SESSION_ABSOLUTE_TIMEOUT_HOURS` | `12`    | Hard sign-out cap regardless of activity.                                                                   |
-| `STEP_UP_TTL_MINUTES`            | `60`    | How long an elevated (step-up) session lasts. After expiry, write actions require re-entering the password. |
+| Variable                         | Default | Description                                     |
+| -------------------------------- | ------- | ----------------------------------------------- |
+| `SESSION_IDLE_TIMEOUT_MINUTES`   | `60`    | Sign-out after this many minutes of inactivity. |
+| `SESSION_ABSOLUTE_TIMEOUT_HOURS` | `12`    | Hard sign-out cap regardless of activity.       |
 
 These can be overridden per-deployment via the **app_settings** table (settings UI), which takes precedence over env values once set.
+
+The elevated session's limits are policy settings only (no environment variables): it ends after `stepup.idle_timeout_minutes` without activity (default 15) or `stepup.absolute_lifetime_minutes` after step-up (default 240), whichever comes first. Changing them requires step-up and is audited. Upgrading from a version with a fixed step-up lifetime (`stepup.ttl_minutes`, formerly also documented as `STEP_UP_TTL_MINUTES`): a lifetime you had changed becomes the absolute lifetime and caps the idle timeout, so no elevated session lasts longer than before; an unchanged one gets the new defaults.
 
 ## Database
 

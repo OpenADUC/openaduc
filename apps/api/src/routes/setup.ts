@@ -13,6 +13,7 @@ import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
+import { elevatedState } from './auth.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
 import type { SyncTaskKey } from '../services/syncTasks/types.js';
 import { TASK_REGISTRY } from '../services/syncTasks/registry.js';
@@ -315,8 +316,9 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         adminSessionId: session.id,
         actorUserId: auth.user.objectGuid,
         capabilities: elevatedCaps,
+        notAfter: session.expiresAt,
       });
-      app.services.credentialCache.set(elevated.id, body.adminPassword, elevated.expiresAt);
+      app.services.credentialCache.set(elevated.id, body.adminPassword, elevated.idleExpiresAt);
 
       await app.services.audit
         .recordEvent({
@@ -352,7 +354,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
           capabilities,
           directoryId: created.id,
           directoryDomain: created.domain,
-          elevated: { active: true, expiresAt: elevated.expiresAt.toISOString() },
+          elevated: elevatedState(elevated),
         }),
       };
     },

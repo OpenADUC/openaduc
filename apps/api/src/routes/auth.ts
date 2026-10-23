@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { meResponseSchema, stepUpRequestSchema, type Capability } from '@openaduc/shared';
+import {
+  meResponseSchema,
+  stepUpRequestSchema,
+  type Capability,
+  type ElevatedSessionState,
+} from '@openaduc/shared';
 import { loadEnv } from '../config/env.js';
 import {
   AppError,
@@ -359,7 +364,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       // Old elevated sessions died with the old admin session — wipe their
       // cached passwords. Cache the bind password under the new id only.
       app.services.credentialCache.deleteMany(revokedElevatedIds);
-      app.services.credentialCache.set(elevated.id, body.password, elevated.expiresAt);
+      app.services.credentialCache.set(elevated.id, body.password, elevated.idleExpiresAt);
 
       await app.services.audit
         .recordEvent({
@@ -372,7 +377,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           targetId: elevated.id,
           metadata: {
             capabilities: writes,
-            expiresAt: elevated.expiresAt.toISOString(),
+            idleExpiresAt: elevated.idleExpiresAt.toISOString(),
+            absoluteExpiresAt: elevated.absoluteExpiresAt.toISOString(),
             rotatedFromSessionId: actor.session.id,
             ...(removedCapabilities.length > 0 ? { removedCapabilities } : {}),
           },
@@ -384,7 +390,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         expires: rotated.session.expiresAt,
       });
 
-      return { elevated: { active: true, expiresAt: elevated.expiresAt.toISOString() } };
+      return { elevated: elevatedState(elevated) };
     },
   });
 
@@ -436,12 +442,19 @@ function meResponse(
     capabilities: session.capabilities,
     directoryId: session.directoryId,
     directoryDomain: domainName,
-    elevated: {
-      active: !!elevated,
-      expiresAt: elevated ? elevated.expiresAt.toISOString() : null,
-    },
+    elevated: elevatedState(elevated),
   };
   return meResponseSchema.parse(payload);
+}
+
+export function elevatedState(
+  elevated: import('../services/sessions.js').ElevatedSession | null,
+): ElevatedSessionState {
+  return {
+    active: !!elevated,
+    idleExpiresAt: elevated?.idleExpiresAt.toISOString() ?? null,
+    absoluteExpiresAt: elevated?.absoluteExpiresAt.toISOString() ?? null,
+  };
 }
 
 function formatRetry(seconds: number): string {

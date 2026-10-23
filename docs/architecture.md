@@ -53,7 +53,7 @@ Key tables:
 | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `directory_providers`                                                 | One row per configured directory. LDAPS URLs, base DN, encrypted bind credentials.                                         |
 | `admin_sessions`                                                      | One row per signed-in user session. Stores a snapshot of capabilities at sign-in time.                                     |
-| `elevated_sessions`                                                   | Step-up sessions. Child of an admin session, short TTL, write-only capability subset.                                      |
+| `elevated_sessions`                                                   | Step-up sessions. Child of an admin session, ends when idle or at an absolute lifetime, write-only capability subset.      |
 | `audit_events`                                                        | Append-only. Database triggers reject `UPDATE`, `DELETE`, `TRUNCATE`. Indexed on timestamp, actor, target, correlation id. |
 | `user_cache_records`, `group_cache_records`, `computer_cache_records` | Local cache of LDAP objects, refreshed by sync tasks. Search/list endpoints read from these for speed.                     |
 | `user_group_memberships`                                              | Materialized user→group edges for fast membership queries.                                                                 |

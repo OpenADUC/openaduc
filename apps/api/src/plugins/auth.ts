@@ -41,7 +41,7 @@ export interface ResolvedActor {
    * Populated whenever an elevated session is active and the cache still has
    * the password for it. Writes use this to bind to AD as the operator
    * without re-prompting per request. Null when not elevated or when the
-   * cache entry has been wiped (TTL expiry, step-down, logout).
+   * cache entry has been wiped (session ended, step-down, logout, restart).
    */
   elevatedPassword: string | null;
 }
@@ -72,6 +72,8 @@ declare module 'fastify' {
 
 export default fp(async (app) => {
   // ---- Resolve session on every request (no enforcement here) ------------
+  // A request from an elevated operator is activity: it keeps the elevated
+  // session from ending idle.
   app.addHook('onRequest', async (req) => {
     req.actor = null;
     req.directoryId = null;
@@ -80,7 +82,16 @@ export default fp(async (app) => {
     try {
       const session = await app.services.sessions.resolve(cookieToken);
       if (!session) return;
-      const elevated = await app.services.sessions.findActiveElevated(session.id);
+      let elevated = await app.services.sessions.findActiveElevated(session.id);
+      if (elevated) {
+        const before = elevated;
+        // Failing to record activity shouldn't fail the request.
+        elevated = await app.services.sessions.recordElevatedActivity(before).catch((err) => {
+          req.log.warn({ err }, 'recording elevated-session activity failed');
+          return before;
+        });
+        app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
+      }
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
       req.actor = { session, elevated, elevatedPassword };
       req.directoryId = session.directoryId;

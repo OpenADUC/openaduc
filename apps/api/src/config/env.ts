@@ -43,7 +43,6 @@ const envSchema = z.object({
   SESSION_COOKIE_SECRET: z.string().min(32),
   SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(1).default(60),
   SESSION_ABSOLUTE_TIMEOUT_HOURS: z.coerce.number().int().min(1).default(12),
-  STEP_UP_TTL_MINUTES: z.coerce.number().int().min(1).default(60),
 
   DATABASE_URL: z.string().url().or(z.string().startsWith('postgres://')),
   DATABASE_POOL_MIN: z.coerce.number().int().min(0).default(2),
