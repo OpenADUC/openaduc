@@ -68,8 +68,13 @@ describe('an operator signed into one directory', () => {
       `/api/directories/${dirB}/users/${userB}/photo`,
     ]) {
       const res = await operator.get(url);
-      expect({ url, status: res.statusCode }).toEqual({ url, status: 404 });
-      expect(res.body).not.toContain('Secret App');
+      // The policy guard's answer, not a handler's own "not found" (B has no
+      // cached users, so the photo route would 404 on its own).
+      expect({ url, status: res.statusCode, body: res.json() }).toEqual({
+        url,
+        status: 404,
+        body: { error: { code: 'not_found', message: 'directory not found' } },
+      });
     }
 
     const own = await operator.get(`/api/directories/${dirA}/entra`);
