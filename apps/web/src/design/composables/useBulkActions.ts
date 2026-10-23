@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Bulk unlock / enable / disable over a selection of users.
 //
-// Disabling locks people out, so it asks first; unlock and enable don't.
-// Accounts are done one at a time so a failure doesn't stop the rest; the
+// Every bulk action asks first: it changes more than one account, and
+// there's no undo for a whole run. Accounts are done one at a time so a failure doesn't stop the rest; the
 // failed ones stay selected, each with its error, so the operator can see
 // why and retry.
 
@@ -28,17 +28,21 @@ export function useBulkActions(opts: {
   }>({ done: 0, total: 0, failures: [] });
   // Errors from the last run, per user, shown until the next run.
   const bulkErrors = ref(new Map<string, string>());
-  const confirmDisableOpen = ref(false);
+  // The action waiting for the operator to confirm it.
+  const confirming = ref<BulkAction | null>(null);
 
   function requestBulk(action: BulkAction): void {
     if (opts.selectedIds.value.size === 0) return;
-    if (action === 'disable') confirmDisableOpen.value = true;
-    else void startBulk(action);
+    confirming.value = action;
+  }
+
+  function cancelBulk(): void {
+    confirming.value = null;
   }
 
   async function startBulk(action: BulkAction): Promise<void> {
     if (opts.selectedIds.value.size === 0) return;
-    confirmDisableOpen.value = false;
+    confirming.value = null;
     pendingBulkAction.value = action;
     const ids = Array.from(opts.selectedIds.value);
     bulkRunning.value = true;
@@ -81,8 +85,9 @@ export function useBulkActions(opts: {
     bulkRunning,
     bulkProgress,
     bulkErrors,
-    confirmDisableOpen,
+    confirming,
     requestBulk,
+    cancelBulk,
     startBulk,
   };
 }

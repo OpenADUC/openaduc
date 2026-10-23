@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { useBulkActions } from '../design/composables/useBulkActions.js';
+import { useBulkActions, type BulkAction } from '../design/composables/useBulkActions.js';
 import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
@@ -393,8 +393,9 @@ const {
   bulkRunning,
   bulkProgress,
   bulkErrors,
-  confirmDisableOpen,
+  confirming: confirmingBulk,
   requestBulk,
+  cancelBulk,
   startBulk,
 } = useBulkActions({
   selectedIds,
@@ -403,6 +404,43 @@ const {
   reload: load,
 });
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
+
+const BULK_CONFIRM: Record<BulkAction, { verb: string; icon: string; consequence: string }> = {
+  disable: {
+    verb: 'Disable',
+    icon: 'pi pi-ban',
+    consequence: "They won't be able to sign in until an operator enables them again.",
+  },
+  enable: {
+    verb: 'Enable',
+    icon: 'pi pi-check',
+    consequence: 'They can sign in again straight away.',
+  },
+  unlock: {
+    verb: 'Unlock',
+    icon: 'pi pi-unlock',
+    consequence: 'Locked accounts can sign in again straight away.',
+  },
+};
+
+const bulkConfirm = computed(() => {
+  const action = confirmingBulk.value;
+  if (!action) return null;
+  const { verb, icon, consequence } = BULK_CONFIRM[action];
+  const n = selectedIds.value.size;
+  const accounts = n === 1 ? '1 account' : `${n} accounts`;
+  return {
+    header: `${verb} ${accounts}?`,
+    confirmLabel: `${verb} ${n === 1 ? 'account' : accounts}`,
+    icon,
+    consequence,
+  };
+});
+
+function confirmBulk(): void {
+  const action = confirmingBulk.value;
+  if (action) auth.requireStepUp(() => startBulk(action));
+}
 
 // Delete runs in its own dialog (preflight, typed confirmation, progress)
 // rather than through startBulk. Only disabled accounts can be deleted, so
@@ -675,7 +713,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'unlock'"
             :disabled="bulkRunning"
-            @click="auth.requireStepUp(() => startBulk('unlock'))"
+            @click="requestBulk('unlock')"
           />
           <Button
             v-if="canBulkDisable"
@@ -695,7 +733,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'enable'"
             :disabled="bulkRunning"
-            @click="auth.requireStepUp(() => startBulk('enable'))"
+            @click="requestBulk('enable')"
           />
           <Button
             v-if="canBulkDelete"
@@ -725,28 +763,23 @@ onMounted(() => {
     </transition>
 
     <Dialog
-      v-model:visible="confirmDisableOpen"
+      :visible="confirmingBulk !== null"
       modal
-      :header="
-        selectedIds.size === 1 ? 'Disable 1 account?' : `Disable ${selectedIds.size} accounts?`
-      "
+      :header="bulkConfirm?.header"
       :style="{ width: '28rem' }"
+      @update:visible="(v) => !v && cancelBulk()"
     >
-      <p class="confirm-text">
-        They won't be able to sign in until an operator enables them again.
-      </p>
+      <p class="confirm-text">{{ bulkConfirm?.consequence }}</p>
       <ul v-if="selectedRows.length <= 10" class="confirm-list">
         <li v-for="r in selectedRows" :key="r.id">{{ r.displayName ?? r.samAccountName }}</li>
       </ul>
       <template #footer>
-        <Button label="Cancel" severity="secondary" text @click="confirmDisableOpen = false" />
+        <Button label="Cancel" severity="secondary" text @click="cancelBulk" />
         <Button
-          :label="
-            selectedIds.size === 1 ? 'Disable account' : `Disable ${selectedIds.size} accounts`
-          "
-          icon="pi pi-ban"
-          severity="danger"
-          @click="auth.requireStepUp(() => startBulk('disable'))"
+          :label="bulkConfirm?.confirmLabel"
+          :icon="bulkConfirm?.icon"
+          :severity="confirmingBulk === 'disable' ? 'danger' : undefined"
+          @click="confirmBulk"
         />
       </template>
     </Dialog>
