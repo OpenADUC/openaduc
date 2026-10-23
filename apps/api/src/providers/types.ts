@@ -72,7 +72,7 @@ export interface DirectoryUser {
   // `badPasswordTime`). Per-DC, replicated late — treat as approximate.
   lastBadPasswordAt: Date | null;
   /** AD's `badPwdCount`, as the answering DC counts it (not replicated). */
-  badPasswordCount?: number | null;
+  badPasswordCount: number | null;
   createdAtSource: Date | null;
   modifiedAtSource: Date | null;
   // Direct group memberships only. Nested are derived elsewhere.

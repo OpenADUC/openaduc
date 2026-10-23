@@ -613,7 +613,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         lockedAt: dateOrNull(refreshed.user.lockedAt),
         autoUnlockAt: dateOrNull(lockout.autoUnlockAt),
         lockedUntilUnlocked: lockout.lockedUntilUnlocked,
-        badPasswordCount: refreshed.user.badPasswordCount ?? null,
+        badPasswordCount: refreshed.user.badPasswordCount,
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
         passwordMustChange: refreshed.user.passwordMustChange,
         passwordExpiresAt: computeExpiresAt(
