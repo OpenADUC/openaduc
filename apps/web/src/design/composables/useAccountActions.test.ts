@@ -58,22 +58,25 @@ describe('useAccountActions', () => {
     expect(onFailed).not.toHaveBeenCalled();
   });
 
-  it('stays running until the refresh is done, and runs one action at a time', async () => {
+  it('stays running until the refresh is done, one action at a time per account', async () => {
     let refreshed!: () => void;
     const { actions, onDone } = setup();
-    onDone.mockImplementation(() => new Promise<void>((r) => (refreshed = r)));
+    onDone.mockImplementationOnce(() => new Promise<void>((r) => (refreshed = r)));
     const after = vi.fn();
 
     actions.run('disable', jane, after);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
-    expect(actions.running.value).toBe('disable');
+    expect(actions.runningOn('u1')).toBe('disable');
     actions.run('unlock', jane);
     expect(after).not.toHaveBeenCalled();
 
+    actions.run('unlock', { id: 'u2', name: 'John Roe' });
+    await vi.waitFor(() => expect(unlock).toHaveBeenCalledWith('u2'));
+
     refreshed();
     await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
-    expect(actions.running.value).toBeNull();
-    expect(unlock).not.toHaveBeenCalled();
+    expect(actions.runningOn('u1')).toBeNull();
+    expect(unlock).not.toHaveBeenCalledWith('u1');
   });
 
   it('reports a refused action without refreshing', async () => {
@@ -87,7 +90,7 @@ describe('useAccountActions', () => {
     );
     expect(onDone).not.toHaveBeenCalled();
     expect(after).not.toHaveBeenCalled();
-    expect(actions.running.value).toBeNull();
+    expect(actions.runningOn('u1')).toBeNull();
   });
 
   it('prompts step-up first, then acts', async () => {
@@ -109,7 +112,7 @@ describe('useAccountActions', () => {
 
     actions.run('enable', jane, after);
     await vi.waitFor(() => expect(enable).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(actions.running.value).toBeNull());
+    await vi.waitFor(() => expect(actions.runningOn('u1')).toBeNull());
     expect(onFailed).not.toHaveBeenCalled();
 
     await auth.stepUp('pw');

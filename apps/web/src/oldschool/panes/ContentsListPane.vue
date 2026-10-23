@@ -203,7 +203,7 @@ const DONE: Record<AccountAction, (name: string) => string> = {
   disable: (name) => `Object "${name}" has been disabled.`,
   unlock: (name) => `${name} unlocked.`,
 };
-const { run: runAccountAction } = useAccountActions<Row>({
+const { runningOn, run: runAccountAction } = useAccountActions<Row>({
   onDone: (action, r) => {
     toast.add({ severity: 'success', summary: DONE[action](r.name), life: 2500 });
     store.bumpData();
@@ -213,6 +213,7 @@ const { run: runAccountAction } = useAccountActions<Row>({
 });
 
 function userItems(r: Row): CtxItem[] {
+  const busy = runningOn(r.id) !== null;
   const items: CtxItem[] = [{ label: 'Copy…', disabled: true, onSelect: () => undefined }];
   if (can('write:group.membership')) {
     items.push({
@@ -225,10 +226,12 @@ function userItems(r: Row): CtxItem[] {
       r.disabled
         ? {
             label: 'Enable Account',
+            disabled: busy,
             onSelect: () => runAccountAction('enable', r),
           }
         : {
             label: 'Disable Account',
+            disabled: busy,
             onSelect: () => runAccountAction('disable', r),
           },
     );
@@ -245,6 +248,7 @@ function userItems(r: Row): CtxItem[] {
       r.locked
         ? {
             label: 'Unlock Account',
+            disabled: busy,
             onSelect: () => runAccountAction('unlock', r),
           }
         : { label: 'Unlock Account', disabled: true },

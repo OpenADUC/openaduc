@@ -13,19 +13,21 @@ const CALLS: Record<AccountAction, (id: string) => Promise<unknown>> = {
 };
 
 /**
- * Disable, enable or unlock one account. `onDone` gets the account the
- * action ran on, as the caller passed it, so it can refresh and describe it.
+ * Disable, enable or unlock accounts, one action at a time per account.
+ * `onDone` gets the account the action ran on, as the caller passed it, so
+ * it can refresh and describe it.
  */
 export function useAccountActions<T extends { id: string }>(options: {
   onDone: (action: AccountAction, account: T) => void | Promise<void>;
   onFailed: (action: AccountAction, account: T, message: string) => void | Promise<void>;
 }) {
   const auth = useAuthStore();
-  const running = ref<AccountAction | null>(null);
+  const running = ref(new Map<string, AccountAction>());
+  const runningOn = (id: string): AccountAction | null => running.value.get(id) ?? null;
 
   /** `after` runs once the action lands, after `onDone`, including after a step-up. */
   function run(action: AccountAction, account: T, after?: () => void | Promise<void>): void {
-    if (running.value) return;
+    if (runningOn(account.id)) return;
     auth.requireStepUp(() => commit(action, account, after));
   }
 
@@ -34,8 +36,8 @@ export function useAccountActions<T extends { id: string }>(options: {
     account: T,
     after?: () => void | Promise<void>,
   ): Promise<void> {
-    if (running.value) return;
-    running.value = action;
+    if (runningOn(account.id)) return;
+    running.value.set(account.id, action);
     try {
       try {
         await CALLS[action](account.id);
@@ -51,9 +53,9 @@ export function useAccountActions<T extends { id: string }>(options: {
       await options.onDone(action, account);
       await after?.();
     } finally {
-      running.value = null;
+      running.value.delete(account.id);
     }
   }
 
-  return { running, run };
+  return { runningOn, run };
 }
