@@ -111,7 +111,7 @@ function openManagedBy(): void {
           <dl class="kv-grid">
             <dt>Name</dt>
             <dd>{{ computer.name ?? '—' }}</dd>
-            <dt>sAMAccountName</dt>
+            <dt>Pre-Windows 2000 name</dt>
             <dd class="mono">{{ computer.samAccountName ?? '—' }}</dd>
             <dt>DNS hostname</dt>
             <dd class="mono">{{ computer.dnsHostName ?? '—' }}</dd>
