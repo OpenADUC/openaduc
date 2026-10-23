@@ -409,6 +409,7 @@ function exitOldSchool(): void {
       <MoveDialog
         v-else-if="w.dialog.kind === 'move'"
         :window-id="w.id"
+        :account="w.dialog.account"
         :id="w.dialog.id"
         :label="w.dialog.label"
         @close="store.closeWindow(w.id)"

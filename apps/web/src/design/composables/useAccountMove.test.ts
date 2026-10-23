@@ -26,12 +26,19 @@ const OUS = [anOu(SALES, 'Sales', null), anOu(STAFF, 'Staff', SALES)];
 const get = vi.fn();
 const list = vi.fn();
 const move = vi.fn();
+const getComputer = vi.fn();
+const moveComputer = vi.fn();
 const stepUp = vi.fn(async () => ({ elevated: ELEVATED }));
 vi.mock('../../api/index.js', () => ({
-  api: { users: { get, move }, ous: { list }, auth: { stepUp } },
+  api: {
+    users: { get, move },
+    computers: { get: getComputer, move: moveComputer },
+    ous: { list },
+    auth: { stepUp },
+  },
 }));
 
-const { useUserMove } = await import('./useUserMove.js');
+const { useAccountMove } = await import('./useAccountMove.js');
 const { useAuthStore } = await import('../../stores/auth.js');
 
 async function setup(elevated = ELEVATED) {
@@ -39,12 +46,12 @@ async function setup(elevated = ELEVATED) {
   const auth = useAuthStore();
   auth.actor = { capabilities: [], elevated } as never;
   const onMoved = vi.fn();
-  const mover = useUserMove({ onMoved });
+  const mover = useAccountMove({ onMoved });
   await mover.load('u1');
   return { mover, auth, onMoved };
 }
 
-describe('useUserMove', () => {
+describe('useAccountMove', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     get.mockResolvedValue({
@@ -204,7 +211,7 @@ describe('useUserMove', () => {
     await mover.load('u2');
     slow({ user: aUserDetail({ id: 'u1' }) });
     await first;
-    expect(mover.user.value?.id).toBe('u2');
+    expect(mover.account.value?.id).toBe('u2');
     expect(mover.loading.value).toBe(false);
   });
 
@@ -234,5 +241,46 @@ describe('useUserMove', () => {
     await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
     expect(move).toHaveBeenCalledTimes(2);
     expect(move).toHaveBeenLastCalledWith('u1', { targetOuDn: STAFF });
+  });
+
+  it('moves a computer, and undoes it the same way', async () => {
+    getComputer.mockResolvedValue({
+      computer: {
+        id: 'c1',
+        name: 'WS01',
+        samAccountName: 'WS01$',
+        distinguishedName: `CN=WS01,${SALES}`,
+      },
+    });
+    moveComputer.mockResolvedValue({ ok: true });
+    setActivePinia(createPinia());
+    useAuthStore().actor = { capabilities: [], elevated: ELEVATED } as never;
+    const onMoved = vi.fn();
+    const mover = useAccountMove({ kind: 'computer', onMoved });
+    await mover.load('c1');
+    expect(mover.account.value).toEqual({
+      id: 'c1',
+      name: 'WS01',
+      distinguishedName: `CN=WS01,${SALES}`,
+    });
+
+    mover.destination.value = STAFF;
+    mover.submit();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
+    expect(moveComputer).toHaveBeenCalledWith('c1', { targetOuDn: STAFF });
+    getComputer.mockResolvedValueOnce({
+      computer: {
+        id: 'c1',
+        name: 'WS01',
+        samAccountName: 'WS01$',
+        distinguishedName: `CN=WS01,${STAFF}`,
+      },
+    });
+    (onMoved.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() =>
+      expect(moveComputer).toHaveBeenLastCalledWith('c1', { targetOuDn: SALES }),
+    );
+    expect(get).not.toHaveBeenCalled();
+    expect(move).not.toHaveBeenCalled();
   });
 });
