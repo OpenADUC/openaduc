@@ -16,6 +16,7 @@ const unlock = vi.fn();
 const enable = vi.fn();
 const disable = vi.fn();
 const next = vi.fn();
+const openRow = vi.fn();
 const locked = ref(false);
 const enabled = ref(true);
 
@@ -46,6 +47,7 @@ const Page = defineComponent({
         run: disable,
       },
       { key: 'j', label: 'Next row', section: 'List', repeats: true, run: next },
+      { key: 'Enter', label: 'Open the row', section: 'List', run: openRow },
     ]);
     return () => h('div', [h('input', { class: 'field' }), h('button', { class: 'btn' }, 'Go')]);
   },
@@ -101,6 +103,26 @@ describe('single-key shortcuts', () => {
     expect(unlock).not.toHaveBeenCalled();
   });
 
+  it('takes keys while a checkbox, radio button or button input has focus', async () => {
+    await open();
+    for (const type of ['checkbox', 'radio', 'button', 'submit', 'reset', 'range']) {
+      const host = document.createElement('div');
+      host.className = 'extra';
+      host.innerHTML = `<input type="${type}">`;
+      document.body.append(host);
+      press('u', {}, host.firstElementChild!);
+      press('Enter', {}, host.firstElementChild!);
+    }
+    expect(unlock).toHaveBeenCalledTimes(6);
+    expect(openRow).not.toHaveBeenCalled();
+  });
+
+  it('takes a letter typed with Caps Lock on', async () => {
+    await open();
+    press('U');
+    expect(unlock).toHaveBeenCalledOnce();
+  });
+
   it('ignores keys with a modifier held, but takes ? with Shift', async () => {
     await open();
     for (const mod of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey'] as const)
@@ -151,6 +173,9 @@ describe('single-key shortcuts', () => {
     const { page } = await open();
     const e = press('Enter', {}, page.get('.btn').element);
     expect(e.defaultPrevented).toBe(false);
+    expect(openRow).not.toHaveBeenCalled();
+    press('Enter');
+    expect(openRow).toHaveBeenCalledOnce();
   });
 
   it('repeats only the shortcuts meant to while a key is held', async () => {
@@ -197,6 +222,7 @@ describe('the shortcut cheat sheet', () => {
     }));
     expect(rows).toEqual([
       { text: 'j Next row', greyed: false },
+      { text: 'Enter Open the row', greyed: false },
       { text: 'u Unlock account (account isn’t locked)', greyed: true },
       { text: 'e Disable account', greyed: false },
       { text: '? Show keyboard shortcuts', greyed: false },

@@ -256,6 +256,16 @@ describe.each(lists)('shortcuts on the %s list', (name, view, search, one) => {
     expect(highlighted(page)).toHaveLength(0);
   });
 
+  // Only the user list has row checkboxes.
+  it.runIf(name === 'users')('keeps moving after a row’s checkbox is ticked', async () => {
+    const page = await openTwo();
+    const check = page.get('tbody input[type="checkbox"]');
+    await check.trigger('click');
+    (check.element as HTMLInputElement).focus();
+    await press('j', check.element);
+    expect(highlighted(page)).toHaveLength(1);
+  });
+
   it('lists the list’s shortcuts', async () => {
     await openTwo();
     const listed = () =>

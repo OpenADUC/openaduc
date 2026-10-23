@@ -46,12 +46,26 @@ export const shortcuts = computed<Shortcut[]>(() => {
   return [...byKey.values()];
 });
 
-const TYPING =
-  'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="listbox"]';
+// Inputs that take no letters, such as a row's checkbox, aren't typing.
+const NOT_TEXT = [
+  'checkbox',
+  'radio',
+  'button',
+  'submit',
+  'reset',
+  'range',
+  'image',
+  'color',
+  'file',
+]
+  .map((t) => `:not([type="${t}"])`)
+  .join('');
+
+const TYPING = `input${NOT_TEXT}, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="spinbutton"], [role="listbox"]`;
 
 // Enter belongs to a focused control: it presses a button, follows a link.
 const CONTROL =
-  'a[href], button, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], summary';
+  'a[href], button, input, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], summary';
 
 // Quick search, every PrimeVue Dialog and Drawer, confirmations, and popup
 // menus such as Actions.
@@ -79,7 +93,9 @@ function forShortcuts(e: KeyboardEvent): boolean {
 /** The window's keydown handler: runs the key's shortcut if one can run. */
 export function onShortcutKey(e: KeyboardEvent): void {
   if (!forShortcuts(e)) return;
-  const shortcut = shortcuts.value.find((s) => s.key === e.key);
+  // Caps Lock types 'U' without Shift; Shift+U was turned away above.
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const shortcut = shortcuts.value.find((s) => s.key === key);
   if (!shortcut || shortcut.unavailable || (e.repeat && !shortcut.repeats)) return;
   e.preventDefault();
   shortcut.run();
