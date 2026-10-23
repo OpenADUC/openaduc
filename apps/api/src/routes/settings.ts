@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
   ELEVATED_SESSION_LIMITS,
+  type ElevatedSessionLimit,
   ROLE_MEMBERS_SHOWN,
   ROLES,
   rolesResponseSchema,
@@ -82,6 +83,18 @@ function validateValue(key: string, value: unknown): unknown {
 const patchBodySchema = z.record(z.string(), z.unknown());
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
+  // The idle timeout can't usefully exceed the absolute lifetime, and
+  // allowing it would suggest it does. Checked against the values after
+  // the patch, so both can be raised together.
+  async function checkElevatedLimits(updates: { key: string; value: unknown }[]): Promise<void> {
+    const after = async ({ key, default: fallback }: ElevatedSessionLimit) =>
+      (updates.find((u) => u.key === key)?.value as number | undefined) ??
+      (await app.services.settings.get<number>(key, fallback));
+    if ((await after(idleTimeout)) > (await after(absoluteLifetime))) {
+      throw BadRequest("The idle timeout can't be longer than the absolute lifetime.");
+    }
+  }
+
   // ---- GET /api/settings ------------------------------------------------
   // Returns all settings the UI is allowed to edit. Read for any signed-in
   // user (the appearance page reads no settings, but the policy page does).
@@ -127,6 +140,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         key,
         value: validateValue(key, value),
       }));
+
+      await checkElevatedLimits(validated);
 
       const before = await app.db
         .selectFrom('app_settings')

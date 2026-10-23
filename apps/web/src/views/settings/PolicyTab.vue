@@ -35,6 +35,9 @@ const form = ref({
 });
 
 const canEdit = computed(() => auth.hasCapability('configure:security'));
+const limitsConflict = computed(
+  () => form.value.stepUpIdleMinutes > form.value.stepUpLifetimeMinutes,
+);
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -228,6 +231,9 @@ onMounted(async () => {
         />
       </div>
     </div>
+    <p v-if="limitsConflict" class="setting-hint setting-error" role="alert">
+      The idle timeout can't be longer than the absolute lifetime.
+    </p>
   </Card>
 
   <Card title="Audit logging" sub="what activities produce audit events">
@@ -255,7 +261,7 @@ onMounted(async () => {
       label="Save changes"
       icon="pi pi-check"
       :loading="saving"
-      :disabled="loading"
+      :disabled="loading || limitsConflict"
       @click="auth.requireEdit(save)"
     />
     <span v-else class="hint">
@@ -275,6 +281,11 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-3);
   margin: 0;
+}
+
+.setting-error {
+  margin-top: 8px;
+  color: var(--danger);
 }
 
 .number-row {
