@@ -8,26 +8,39 @@ function setup(failing: Record<string, string> = {}) {
     if (failing[id]) throw new Error(failing[id]);
   });
   const selectedIds = ref(new Set(['a', 'b', 'c']));
+  const run = { disable, enable: vi.fn(), unlock: vi.fn() };
   const bulk = useBulkActions({
     selectedIds,
-    run: { disable, enable: vi.fn(), unlock: vi.fn() },
+    run,
     toast: { add: vi.fn() },
     reload: vi.fn(async () => {}),
   });
-  return { bulk, disable, selectedIds };
+  return { bulk, run, selectedIds };
 }
 
-describe('bulk disable', () => {
-  it('asks for confirmation before disabling anyone', async () => {
-    const { bulk, disable } = setup();
+describe('bulk actions', () => {
+  it.each(['disable', 'enable', 'unlock'] as const)(
+    'ask for confirmation before they %s anyone',
+    async (action) => {
+      const { bulk, run } = setup();
 
-    bulk.requestBulk('disable');
-    expect(bulk.confirmDisableOpen.value).toBe(true);
-    expect(disable).not.toHaveBeenCalled();
+      bulk.requestBulk(action);
+      expect(bulk.confirming.value).toBe(action);
+      expect(run[action]).not.toHaveBeenCalled();
 
-    await bulk.startBulk('disable');
-    expect(bulk.confirmDisableOpen.value).toBe(false);
-    expect(disable).toHaveBeenCalledTimes(3);
+      await bulk.startBulk(action);
+      expect(bulk.confirming.value).toBeNull();
+      expect(run[action]).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it('do nothing when the operator cancels', () => {
+    const { bulk, run } = setup();
+
+    bulk.requestBulk('enable');
+    bulk.cancelBulk();
+    expect(bulk.confirming.value).toBeNull();
+    expect(run.enable).not.toHaveBeenCalled();
   });
 
   it('keeps only the failed accounts selected, each with its error', async () => {
