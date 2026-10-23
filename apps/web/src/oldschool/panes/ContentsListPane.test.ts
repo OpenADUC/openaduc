@@ -25,6 +25,7 @@ const api = {
     })),
   },
   users: { disable: vi.fn(async () => ({})), enable: vi.fn(async () => ({})) },
+  computers: { disable: vi.fn(async () => ({})), enable: vi.fn(async () => ({})) },
 };
 vi.mock('../../api/index.js', () => ({ api }));
 const toast = { add: vi.fn() };
@@ -133,5 +134,67 @@ describe('a group in the Old School contents list', () => {
     await choose(pane, 'Delete');
 
     expect(oldSchool.windows).toEqual([]);
+  });
+});
+
+describe('a computer in the Old School contents list', () => {
+  const ws01 = {
+    id: 'c1',
+    name: 'WS01',
+    samAccountName: 'WS01$',
+    dnsHostName: null,
+    operatingSystem: null,
+    enabled: true,
+  };
+  const ALL = [
+    'read:computer',
+    'write:computer.enableDisable',
+    'write:computer.resetAccount',
+    'write:computer.move',
+  ];
+  const menu = async (pane: Awaited<ReturnType<typeof openStaff>>['pane']) => {
+    await pane.get('.os-list-row').trigger('contextmenu');
+    return pane.findAll('[role="menuitem"]');
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.ous.contents.mockResolvedValueOnce({ users: [], groups: [], computers: [ws01] } as never);
+  });
+
+  it('disables the computer at once, and the toast’s Undo enables it again', async () => {
+    const { pane } = await openStaff(ALL);
+
+    await choose(pane, 'Disable Account');
+    expect(api.computers.disable).toHaveBeenCalledWith('c1');
+    const done = toast.add.mock.calls.at(-1)![0] as { summary: string; undo: () => void };
+    expect(done.summary).toBe('Object "WS01" has been disabled.');
+
+    done.undo();
+    await flushPromises();
+    expect(api.computers.enable).toHaveBeenCalledWith('c1');
+    expect(api.users.enable).not.toHaveBeenCalled();
+  });
+
+  it('opens the reset prompt and the move dialog', async () => {
+    const { pane, oldSchool } = await openStaff(ALL);
+
+    await choose(pane, 'Reset Account');
+    await choose(pane, 'Move…');
+
+    expect(oldSchool.windows.map((w) => w.dialog)).toEqual([
+      { kind: 'reset-computer', id: 'c1', label: 'WS01' },
+      { kind: 'move', account: 'computer', id: 'c1', label: 'WS01' },
+    ]);
+  });
+
+  it('greys out what the operator may not do', async () => {
+    const { pane } = await openStaff(['read:computer']);
+
+    const items = await menu(pane);
+    for (const label of ['Disable Account', 'Reset Account', 'Move…']) {
+      const item = items.find((i) => i.text() === label);
+      expect(item?.classes(), label).toContain('disabled');
+    }
   });
 });

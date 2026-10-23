@@ -194,6 +194,16 @@ const { runningOn, run: runAccountAction } = useAccountActions<Row>({
     store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
 });
 
+const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActions<Row>({
+  kind: 'computer',
+  onDone: (action, r, offer) => {
+    toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
+    store.bumpData();
+  },
+  onFailed: ({ op: { action, account }, message }) =>
+    store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
+});
+
 function userItems(r: Row): CtxItem[] {
   const busy = runningOn(r.id) !== null;
   const items: CtxItem[] = [{ label: 'Copy…', disabled: true, onSelect: () => undefined }];
@@ -299,19 +309,38 @@ function groupItems(r: Row): CtxItem[] {
 }
 
 function computerItems(r: Row): CtxItem[] {
+  const canToggle = can('write:computer.enableDisable') && computerRunningOn(r.id) === null;
   return [
     {
       label: 'Manage',
       disabled: true,
     },
-    { label: 'Move…', disabled: true },
+    {
+      label: 'Move…',
+      disabled: !can('write:computer.move'),
+      onSelect: () =>
+        store.openDialog({ kind: 'move', account: 'computer', id: r.id, label: r.name }),
+    },
     {
       label: 'All Tasks',
       kind: 'header',
     },
-    { label: 'Disable Account', disabled: r.disabled },
-    { label: 'Enable Account', disabled: !r.disabled },
-    { label: 'Reset Account', disabled: true },
+    r.disabled
+      ? {
+          label: 'Enable Account',
+          disabled: !canToggle,
+          onSelect: () => runComputerAction('enable', r),
+        }
+      : {
+          label: 'Disable Account',
+          disabled: !canToggle,
+          onSelect: () => runComputerAction('disable', r),
+        },
+    {
+      label: 'Reset Account',
+      disabled: !can('write:computer.resetAccount'),
+      onSelect: () => store.openDialog({ kind: 'reset-computer', id: r.id, label: r.name }),
+    },
     { kind: 'separator' },
     {
       label: 'Properties',
