@@ -3,9 +3,7 @@
      Tabs not backed by our cache schema (Dial-in, Environment, Sessions,
      Remote control, Remote Desktop Services Profile, COM+) render the
      authentic layout with disabled controls so the experience reads as
-     "ADUC, but our directory doesn't expose this here". Editable fields
-     submit through PATCH /users/:id, prompting step-up first; like
-     every write control here, they're disabled without the capability. -->
+     "ADUC, but our directory doesn't expose this here". -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
@@ -253,27 +251,39 @@ async function save(closeAfter: boolean): Promise<void> {
   }
   const wantUnlock = draft.value.doUnlock && user.value.locked;
 
-  auth.requireStepUp(async () => {
+  const hasPatch = Object.keys(patch).length > 0;
+  let patchApplied = !hasPatch;
+  const apply = async (): Promise<void> => {
     try {
-      if (Object.keys(patch).length > 0) {
+      if (!patchApplied) {
         await api.users.update(props.id, { patch });
+        patchApplied = true;
       }
-      if (wantUnlock) {
-        try {
-          await api.users.unlock(props.id);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (wantUnlock) await api.users.unlock(props.id);
       toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
       store.bumpData();
       // Refresh local snapshot from the new state.
       await load();
       if (closeAfter) emit('close');
     } catch (e) {
-      err.value = e instanceof ApiError ? e.message : (e as Error).message;
+      if (auth.retryAfterStepUp(e, apply)) return;
+      toast.add({
+        severity: 'error',
+        summary: !patchApplied
+          ? 'Apply failed'
+          : hasPatch
+            ? 'Changes applied, but the account was not unlocked.'
+            : 'Unlock failed',
+        detail: e instanceof ApiError ? e.message : (e as Error).message,
+        life: 6000,
+      });
+      if (hasPatch && patchApplied) {
+        store.bumpData();
+        await load();
+      }
     }
-  }, 'Updating a user requires step-up authentication.');
+  };
+  auth.requireStepUp(apply, 'Updating a user requires step-up authentication.');
 }
 
 // --- Member Of helpers -----------------------------------------------
@@ -286,7 +296,7 @@ function removeMembership(groupId: string, groupName: string): void {
     okLabel: 'Yes',
     destructive: false,
     onOk: () => {
-      auth.requireStepUp(async () => {
+      const apply = async (): Promise<void> => {
         memberOfPending.value = groupId;
         try {
           await api.users.removeGroup(props.id, { groupId });
@@ -294,6 +304,7 @@ function removeMembership(groupId: string, groupName: string): void {
           await load();
           store.bumpData();
         } catch (e) {
+          if (auth.retryAfterStepUp(e, apply)) return;
           toast.add({
             severity: 'error',
             summary: 'Remove failed',
@@ -303,7 +314,8 @@ function removeMembership(groupId: string, groupName: string): void {
         } finally {
           memberOfPending.value = null;
         }
-      }, 'Removing a group membership requires step-up authentication.');
+      };
+      auth.requireStepUp(apply, 'Removing a group membership requires step-up authentication.');
     },
   });
 }

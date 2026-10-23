@@ -44,9 +44,7 @@ const addLoading = ref(false);
 const addSelected = ref<UserSummary | null>(null);
 let addTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Action state. Each membership change calls the API directly with the
-// cached step-up creds (prompting step-up first when there are none); we
-// track which row is busy for the per-row spinner.
+// Tracks which row is busy for the per-row spinner.
 const writeRunning = ref(false);
 const busyMemberId = ref<string | null>(null);
 
@@ -327,7 +325,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           label="Add member"
           icon="pi pi-user-plus"
           size="small"
-          @click="auth.requireStepUp(openAdd)"
+          @click="openAdd"
         />
       </nav>
 
@@ -339,12 +337,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           message="Run a sync if this seems wrong, or add a member to get started."
         >
           <template #actions>
-            <Button
-              v-if="canManage"
-              label="Add member"
-              icon="pi pi-user-plus"
-              @click="auth.requireStepUp(openAdd)"
-            />
+            <Button v-if="canManage" label="Add member" icon="pi pi-user-plus" @click="openAdd" />
           </template>
         </EmptyState>
         <DataTable
