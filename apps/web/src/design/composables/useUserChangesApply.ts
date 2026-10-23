@@ -34,7 +34,9 @@ export function useUserChangesApply(options: {
 
   const unlocking = computed(() => unlock.value && user.value?.locked === true);
   const dirty = computed(() => edit.dirty.value || unlocking.value);
-  const applying = computed(() => edit.saving.value || account.running.value !== null);
+  const applying = computed(
+    () => edit.saving.value || (!!user.value && account.runningOn(user.value.id) !== null),
+  );
 
   function reset(u: UserDetail | null): void {
     user.value = u;

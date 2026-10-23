@@ -480,7 +480,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 
 // ---- Hero actions (unlock / enable / disable) ----------------------------
 
-const { running: accountActionRunning, run: runAccountAction } = useAccountActions<UserDetail>({
+const { runningOn: accountActionOn, run: runAccountAction } = useAccountActions<UserDetail>({
   onDone: async (action, u) => {
     toast.add({
       severity: 'success',
@@ -513,6 +513,8 @@ function unlockedDetail(u: UserDetail): string {
   if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
   return detail.join(' ');
 }
+
+const accountActionRunning = computed(() => (user.value ? accountActionOn(user.value.id) : null));
 
 function runOnUser(action: AccountAction): void {
   if (user.value) runAccountAction(action, user.value);
