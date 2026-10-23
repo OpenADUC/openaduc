@@ -10,7 +10,7 @@ export const SHORTCUT_SECTIONS = ['List', 'Actions', 'Tabs', 'General'] as const
 export type ShortcutSection = (typeof SHORTCUT_SECTIONS)[number];
 
 export interface Shortcut {
-  /** The key as `KeyboardEvent.key` reports it: 'u', '/', '?', 'Enter', '1'. */
+  /** One of SHORTCUT_KEYS: a lower-case letter, '/', '?', 'Enter', a digit. */
   key: string;
   label: string;
   section: ShortcutSection;

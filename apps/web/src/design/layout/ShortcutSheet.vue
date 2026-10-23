@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import Dialog from 'primevue/dialog';
+import { SHORTCUT_KEYS } from '../lib/shortcutKeys.js';
 import {
   SHORTCUT_SECTIONS,
   onShortcutKey,
@@ -16,7 +17,7 @@ const open = ref(false);
 
 useShortcuts(() => [
   {
-    key: '?',
+    key: SHORTCUT_KEYS.general.help,
     label: 'Show keyboard shortcuts',
     section: 'General',
     run: () => {

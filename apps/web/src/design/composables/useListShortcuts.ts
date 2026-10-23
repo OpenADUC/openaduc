@@ -13,6 +13,9 @@ import {
   type Ref,
 } from 'vue';
 import { useShortcuts } from './useShortcuts.js';
+import { SHORTCUT_KEYS } from '../lib/shortcutKeys.js';
+
+const KEYS = SHORTCUT_KEYS.list;
 
 // What the lists' PrimeVue DataTable offers beyond its typings: the rows as
 // it shows them, filtered and sorted, and its virtual scroller.
@@ -100,9 +103,14 @@ export function useListShortcuts<T extends { id: string }>(opts: ListShortcutOpt
   useShortcuts(() => {
     const none = shown.value.length === 0 ? `no ${opts.noun[1]} to move through` : null;
     return [
-      { key: '/', label: `Search ${opts.noun[1]}`, section: 'List', run: () => void search() },
       {
-        key: 'j',
+        key: KEYS.search,
+        label: `Search ${opts.noun[1]}`,
+        section: 'List',
+        run: () => void search(),
+      },
+      {
+        key: KEYS.next,
         label: 'Next row',
         section: 'List',
         unavailable: none,
@@ -110,7 +118,7 @@ export function useListShortcuts<T extends { id: string }>(opts: ListShortcutOpt
         run: () => move(1),
       },
       {
-        key: 'k',
+        key: KEYS.previous,
         label: 'Previous row',
         section: 'List',
         unavailable: none,
@@ -118,7 +126,7 @@ export function useListShortcuts<T extends { id: string }>(opts: ListShortcutOpt
         run: () => move(-1),
       },
       {
-        key: 'Enter',
+        key: KEYS.open,
         label: `Open the highlighted ${opts.noun[0]}`,
         section: 'List',
         unavailable: index.value < 0 ? 'no row highlighted' : null,

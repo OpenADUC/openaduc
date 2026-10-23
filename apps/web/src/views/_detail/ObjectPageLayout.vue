@@ -12,6 +12,7 @@ import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useShortcuts, type Shortcut } from '../../design/composables/useShortcuts.js';
+import { SHORTCUT_KEYS } from '../../design/lib/shortcutKeys.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
@@ -176,8 +177,8 @@ function actionShortcuts(): Shortcut[] {
 
 useShortcuts(() => [
   ...actionShortcuts(),
-  ...visibleTabs.value.slice(0, 9).map((t, i): Shortcut => ({
-    key: String(i + 1),
+  ...visibleTabs.value.slice(0, SHORTCUT_KEYS.tabs.length).map((t, i): Shortcut => ({
+    key: SHORTCUT_KEYS.tabs[i]!,
     label: t.label,
     section: 'Tabs',
     run: () => select(t.id),

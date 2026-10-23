@@ -52,6 +52,7 @@ import {
   type UserAction,
 } from '../design/lib/userActions.js';
 import { useSignInFixes } from '../design/composables/useSignInFixes.js';
+import { SHORTCUT_KEYS } from '../design/lib/shortcutKeys.js';
 import {
   membershipChangeText,
   membershipDoneText,
@@ -792,7 +793,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:user.move',
-      shortcut: 'm',
+      shortcut: SHORTCUT_KEYS.user.move,
       disabled: busy,
       run: openMoveDialog,
     },
