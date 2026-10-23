@@ -55,8 +55,8 @@ const text = computed(() => props.label ?? userStatusLabel(resolvedKind.value));
   <!-- The size suffix targets the global .badge.badge-lg modifier in
        theme.css so the styling is shared with inline `<span class="badge
        badge-amber badge-lg">…</span>` chips used in the user-detail hero. -->
-  <span class="badge" :class="[`badge-${tone}`, `badge-${size}`]">
+  <span class="badge" :class="[`badge-${tone}`, `badge-${size}`]" :title="text">
     <span v-if="dot" class="badge-dot" />
-    {{ text }}
+    <span>{{ text }}</span>
   </span>
 </template>
