@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import type { DirectoryOu, MoveRequest } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { computerName } from '../lib/format.js';
 import { latestRequest } from '../lib/latestRequest.js';
 import { useUndoableWrite, type UndoOffer, type WriteFailure } from '../lib/undoableWrite.js';
 import type { AccountKind } from './useAccountActions.js';
@@ -46,7 +47,7 @@ const ACCOUNTS: Record<
       const { computer: c } = await api.computers.get(id);
       return {
         id: c.id,
-        name: c.name ?? c.samAccountName ?? c.distinguishedName,
+        name: computerName(c),
         distinguishedName: c.distinguishedName,
       };
     },

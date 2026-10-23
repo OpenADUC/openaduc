@@ -40,9 +40,9 @@ import type {
   ObjectPageTab,
 } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
+import { useMoveDialog } from './_detail/useMoveDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
-import { useAccountMove } from '../design/composables/useAccountMove.js';
 import {
   membershipChangeText,
   membershipDoneText,
@@ -541,44 +541,15 @@ async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
 
 // ---- Move to OU ----------------------------------------------------------
 
-const moveDialogOpen = ref(false);
-const mover = useAccountMove({
-  onMoved: async (u, to, offer) => {
-    toast.add(
-      undoable(
-        { severity: 'success', summary: `Moved ${u.name} to ${ouName(to)}`, life: 4000 },
-        offer,
-      ),
-    );
-    moveDialogOpen.value = false;
-    await load();
-  },
-});
 const {
+  move: mover,
+  open: moveDialogOpen,
+  show: openMoveDialog,
+  close: closeMoveDialog,
+  dialogFailure: moveDialogFailure,
+  pageFailure: movePageFailure,
   submitting: moveSubmitting,
-  failure: moveFailure,
-  load: loadMove,
-  ouName,
-  retry: retryMove,
-  dismiss: dismissMoveFailure,
-} = mover;
-
-function openMoveDialog(): void {
-  if (!user.value) return;
-  moveDialogOpen.value = true;
-  void loadMove(user.value.id);
-}
-
-const { inDialog: moveDialogFailure, onPage: movePageFailure } = placeFailure(moveFailure, {
-  belongsHere: (f) => f.op.account.id === props.id,
-  dialog: { open: () => moveDialogOpen.value, made: (f) => !f.undo },
-});
-
-// Closing the dialog gives up on a move that failed in it.
-function closeMoveDialog(): void {
-  moveDialogOpen.value = false;
-  if (moveDialogFailure.value) dismissMoveFailure();
-}
+} = useMoveDialog({ kind: 'user', id: () => props.id, onMoved: () => load() });
 
 const { onPage: accountPageFailure } = placeFailure(accountFailure, {
   belongsHere: (f) => f.op.account.id === props.id,
@@ -597,16 +568,7 @@ const actionFailure = computed<ObjectActionFailure | null>(() => {
       dismiss: dismissAccountFailure,
     };
   }
-  const move = movePageFailure.value;
-  if (move) {
-    return {
-      summary: `Couldn’t move ${move.op.account.name} to ${ouName(move.op.destinationDn)}`,
-      message: move.message,
-      retry: retryMove,
-      dismiss: dismissMoveFailure,
-    };
-  }
-  return null;
+  return movePageFailure.value;
 });
 
 // ---- Group membership: remove + add --------------------------------------
@@ -695,7 +657,7 @@ watch(
   () => props.id,
   () => {
     dismissAccountFailure();
-    dismissMoveFailure();
+    mover.dismiss();
     dismissRemoveFailure();
     dismissAddFailure();
   },
@@ -1786,7 +1748,7 @@ watch(user, (u) => {
       :visible="moveDialogOpen"
       :move="mover"
       kind="user"
-      :name="user?.displayName ?? user?.samAccountName ?? ''"
+      :name="user ? nameOf(user) : ''"
       :failure="moveDialogFailure"
       @close="closeMoveDialog"
     />

@@ -198,6 +198,16 @@ describe('a computer’s actions', () => {
     expect(page.find('.inline-failure').exists()).toBe(false);
   });
 
+  it('offers no disable, reset or move on a domain controller, and says why', async () => {
+    api.computers.get.mockResolvedValue({
+      computer: aComputer({ name: 'DC1', writeBlock: 'domain_controller' }),
+    });
+    const page = await openPage(ALL);
+
+    expect(page.text()).toContain('domain controller');
+    expect(page.findAll('button').some((b) => b.text() === 'Actions')).toBe(false);
+  });
+
   it('opens the move dialog at the computer’s current OU', async () => {
     const page = await openPage(ALL);
 

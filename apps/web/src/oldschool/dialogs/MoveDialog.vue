@@ -12,7 +12,12 @@ import { useAccountMove } from '../../design/composables/useAccountMove.js';
 import type { AccountKind } from '../../design/composables/useAccountActions.js';
 import type { DirectoryOu } from '@openaduc/shared';
 
-const props = defineProps<{ windowId: number; account: AccountKind; id: string; label: string }>();
+const props = defineProps<{
+  windowId: number;
+  accountKind: AccountKind;
+  id: string;
+  label: string;
+}>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const store = useOldSchool();
@@ -20,7 +25,7 @@ const toast = useToast();
 // Runs for an Undo too, after this dialog has closed.
 const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useAccountMove(
   {
-    kind: props.account,
+    kind: props.accountKind,
     onMoved: (_account, to, offer) => {
       toast.add(
         undoable(
