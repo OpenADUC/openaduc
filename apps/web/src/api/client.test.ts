@@ -69,3 +69,19 @@ describe('apiFetch and the elevated idle end', () => {
     ]);
   });
 });
+
+describe('apiFetch in the background', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("marks polling so it doesn't keep an elevated session alive", async () => {
+    const fetch = respond(200, {});
+    vi.stubGlobal('fetch', fetch);
+
+    await apiFetch('/directories/1/sync-tasks', { background: true });
+    await apiFetch('/users');
+    const sent = fetch.mock.calls.map(
+      (call) => (call as unknown as [string, RequestInit])[1].headers as Headers,
+    );
+    expect(sent.map((h) => h.get('x-background-request'))).toEqual(['1', null]);
+  });
+});

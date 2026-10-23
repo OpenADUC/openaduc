@@ -62,7 +62,7 @@ function statSummary(stats: Record<string, unknown> | null): string {
 
 async function poll(): Promise<void> {
   try {
-    const result = await api.setup.initialSyncStatus();
+    const result = await api.setup.initialSyncStatus({ background: true });
     job.value = result.job;
     if (result.job?.status === 'succeeded') {
       stopPolling();

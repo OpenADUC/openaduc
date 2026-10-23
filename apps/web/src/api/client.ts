@@ -54,12 +54,24 @@ export function setElevatedIdleEndHandler(fn: (iso: string) => void): void {
   onElevatedIdleEnd = fn;
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export interface ApiFetchInit extends RequestInit {
+  /**
+   * The SPA is making this request by itself (polling), not because the
+   * operator did something, so it doesn't keep an elevated session alive.
+   */
+  background?: boolean;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  { background, ...init }: ApiFetchInit = {},
+): Promise<T> {
   const url = path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`;
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
+  if (background) headers.set('x-background-request', '1');
   const res = await fetch(url, {
     credentials: 'include',
     ...init,

@@ -51,7 +51,7 @@ Mutating routes require **step-up auth**: the operator re-enters their AD passwo
 
 The elevated session ends at whichever comes first:
 
-- **Idle timeout** (`stepup.idle_timeout_minutes`, default 15 min): every authenticated request from the operator pushes it back. To spare the database, a request that would move it by less than a twentieth of the timeout isn't recorded, so the session can end up to that much early.
+- **Idle timeout** (`stepup.idle_timeout_minutes`, default 15 min): every authenticated request from the operator pushes it back. Requests the SPA makes by itself, polling a running sync task, are marked `x-background-request: 1` and don't count. To spare the database, a request that would move it by less than a twentieth of the timeout isn't recorded, so the session can end up to that much early.
 - **Absolute lifetime** (`stepup.absolute_lifetime_minutes`, default 4 h): counted from step-up, however active the operator is. An elevated session also never outlives the session it belongs to.
 
 Both are policy settings. Changing them requires step-up and writes a `settings.update` audit row; a new idle timeout applies to open elevated sessions at their next request, a new absolute lifetime from the next step-up.

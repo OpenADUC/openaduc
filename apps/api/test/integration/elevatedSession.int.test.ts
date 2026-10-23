@@ -106,6 +106,16 @@ describe('elevated sessions end when idle', () => {
     expect(res.headers['x-elevated-idle-expires-at']).toBe(iso(25));
   });
 
+  it("doesn't count the SPA's background polling as activity", async () => {
+    const admin = await steppedUpAdmin();
+
+    at(10);
+    admin.headers['x-background-request'] = '1';
+    expect((await admin.get('/api/settings')).headers['x-elevated-idle-expires-at']).toBe(iso(15));
+    at(15);
+    expect((await elevation(admin)).active).toBe(false);
+  });
+
   it('does not rewrite the session for activity that barely moves the idle end', async () => {
     const admin = await steppedUpAdmin();
 
