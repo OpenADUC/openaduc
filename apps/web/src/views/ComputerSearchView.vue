@@ -18,10 +18,12 @@ import { api } from '../api/index.js';
 import type { ComputerSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import { useThemeStore } from '../design/stores/useTheme.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const router = useRouter();
+const theme = useThemeStore();
 
 // Derived `_staleDays` lets the operator filter "machines that haven't
 // logged on in N+ days" using a plain numeric matcher. Computed once
@@ -210,9 +212,9 @@ onMounted(load);
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
+      :virtual-scroller-options="{ itemSize: theme.listRowHeight }"
       @row-click="(ev) => openDetail(ev.data as ComputerSummary)"
-      class="computers-table"
+      class="computers-table ds-list-table"
     >
       <template #empty>
         <EmptyState

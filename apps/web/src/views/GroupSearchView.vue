@@ -18,6 +18,7 @@ import { api } from '../api/index.js';
 import type { GroupCreateResponse, GroupSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import { useThemeStore } from '../design/stores/useTheme.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
@@ -26,6 +27,7 @@ import { useToast } from 'primevue/usetoast';
 import { useAuthStore } from '../stores/auth.js';
 
 const router = useRouter();
+const theme = useThemeStore();
 const toast = useToast();
 const auth = useAuthStore();
 
@@ -233,9 +235,9 @@ onMounted(load);
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
+      :virtual-scroller-options="{ itemSize: theme.listRowHeight }"
       @row-click="(ev) => openDetail(ev.data as GroupSummary)"
-      class="groups-table"
+      class="groups-table ds-list-table"
     >
       <template #empty>
         <EmptyState
