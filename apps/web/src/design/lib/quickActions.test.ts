@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
 import type { Capability } from '@openaduc/shared';
-import { parseQuickQuery, quickActionsFor, type QuickAction } from './quickActions.js';
+import { parseQuickQuery, quickActionsFor } from './quickActions.js';
+import type { UserAction } from './userActions.js';
 
 const WRITES: Capability[] = [
   'write:user.unlock',
@@ -15,7 +16,7 @@ const can =
 const canAll = can(...WRITES);
 
 describe('parseQuickQuery', () => {
-  it.each<[string, QuickAction, string]>([
+  it.each<[string, UserAction, string]>([
     ['unlock jdoe', 'unlock', 'jdoe'],
     ['reset jdoe', 'reset-password', 'jdoe'],
     ['pw jdoe', 'reset-password', 'jdoe'],

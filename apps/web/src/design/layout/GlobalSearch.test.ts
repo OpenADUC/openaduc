@@ -272,6 +272,7 @@ const actionsOn = (search: Search, name: string) =>
     .map((b) => b.text());
 const selected = (search: Search) => search.find('.gs-action.selected');
 const footer = (search: Search) => search.find('.gs-foot').text();
+const announced = (search: Search) => search.find('[aria-live="polite"]').text();
 
 async function press(search: Search, key: string, init: KeyboardEventInit = {}) {
   await search.find('input').trigger('keydown', { key, ...init });
@@ -300,18 +301,31 @@ describe('quick search actions', () => {
     expect(api.groups.search).not.toHaveBeenCalled();
     expect(api.ous.list).not.toHaveBeenCalled();
     expect(search.find('.gs-verb').text()).toBe('unlock');
-    expect(actionsOn(search, 'Jane Doe')).toEqual(['Unlock']);
+    expect(actionsOn(search, 'Jane Doe')).toEqual(['Unlock account']);
     expect(actionsOn(search, 'John Doe')).toEqual([]);
     expect(rowOf(search, 'John Doe').text()).toContain('Not locked');
   });
 
-  it('asks for a name after a verb alone, and says which verbs act', async () => {
+  it('asks for a name after a verb alone, and says which verbs act and how to skip them', async () => {
     const { search } = await searchFor('', OPERATOR);
     expect(search.text()).toContain('Start with unlock, reset, pw, enable or disable');
+    expect(search.text()).toContain('Start with " to search for those words as written.');
 
     await type(search, 'unlock ');
     expect(api.users.search).not.toHaveBeenCalled();
     expect(search.text()).toContain('Type the name of a user to unlock.');
+    expect(announced(search)).toBe('Type the name of a user to unlock.');
+
+    await type(search, 'pw');
+    expect(search.find('.gs-verb').text()).toBe('reset password');
+    expect(search.text()).toContain('Type the name of a user to give a new password.');
+  });
+
+  it('searches a quoted query as written', async () => {
+    const { search } = await searchFor('"unlock jane', OPERATOR);
+
+    expect(api.users.search).toHaveBeenCalledExactlyOnceWith({ q: 'unlock jane', pageSize: 6 });
+    expect(search.find('.gs-verb').exists()).toBe(false);
   });
 
   it('searches for a verb the operator can’t perform as written', async () => {
@@ -325,8 +339,9 @@ describe('quick search actions', () => {
 
   it('unlocks on Enter after the step-up it prompts, with the user page’s call', async () => {
     const { search, auth } = await searchFor('unlock jane', OPERATOR, false);
-    expect(selected(search).text()).toBe('Unlock');
+    expect(selected(search).text()).toBe('Unlock account');
     expect(footer(search)).toContain('↵ unlock');
+    expect(announced(search)).toBe('Unlock account, Jane Doe. Press Enter.');
 
     await press(search, 'Enter');
     expect(auth.stepUpRequested).toBe(true);
@@ -392,25 +407,28 @@ describe('quick search actions', () => {
   it('offers a highlighted user the actions that fit, the fix first, on → or Tab', async () => {
     const { search } = await searchFor('doe', OPERATOR);
     // Only the highlighted user shows its actions, none chosen until asked.
-    expect(actionsOn(search, 'Jane Doe')).toEqual(['Unlock', 'Reset password…', 'Disable']);
+    expect(actionsOn(search, 'Jane Doe')).toEqual([
+      'Unlock account',
+      'Reset password…',
+      'Disable account',
+    ]);
     expect(actionsOn(search, 'John Doe')).toEqual([]);
     expect(selected(search).exists()).toBe(false);
     expect(footer(search)).toContain('→ / tab actions');
     expect(footer(search)).toContain('↵ open');
 
     await press(search, 'ArrowRight');
-    expect(selected(search).text()).toBe('Unlock');
-    await press(search, 'Tab');
+    expect(selected(search).text()).toBe('Unlock account');
+    await press(search, 'ArrowRight');
     expect(selected(search).text()).toBe('Reset password…');
     expect(footer(search)).toContain('↵ reset password');
-    await press(search, 'ArrowRight');
-    await press(search, 'ArrowRight');
-    expect(selected(search).text()).toBe('Disable');
+    expect(footer(search)).toContain('esc back');
     await press(search, 'Tab', { shiftKey: true });
-    await press(search, 'ArrowLeft');
-    expect(selected(search).text()).toBe('Unlock');
+    expect(selected(search).exists()).toBe(false);
 
     // Esc backs out of the actions before it closes the panel.
+    await press(search, 'Tab');
+    expect(selected(search).text()).toBe('Unlock account');
     await press(search, 'Escape');
     expect(selected(search).exists()).toBe(false);
     expect(search.find('.gs-panel').exists()).toBe(true);
@@ -418,9 +436,45 @@ describe('quick search actions', () => {
     await press(search, 'ArrowDown');
     await press(search, 'ArrowDown');
     await press(search, 'Tab');
-    expect(actionsOn(search, 'Jim Doe')).toEqual(['Enable', 'Reset password…']);
+    expect(actionsOn(search, 'Jim Doe')).toEqual(['Enable account', 'Reset password…']);
     await press(search, 'Enter');
     expect(api.users.enable).toHaveBeenCalledExactlyOnceWith('u3');
+  });
+
+  it('is a combobox over a listbox, its actions options of their own', async () => {
+    const { search } = await searchFor('doe', OPERATOR);
+    const input = () => search.find('input');
+    const listbox = search.find('[role="listbox"]');
+    expect(input().attributes('role')).toBe('combobox');
+    expect(input().attributes('aria-expanded')).toBe('true');
+    expect(input().attributes('aria-controls')).toBe(listbox.attributes('id'));
+    const active = () =>
+      search.find(`#${CSS.escape(input().attributes('aria-activedescendant')!)}`);
+    expect(active().text()).toContain('Jane Doe');
+    expect(active().attributes('role')).toBe('option');
+
+    await press(search, 'ArrowRight');
+    expect(active().attributes('aria-label')).toBe('Unlock account, Jane Doe');
+    expect(active().attributes('aria-selected')).toBe('true');
+    // No option holds another control.
+    for (const option of search.findAll('[role="option"]')) {
+      expect(option.findAll('button, [role="option"]')).toHaveLength(0);
+    }
+  });
+
+  it('leaves Tab to leave the box once in the actions, or where there are none', async () => {
+    const { search } = await searchFor('unlock doe', OPERATOR);
+    const tab = async () => {
+      const e = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true });
+      search.find('input').element.dispatchEvent(e);
+      await flushPromises();
+      return e.defaultPrevented;
+    };
+
+    // Unlock is already selected for Jane; John has nothing to offer.
+    expect(await tab()).toBe(false);
+    await press(search, 'ArrowDown');
+    expect(await tab()).toBe(false);
   });
 
   it('leaves → to the text while the caret isn’t at its end', async () => {
@@ -435,7 +489,7 @@ describe('quick search actions', () => {
     const { search } = await searchFor('doe', ['read:user', 'write:user.unlock']);
 
     await press(search, 'Tab');
-    expect(actionsOn(search, 'Jane Doe')).toEqual(['Unlock']);
+    expect(actionsOn(search, 'Jane Doe')).toEqual(['Unlock account']);
     await press(search, 'Escape');
     await press(search, 'ArrowDown');
     expect(footer(search)).not.toContain('actions');
@@ -452,12 +506,81 @@ describe('quick search actions', () => {
     expect(api.users.unlock).not.toHaveBeenCalled();
   });
 
-  it('runs an action clicked on a row', async () => {
+  it('runs an action clicked on a row, keeping focus in the search box', async () => {
     const { search } = await searchFor('doe', OPERATOR);
 
     await rowOf(search, 'John Doe').trigger('mouseenter');
-    await click(search, 'Disable', rowOf(search, 'John Doe'));
+    const disable = rowOf(search, 'John Doe')
+      .findAll('.gs-action')
+      .find((a) => a.text() === 'Disable account')!;
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    disable.element.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    await disable.trigger('click');
+    await flushPromises();
     expect(api.users.disable).toHaveBeenCalledExactlyOnceWith('u2');
+  });
+
+  it('waits for the results of what was typed before Enter acts', async () => {
+    const { search } = await searchFor('disable jane', OPERATOR);
+    expect(selected(search).text()).toBe('Disable account');
+
+    // Within the debounce, the results are still Jane's.
+    await search.find('input').setValue('disable john');
+    await press(search, 'Enter');
+    expect(api.users.disable).not.toHaveBeenCalled();
+    // Enter sent the search at once.
+    expect(api.users.search).toHaveBeenLastCalledWith({ q: 'john', pageSize: 6 });
+
+    await press(search, 'Enter');
+    expect(api.users.disable).toHaveBeenCalledExactlyOnceWith('u2');
+  });
+
+  it('waits while a search for the new text is still answering', async () => {
+    const { search } = await searchFor('disable jane', OPERATOR);
+    let answer!: () => void;
+    const searchDirectory = api.users.search.getMockImplementation() as (q: unknown) => unknown;
+    api.users.search.mockImplementationOnce((async (q: unknown) => {
+      await new Promise<void>((r) => (answer = r));
+      return searchDirectory(q);
+    }) as never);
+    await type(search, 'disable john');
+    expect(search.find('.gs-row-primary').text()).toBe('Jane Doe');
+
+    await press(search, 'Enter');
+    expect(api.users.disable).not.toHaveBeenCalled();
+    expect(announced(search)).toBe(
+      'Still searching for “john”. Press Enter again once the results show.',
+    );
+
+    answer();
+    await flushPromises();
+    expect(search.text()).not.toContain('Still searching');
+    await press(search, 'Enter');
+    expect(api.users.disable).toHaveBeenCalledExactlyOnceWith('u2');
+  });
+
+  it('ignores a held Enter', async () => {
+    const { search } = await searchFor('disable john', OPERATOR);
+
+    await press(search, 'Enter', { repeat: true });
+    expect(api.users.disable).not.toHaveBeenCalled();
+  });
+
+  it('keeps the highlight on the user acted on, wherever it has moved since', async () => {
+    let finish!: () => void;
+    api.users.unlock.mockImplementationOnce(
+      async () => new Promise<void>((r) => (finish = r)) as never,
+    );
+    const { search } = await searchFor('doe', OPERATOR);
+    await press(search, 'Tab');
+    await press(search, 'Enter');
+
+    await press(search, 'ArrowDown');
+    await press(search, 'ArrowDown');
+    finish();
+    await flushPromises();
+    expect(search.find('.gs-row.active').text()).toContain('Jane Doe');
   });
 
   it('keeps a failure in the panel, flagged on the trigger while closed, until retried', async () => {
@@ -471,10 +594,14 @@ describe('quick search actions', () => {
 
     await press(search, 'Escape');
     expect(search.find('.gs-trigger-failed').exists()).toBe(true);
+    expect(search.find('.gs-trigger').attributes('aria-label')).toBe(
+      'Search the directory. An action from quick search failed.',
+    );
     await search.find('.gs-trigger').trigger('click');
     await click(search, 'Retry', search.find('.gs-failure'));
     expect(api.users.unlock).toHaveBeenCalledTimes(2);
     expect(search.find('.gs-failure').exists()).toBe(false);
     expect(search.find('.gs-trigger-failed').exists()).toBe(false);
+    expect(search.find('.gs-trigger').attributes('aria-label')).toBe('Search the directory');
   });
 });
