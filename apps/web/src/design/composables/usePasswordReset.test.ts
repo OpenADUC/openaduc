@@ -34,9 +34,11 @@ vi.mock('../../api/index.js', () => ({
 const { usePasswordReset } = await import('./usePasswordReset.js');
 const { useAuthStore } = await import('../../stores/auth.js');
 
-function setup() {
+const RESET_AND_UNLOCK = ['read:user', 'write:user.resetPassword', 'write:user.unlock'];
+
+function setup(capabilities = RESET_AND_UNLOCK) {
   setActivePinia(createPinia());
-  useAuthStore().actor = { directoryId: 1, elevated: { active: false } } as never;
+  useAuthStore().actor = { directoryId: 1, capabilities, elevated: { active: false } } as never;
   const onReset = vi.fn();
   return { reset: usePasswordReset({ onReset }), onReset };
 }
@@ -71,6 +73,16 @@ describe('usePasswordReset', () => {
     expect(reset.offerUnlock.value).toBe(false);
 
     reset.alsoUnlock.value = true;
+    reset.password.value = 'Correct-Horse-9';
+    await reset.submit();
+    expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));
+  });
+
+  it('doesn’t offer to unlock to an operator who may only reset', async () => {
+    const { reset } = setup(['read:user', 'write:user.resetPassword']);
+    await reset.load(aUserDetail({ locked: true }));
+    expect(reset.offerUnlock.value).toBe(false);
+
     reset.password.value = 'Correct-Horse-9';
     await reset.submit();
     expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));

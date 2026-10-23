@@ -35,7 +35,9 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
   const submitting = ref(false);
   const error = ref<string | null>(null);
 
-  const offerUnlock = computed(() => target.value?.locked === true);
+  const offerUnlock = computed(
+    () => target.value?.locked === true && auth.hasCapability('write:user.unlock'),
+  );
   const checks = computed(() =>
     checkPassword(password.value, policy.value, target.value ?? NO_ACCOUNT),
   );

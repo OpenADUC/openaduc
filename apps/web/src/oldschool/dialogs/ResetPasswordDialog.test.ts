@@ -21,10 +21,12 @@ const { default: ResetPasswordDialog } = await import('./ResetPasswordDialog.vue
 const { useAuthStore } = await import('../../stores/auth.js');
 const { useOldSchool } = await import('../stores/useOldSchool.js');
 
-async function openReset() {
+async function openReset(
+  capabilities = ['read:user', 'write:user.resetPassword', 'write:user.unlock'],
+) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useAuthStore().actor = { capabilities: [], elevated: { active: true } } as never;
+  useAuthStore().actor = { capabilities, elevated: { active: true } } as never;
   const oldSchool = useOldSchool();
   oldSchool.openDialog({ kind: 'reset-password', id: 'u1', samAccountName: 'jdoe' });
   const dialog = mount(ResetPasswordDialog, {
@@ -60,6 +62,21 @@ describe('the Old School reset password dialog', () => {
       unlock: true,
     });
     expect(api.users.unlock).not.toHaveBeenCalled();
+  });
+
+  it('offers no unlock to an operator who may only reset', async () => {
+    const dialog = await openReset(['read:user', 'write:user.resetPassword']);
+    expect(dialog.text()).not.toContain("Unlock the user's account");
+
+    await dialog.get('#np').setValue('N3w-passw0rd!');
+    await dialog.get('#cp').setValue('N3w-passw0rd!');
+    await button(dialog, 'OK').trigger('click');
+    await flushPromises();
+
+    expect(api.users.resetPassword).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ unlock: false }),
+    );
   });
 
   it('needs the confirmation only while the password is hidden', async () => {
