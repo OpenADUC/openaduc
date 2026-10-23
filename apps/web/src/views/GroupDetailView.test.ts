@@ -6,7 +6,7 @@ import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api/client.js';
 
 const jane = {
@@ -87,7 +87,7 @@ vi.mock('../api/index.js', () => ({ api }));
 
 const { default: GroupDetailView } = await import('./GroupDetailView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
-const { shortcuts } = await import('../design/composables/useShortcuts.js');
+const { onShortcutKey, shortcuts } = await import('../design/composables/useShortcuts.js');
 
 enableAutoUnmount(afterEach);
 
@@ -283,11 +283,26 @@ describe('deleting a group', () => {
 });
 
 describe('shortcuts on a group’s page', () => {
-  it('switch tabs, and run no action', async () => {
-    await openMembers('g1', ['read:group', 'write:group.membership', 'write:group.delete']);
-    expect(shortcuts.value.map((s) => `${s.section} ${s.key} ${s.label}`)).toEqual([
-      'Tabs 1 Overview',
-      'Tabs 2 Members',
+  beforeAll(() => window.addEventListener('keydown', onShortcutKey));
+  afterAll(() => window.removeEventListener('keydown', onShortcutKey));
+
+  const listed = () => shortcuts.value.map((s) => `${s.section} ${s.key} ${s.label}`);
+
+  it('add a member on a, switch tabs, and leave Delete without a key', async () => {
+    const { page } = await openMembers('g1', [
+      'read:group',
+      'write:group.membership',
+      'write:group.delete',
     ]);
+    expect(listed()).toEqual(['Actions a Add member…', 'Tabs 1 Overview', 'Tabs 2 Members']);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', cancelable: true }));
+    await flushPromises();
+    expect(page.find('[role="dialog"] input').exists()).toBe(true);
+  });
+
+  it('offer no Add member key to an operator who can’t manage members', async () => {
+    await openMembers('g1', ['read:group']);
+    expect(listed()).toEqual(['Tabs 1 Overview', 'Tabs 2 Members']);
   });
 });
