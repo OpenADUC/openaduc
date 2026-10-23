@@ -53,7 +53,8 @@ describe('useAccountActions', () => {
     const { actions, onDone, onFailed } = setup();
 
     actions.run(action, jane);
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith(action, jane));
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(onDone.mock.calls[0]!.slice(0, 2)).toEqual([action, jane]);
     expect(call).toHaveBeenCalledWith('u1');
     expect(onFailed).not.toHaveBeenCalled();
   });
@@ -101,7 +102,7 @@ describe('useAccountActions', () => {
     expect(unlock).not.toHaveBeenCalled();
 
     await auth.stepUp('pw');
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane));
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane, null));
     expect(unlock).toHaveBeenCalledOnce();
   });
 
@@ -119,5 +120,90 @@ describe('useAccountActions', () => {
     await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
     expect(enable).toHaveBeenCalledTimes(2);
     expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['disable', enable],
+    ['enable', disable],
+  ] as const)(
+    'undoes a %s with the inverse action, which offers no undo itself',
+    async (action, inverse) => {
+      const { actions, onDone } = setup();
+
+      actions.run(action, jane);
+      await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+      const undo = onDone.mock.calls[0]![2] as () => void;
+      expect(inverse).not.toHaveBeenCalled();
+
+      undo();
+      await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+      expect(inverse).toHaveBeenCalledWith('u1');
+      expect(onDone.mock.calls[1]![2]).toBeNull();
+    },
+  );
+
+  it('can’t undo an unlock', async () => {
+    const { actions, onDone } = setup();
+
+    actions.run('unlock', jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane, null));
+  });
+
+  it('prompts step-up for an undo once the elevated session has ended', async () => {
+    const { actions, auth, onDone } = setup();
+    actions.run('disable', jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    auth.actor = { capabilities: [], elevated: NOT_ELEVATED } as never;
+
+    (onDone.mock.calls[0]![2] as () => void)();
+    expect(auth.stepUpRequested).toBe(true);
+    expect(enable).not.toHaveBeenCalled();
+
+    await auth.stepUp('pw');
+    await vi.waitFor(() => expect(enable).toHaveBeenCalledWith('u1'));
+  });
+
+  it('keeps a failure until it’s retried', async () => {
+    const { actions, onDone } = setup();
+    disable.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    actions.run('disable', jane);
+    await vi.waitFor(() =>
+      expect(actions.failure.value).toEqual({
+        action: 'disable',
+        account: jane,
+        message: 'DC unreachable',
+      }),
+    );
+
+    actions.retry();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(disable).toHaveBeenCalledTimes(2);
+    expect(actions.failure.value).toBeNull();
+  });
+
+  it('keeps a failed undo as an undo when it’s retried', async () => {
+    const { actions, onDone } = setup();
+    actions.run('disable', jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    enable.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    (onDone.mock.calls[0]![2] as () => void)();
+    await vi.waitFor(() => expect(actions.failure.value?.action).toBe('enable'));
+    actions.retry();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+    expect(onDone.mock.calls[1]).toEqual(['enable', jane, null]);
+  });
+
+  it('forgets a dismissed failure', async () => {
+    const { actions } = setup();
+    unlock.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    actions.run('unlock', jane);
+    await vi.waitFor(() => expect(actions.failure.value).not.toBeNull());
+    actions.dismiss();
+    expect(actions.failure.value).toBeNull();
+    actions.retry();
+    expect(unlock).toHaveBeenCalledOnce();
   });
 });

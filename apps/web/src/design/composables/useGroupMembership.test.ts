@@ -68,14 +68,16 @@ describe('useGroupMembership', () => {
     membership.add(janeInSales, after);
     await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
     expect(addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
-    expect(onChanged).toHaveBeenCalledWith('add', janeInSales);
+    expect(onChanged).toHaveBeenCalledWith('add', janeInSales, expect.any(Function));
   });
 
   it('removes the user from the group', async () => {
     const { membership, onChanged } = setup();
 
     membership.remove(janeInSales);
-    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledWith('remove', janeInSales));
+    await vi.waitFor(() =>
+      expect(onChanged).toHaveBeenCalledWith('remove', janeInSales, expect.any(Function)),
+    );
     expect(removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
     expect(addGroup).not.toHaveBeenCalled();
   });
@@ -134,5 +136,55 @@ describe('useGroupMembership', () => {
     await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
     expect(removeGroup).toHaveBeenCalledTimes(2);
     expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['add', 'remove', removeGroup],
+    ['remove', 'add', addGroup],
+  ] as const)(
+    'undoes an %s with a %s, which offers no undo itself',
+    async (change, inverse, call) => {
+      const { membership, onChanged } = setup();
+
+      membership[change](janeInSales);
+      await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+      expect(call).not.toHaveBeenCalled();
+
+      (onChanged.mock.calls[0]![2] as () => void)();
+      await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+      expect(call).toHaveBeenCalledWith('u1', { groupId: 'g1' });
+      expect(onChanged.mock.calls[1]).toEqual([inverse, janeInSales, null]);
+    },
+  );
+
+  it('keeps a failure until it’s retried', async () => {
+    const { membership, onChanged } = setup();
+    removeGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    membership.remove(janeInSales);
+    await vi.waitFor(() =>
+      expect(membership.failure.value).toEqual({
+        change: 'remove',
+        membership: janeInSales,
+        message: 'DC unreachable',
+      }),
+    );
+
+    membership.retry();
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(removeGroup).toHaveBeenCalledTimes(2);
+    expect(membership.failure.value).toBeNull();
+  });
+
+  it('forgets a dismissed failure', async () => {
+    const { membership } = setup();
+    addGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    membership.add(janeInSales);
+    await vi.waitFor(() => expect(membership.failure.value).not.toBeNull());
+    membership.dismiss();
+    expect(membership.failure.value).toBeNull();
+    membership.retry();
+    expect(addGroup).toHaveBeenCalledOnce();
   });
 });

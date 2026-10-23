@@ -4,7 +4,12 @@ import type { GroupSummary, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { latestRequest } from '../lib/latestRequest.js';
-import { membershipOf, useGroupMembership, type Membership } from './useGroupMembership.js';
+import {
+  membershipOf,
+  useGroupMembership,
+  type Membership,
+  type MembershipChange,
+} from './useGroupMembership.js';
 
 export const MIN_GROUP_QUERY = 2;
 const SEARCH_DELAY_MS = 200;
@@ -13,10 +18,22 @@ export const GROUP_PAGE_SIZE = 12;
 /** How the user is in a group already: directly, or only through a nested group. */
 export type ExistingMembership = 'direct' | 'nested';
 
-/** Find a group by name and add a user to it. */
+/**
+ * Find a group by name and add a user to it. Callbacks are as for
+ * `useGroupMembership`: an add's `undo` removes the user again, so a change
+ * can be a remove. Loading for an account forgets the last failure.
+ */
 export function useAddToGroup(options: {
-  onAdded: (membership: Membership) => void | Promise<void>;
-  onFailed: (message: string) => void | Promise<void>;
+  onChanged: (
+    change: MembershipChange,
+    membership: Membership,
+    undo: (() => void) | null,
+  ) => void | Promise<void>;
+  onFailed?: (
+    change: MembershipChange,
+    membership: Membership,
+    message: string,
+  ) => void | Promise<void>;
 }) {
   const user = ref<UserDetail | null>(null);
   const loading = ref(false);
@@ -30,10 +47,7 @@ export function useAddToGroup(options: {
   const searches = latestRequest();
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const { pending, add: addMembership } = useGroupMembership({
-    onChanged: (_change, membership) => options.onAdded(membership),
-    onFailed: (_change, _membership, message) => options.onFailed(message),
-  });
+  const { pending, add: addMembership, failure, retry, dismiss } = useGroupMembership(options);
   const adding = computed(() => pending.value?.membership.groupId ?? null);
   const ready = computed(() => user.value !== null && !loading.value);
 
@@ -54,6 +68,7 @@ export function useAddToGroup(options: {
     const isCurrent = loads.begin();
     user.value = null;
     error.value = null;
+    dismiss();
     query.value = '';
     loading.value = true;
     try {
@@ -95,7 +110,7 @@ export function useAddToGroup(options: {
     }, SEARCH_DELAY_MS);
   });
 
-  /** `after` runs once the user is in the group, after `onAdded`, including after a step-up. */
+  /** `after` runs once the user is in the group, after `onChanged`, including after a step-up. */
   function add(group: GroupSummary, after?: () => void | Promise<void>): void {
     const u = user.value;
     if (!u || !ready.value || existing(group.id) === 'direct') return;
@@ -118,5 +133,8 @@ export function useAddToGroup(options: {
     adding,
     load,
     add,
+    failure,
+    retry,
+    dismiss,
   };
 }

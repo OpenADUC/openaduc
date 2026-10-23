@@ -74,7 +74,11 @@ describe('useUserMove', () => {
     mover.submit();
     await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
     expect(move).toHaveBeenCalledWith('u1', { targetOuDn: STAFF });
-    expect(onMoved).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), STAFF);
+    expect(onMoved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      STAFF,
+      expect.any(Function),
+    );
   });
 
   it('stays submitting until the refresh is done', async () => {
@@ -96,10 +100,52 @@ describe('useUserMove', () => {
     mover.destination.value = STAFF;
 
     mover.submit();
-    await vi.waitFor(() => expect(mover.error.value).toBe('target OU not found'));
+    await vi.waitFor(() => expect(mover.failure.value?.message).toBe('target OU not found'));
+    expect(mover.error.value).toBeNull();
     expect(onMoved).not.toHaveBeenCalled();
     expect(mover.submitting.value).toBe(false);
     expect(mover.destination.value).toBe(STAFF);
+  });
+
+  it('undoes a move by moving the account back to where it was', async () => {
+    const { mover, onMoved } = await setup();
+    mover.destination.value = STAFF;
+    mover.submit();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
+    // The dialog may be reopened for someone else before Undo is clicked.
+    get.mockResolvedValueOnce({ user: aUserDetail({ id: 'u2' }) });
+    await mover.load('u2');
+
+    (onMoved.mock.calls[0]![2] as () => void)();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledTimes(2));
+    expect(move).toHaveBeenLastCalledWith('u1', { targetOuDn: 'ou=sales,DC=corp,DC=example' });
+    expect(onMoved.mock.calls[1]![2]).toBeNull();
+  });
+
+  it('keeps a failed move until it’s retried', async () => {
+    const { mover, onMoved } = await setup();
+    move.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    mover.destination.value = STAFF;
+
+    mover.submit();
+    await vi.waitFor(() => expect(mover.failure.value).not.toBeNull());
+    mover.retry();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
+    expect(move).toHaveBeenCalledTimes(2);
+    expect(mover.failure.value).toBeNull();
+  });
+
+  it('forgets a dismissed failure', async () => {
+    const { mover } = await setup();
+    move.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    mover.destination.value = STAFF;
+
+    mover.submit();
+    await vi.waitFor(() => expect(mover.failure.value).not.toBeNull());
+    mover.dismiss();
+    expect(mover.failure.value).toBeNull();
+    mover.retry();
+    expect(move).toHaveBeenCalledOnce();
   });
 
   it('says why the account or the OUs couldn’t be read', async () => {
@@ -144,7 +190,7 @@ describe('useUserMove', () => {
     mover.submit();
     await vi.waitFor(() => expect(move).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(mover.submitting.value).toBe(false));
-    expect(mover.error.value).toBeNull();
+    expect(mover.failure.value).toBeNull();
 
     await auth.stepUp('pw');
     await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
