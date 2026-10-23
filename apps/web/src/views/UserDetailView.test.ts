@@ -94,6 +94,19 @@ describe('editing a user without an elevated session', () => {
     expect(api.users.update).toHaveBeenCalledWith('u1', { patch: { title: 'Engineer' } });
   });
 
+  it('is clean again once the save lands', async () => {
+    const { page } = await openOrganizationTab(['read:user', 'write:user.attributes'], true);
+
+    await titleField(page).setValue('Engineer');
+    api.users.get.mockResolvedValueOnce({ user: aUserDetail({ title: 'Engineer' }) });
+    await clickSave(page);
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledOnce();
+    expect(page.text()).not.toContain('unsaved change');
+    expect(page.findAll('button').some((b) => b.text() === 'Save changes')).toBe(false);
+    expect((titleField(page).element as HTMLInputElement).value).toBe('Engineer');
+  });
+
   it('says why a value can’t be saved, and won’t save it', async () => {
     const { page } = await openTab('contact', ['read:user', 'write:user.attributes'], false);
 

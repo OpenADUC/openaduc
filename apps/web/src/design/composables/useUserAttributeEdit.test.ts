@@ -138,15 +138,19 @@ describe('useUserAttributeEdit', () => {
     const { edit, auth, onSaved, onFailed } = setup(aUserDetail(), ELEVATED);
     update.mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'));
     edit.draft.title = 'Lead Analyst';
+    const after = vi.fn();
 
-    edit.save();
+    edit.save(after);
     await vi.waitFor(() => expect(update).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(edit.saving.value).toBe(false));
     expect(onFailed).not.toHaveBeenCalled();
     expect(edit.draft.title).toBe('Lead Analyst');
 
+    expect(after).not.toHaveBeenCalled();
+
     await auth.stepUp('pw');
-    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(after).toHaveBeenCalledOnce());
+    expect(onSaved).toHaveBeenCalledOnce();
     expect(update).toHaveBeenCalledTimes(2);
     expect(update).toHaveBeenLastCalledWith('u1', { patch: { title: 'Lead Analyst' } });
   });
@@ -185,6 +189,11 @@ describe('useUserAttributeEdit', () => {
 
     edit.reset(aUserDetail({ title: 'Lead Analyst' }));
     expect(edit.draft.title).toBe('Lead Analyst');
+    expect(edit.dirty.value).toBe(false);
+
+    edit.draft.title = 'Analyst';
+    edit.reset(null);
+    expect(edit.draft.title).toBe('');
     expect(edit.dirty.value).toBe(false);
   });
 });

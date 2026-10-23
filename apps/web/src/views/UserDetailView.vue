@@ -1935,7 +1935,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               size="small"
               :loading="saving"
               :disabled="!valid"
-              @click="saveAttributes"
+              @click="saveAttributes()"
             />
           </span>
         </div>
