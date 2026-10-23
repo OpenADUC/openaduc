@@ -360,6 +360,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     accountExpiresAt: filetimeToDate(asString(entry.accountExpires)),
     lastLogonAt: filetimeToDate(asString(entry.lastLogonTimestamp)),
     lastBadPasswordAt: filetimeToDate(asString(entry.badPasswordTime)),
+    badPasswordCount: parseIntOrNull(asString(entry.badPwdCount)),
     createdAtSource: parseGeneralizedTime(entry.whenCreated),
     modifiedAtSource: parseGeneralizedTime(entry.whenChanged),
     memberOfDns: asStringArray(entry.memberOf),

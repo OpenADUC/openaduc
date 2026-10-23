@@ -82,9 +82,15 @@ export const userDetailSchema = userSummarySchema.extend({
   // the authoritative liveness signal).
   lockedAt: z.string().nullable(),
   // Computed = lockedAt + domain `lockoutDuration`. Null when the account
-  // is not locked, when the domain policy is "manual unlock only"
-  // (lockoutDuration = 0), or when we couldn't read the policy.
+  // is not locked, when the domain keeps lockouts until someone unlocks the
+  // account (`lockedUntilUnlocked`), or when we couldn't read the policy.
   autoUnlockAt: z.string().nullable(),
+  // Locked, and the domain policy has no lockout duration (0, or AD's
+  // "never"), so the lockout lasts until someone unlocks the account.
+  lockedUntilUnlocked: z.boolean(),
+  // AD `badPwdCount`: failed sign-ins since the last good one. Each DC keeps
+  // its own count (it isn't replicated), so this is the answering DC's.
+  badPasswordCount: z.number().int().nullable(),
   // Additional typed AD attributes promoted into the Identity grid. All
   // sourced from rawAttributes at the route layer; we don't cache them as
   // separate columns because the detail view always live-refreshes first.
