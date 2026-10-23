@@ -82,7 +82,7 @@ Choosing in-process over a separate worker keeps deployment simple (one API cont
 
 ## Frontend
 
-The SPA is Vue 3 + Pinia + Vue Router + PrimeVue + Tailwind v4. Layout lives under `apps/web/src/design/` (Sidebar, Topbar, primitives). Each top-level route is a "view" under `apps/web/src/views/`.
+The SPA is Vue 3 + Pinia + Vue Router + PrimeVue + Tailwind v4. Layout lives under `apps/web/src/design/` (Sidebar, Topbar, primitives). Each top-level route is a "view" under `apps/web/src/views/`. The Old School view (`apps/web/src/oldschool/`) is a second skin over the same workflows: data loading and writes live in shared composables under `apps/web/src/design/composables/`, and a lint rule stops the Old School view importing the API client ([ADR 0002](adr/0002-old-school-view-is-a-skin.md)).
 
 Big-data tables (users, groups, computers, audit) use a shared pattern: client-side filter and sort against an already-fetched dataset, viewport-fill height, frozen header, virtual scroll, and PrimeVue's `filterDisplay="menu"`. The cache-table architecture means these views can fetch a few thousand rows once and let the user filter without round-trips.
 

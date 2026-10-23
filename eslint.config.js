@@ -51,4 +51,24 @@ export default [
       },
     },
   },
+  {
+    // Its tests may still fake the API underneath the shared workflows.
+    files: ['apps/web/src/oldschool/**'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              // The SPA's own API client (src/api), by relative path or the @ alias.
+              regex: '^(?:(?:\\.{1,2}/)+|@/)api(?:/|$)',
+              message:
+                'The Old School view is a skin: call the API through a shared workflow in apps/web/src/design/composables/. See docs/adr/0002-old-school-view-is-a-skin.md.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
