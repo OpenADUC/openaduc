@@ -23,7 +23,6 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { undoable } from '../design/feedback/undoToast.js';
 import {
-  accountActionFailedSummary,
   accountActionToast,
   expiryFailedSummary,
   expirySetSummary,
@@ -32,25 +31,31 @@ import {
 import { useAccountActions } from '../design/composables/useAccountActions.js';
 import { useAccountExpiry } from '../design/composables/useAccountExpiry.js';
 import { useAttentionQueue } from '../design/composables/useAttentionQueue.js';
+import { useSignInFixes } from '../design/composables/useSignInFixes.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
-import { placeFailure } from '../design/lib/failurePlacement.js';
-import { fmtRelative, nameOf } from '../design/lib/format.js';
-import { fixFor, userStatus, type SignInFix } from '../design/lib/signIn.js';
 import type { ActionFailure } from '../design/lib/actionFailure.js';
+import { fmtRelative, nameOf } from '../design/lib/format.js';
+import { userStatus } from '../design/lib/signIn.js';
 import type { UserSummary } from '@openaduc/shared';
 
 const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
 
-// "Issues" window — only the most urgent accounts: locked, account/password
-// already expired, or password expiring within the next 24h. The broader
-// "expiring this fortnight" view lives on /users via the saved view.
+// "Issues" window — only the most urgent accounts: locked, made to change
+// their password, or with an account or password expired or expiring within
+// the next 24h. The broader "expiring this fortnight" view lives on /users
+// via the saved view.
 const ISSUES_DAYS = 1;
 
-const queue = useAttentionQueue({ withinDays: ISSUES_DAYS, pageSize: 10 });
+// A row that left stays while something failed on it, such as an Undo.
+const queue = useAttentionQueue({
+  withinDays: ISSUES_DAYS,
+  pageSize: 10,
+  keep: (u) => failureOn(u) !== null,
+});
 // Set when the issues list couldn't load: show that, never "Nothing on fire".
-const { error: issuesError, load: loadIssues } = queue;
+const { rows: issueRows, total: issueTotal, error: issuesError, load: loadIssues } = queue;
 const recentEvents = ref<AuditEventRow[]>([]);
 const loading = ref(true);
 const directory = ref<DirectorySummary | null>(null);
@@ -155,29 +160,30 @@ function openUser(u: UserSummary): void {
   void router.push({ name: 'user-detail', params: { id: u.id } });
 }
 
-// ---- Fixing a row in place --------------------------------------------------
 // Each row offers the fix its user's page leads with, made through the same
 // workflow, so it prompts step-up and is audited the same way.
 
-const fixOf = (u: UserSummary): SignInFix | null => fixFor(u, auth.hasCapability);
-
 const accountActions = useAccountActions<UserSummary>({
+  failuresPerAccount: true,
   onDone: async (action, u, offer) => {
     toast.add(accountActionToast(action, u, offer));
-    await queue.reread(u);
+    await queue.reread(u.id);
   },
 });
 
 const resetTarget = ref<UserSummary | null>(null);
 const resetOpen = ref(false);
 
-async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
+// The reset asks for a change at next sign-in by default, which keeps the
+// account on the list; the operator has dealt with it either way.
+function onPasswordReset(outcome: ResetOutcome): void {
   toast.add(passwordResetToast(outcome));
-  if (resetTarget.value) await queue.reread(resetTarget.value);
+  if (resetTarget.value) queue.handled(resetTarget.value.id);
 }
 
 const expiryOpen = ref(false);
 const expiry = useAccountExpiry({
+  failuresPerAccount: true,
   onSet: async (account, expiresAt, offer) => {
     toast.add(
       undoable(
@@ -185,85 +191,64 @@ const expiry = useAccountExpiry({
         offer,
       ),
     );
-    expiryOpen.value = false;
-    const row = queue.rows.value.find((u) => u.id === account.id);
-    if (row) await queue.reread(row);
+    // An Undo (no offer) lands from its toast, maybe while the dialog is
+    // open for another account.
+    if (offer) expiryOpen.value = false;
+    await queue.reread(account.id);
   },
 });
+
 // A failed expiry change shows in the dialog that made it while that's
 // open, else (an Undo's failure) on its row.
-const { inDialog: expiryDialogFailure, onPage: expiryRowFailure } = placeFailure(expiry.failure, {
-  belongsHere: () => true,
-  dialog: { open: () => expiryOpen.value, made: (f) => !f.undo },
+const expiryDialogFailure = computed(() => {
+  const id = expiry.account.value?.id;
+  const f = expiryOpen.value && id ? expiry.failureOn(id) : null;
+  return f && !f.undo ? f : null;
 });
 
 function closeExpiry(): void {
   expiryOpen.value = false;
-  if (expiryDialogFailure.value) expiry.dismiss();
+  const f = expiryDialogFailure.value;
+  if (f) expiry.dismissOn(f.op.account.id);
 }
 
-function runFix(fix: SignInFix, u: UserSummary): void {
-  switch (fix.fix) {
-    case 'enable':
-    case 'unlock':
-      accountActions.run(fix.fix, u);
-      break;
-    case 'reset-password':
-      resetTarget.value = u;
-      resetOpen.value = true;
-      break;
-    case 'extend-expiry':
-      expiry.load({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
-      expiryOpen.value = true;
-      break;
-  }
-}
+const fixes = useSignInFixes<UserSummary>({
+  actions: accountActions,
+  resetPassword: (u) => {
+    resetTarget.value = u;
+    resetOpen.value = true;
+  },
+  extendExpiry: (u) => {
+    expiry.load({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
+    expiryOpen.value = true;
+  },
+  extendingExpiry: (u) => expiry.submitting.value && expiry.account.value?.id === u.id,
+});
 
-function fixRunning(u: UserSummary): boolean {
-  if (accountActions.runningOn(u.id) !== null) return true;
-  return expiry.submitting.value && expiry.account.value?.id === u.id;
-}
-
-/** The failed write (or read back after one) to show on a row, if any. */
+/** What failed on a row: a fix, an Undo, or reading the account back. */
 function failureOn(u: UserSummary): ActionFailure | null {
-  const action = accountActions.failure.value;
-  if (action?.op.account.id === u.id) {
-    return {
-      summary: accountActionFailedSummary(action.op.action, action.op.account),
-      message: action.message,
-      retry: accountActions.retry,
-      dismiss: accountActions.dismiss,
-    };
-  }
-  const exp = expiryRowFailure.value;
-  if (exp?.op.account.id === u.id) {
+  const action = fixes.actionFailureOn(u.id);
+  if (action) return action;
+  const exp = expiry.failureOn(u.id);
+  if (exp && exp !== expiryDialogFailure.value) {
     return {
       summary: expiryFailedSummary(exp.op.account.name),
       message: exp.message,
-      retry: expiry.retry,
-      dismiss: expiry.dismiss,
+      retry: () => expiry.retryOn(u.id),
+      dismiss: () => expiry.dismissOn(u.id),
     };
   }
-  const reread = queue.rereadFailure.value;
-  if (reread?.account.id === u.id) {
+  const reread = queue.rereadFailureOn(u.id);
+  if (reread) {
     return {
       summary: `Couldn’t read ${nameOf(u)} back`,
-      message: reread.message,
-      retry: () => void queue.reread(reread.account),
-      dismiss: queue.dismissRereadFailure,
+      message: reread,
+      retry: () => void queue.reread(u.id),
+      dismiss: () => queue.dismissRereadFailure(u.id),
     };
   }
   return null;
 }
-
-// A fixed row leaves, unless something about it failed since: an Undo that
-// didn't land stays where the operator can see it.
-const issueRows = computed(() =>
-  queue.rows.value.filter((u) => !queue.fixed.value.has(u.id) || failureOn(u) !== null),
-);
-const issueTotal = computed(
-  () => queue.total.value - (queue.rows.value.length - issueRows.value.length),
-);
 
 function openEventDetail(ev: AuditEventRow): void {
   detailEvent.value = ev;
@@ -357,7 +342,7 @@ onMounted(load);
         issuesError
           ? 'unavailable'
           : issueTotal > 0
-            ? `${issueTotal} total · locked, account expired, or password expiring within 24h`
+            ? `${issueTotal} total · locked, must change password, or account or password expiring within 24h`
             : 'all clear'
       "
     >
@@ -375,7 +360,7 @@ onMounted(load);
         v-else-if="!loading && issueRows.length === 0"
         icon="pi pi-check-circle"
         title="Nothing on fire"
-        message="No active accounts are locked, expired, or expiring in the next 24 hours."
+        message="No enabled accounts are locked, must change their password, or have an account or password expiring in the next 24 hours."
       />
       <ul v-else class="user-list">
         <li v-for="u in issueRows" :key="u.id" class="user-list-item">
@@ -387,15 +372,15 @@ onMounted(load);
             </div>
             <StatusBadge :user="u" />
             <Button
-              v-if="fixOf(u)"
+              v-if="fixes.fixOf(u)"
               class="user-list-fix"
-              :label="fixOf(u)!.label"
-              :icon="`pi ${fixOf(u)!.icon}`"
+              :label="fixes.fixOf(u)!.label"
+              :icon="`pi ${fixes.fixOf(u)!.icon}`"
               size="small"
               severity="secondary"
               outlined
-              :loading="fixRunning(u)"
-              @click.stop="runFix(fixOf(u)!, u)"
+              :loading="fixes.running(fixes.fixOf(u)!, u)"
+              @click.stop="fixes.run(fixes.fixOf(u)!, u)"
             />
           </div>
           <InlineFailure
@@ -403,7 +388,7 @@ onMounted(load);
             class="user-list-failure"
             :summary="failureOn(u)!.summary"
             :message="failureOn(u)!.message"
-            :busy="fixRunning(u)"
+            :busy="accountActions.runningOn(u.id) !== null"
             @retry="failureOn(u)!.retry"
             @dismiss="failureOn(u)!.dismiss"
           />
