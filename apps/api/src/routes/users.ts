@@ -874,6 +874,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = resetPasswordRequestSchema.parse(req.body);
+      if (body.unlock) await app.requireCapability(req, 'write:user.unlock');
       const actor = req.actor!;
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
@@ -891,7 +892,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           targetType: 'user',
           targetId: beforeRefresh.user.objectGuid,
           targetDn: beforeRefresh.user.distinguishedName,
-          metadata: { forceChangeAtNextLogin: body.forceChangeAtNextLogin },
+          metadata: { forceChangeAtNextLogin: body.forceChangeAtNextLogin, unlock: body.unlock },
         },
         async () => {
           const r = await provider.resetPassword(
@@ -899,6 +900,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
             {
               newPassword: body.newPassword,
               forceChangeAtNextLogin: body.forceChangeAtNextLogin,
+              unlock: body.unlock,
             },
             ctx(actor, req),
           );

@@ -37,6 +37,7 @@ async function submit(): Promise<void> {
       await api.users.resetPassword(props.id, {
         newPassword: newPwd.value,
         forceChangeAtNextLogin: mustChange.value,
+        unlock: false,
       });
       if (alsoUnlock.value) {
         try {

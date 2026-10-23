@@ -332,6 +332,7 @@ export interface UserAttributePatch {
 export interface ResetPasswordInput {
   newPassword: string;
   forceChangeAtNextLogin: boolean;
+  unlock: boolean;
 }
 
 export interface SyncInput {
