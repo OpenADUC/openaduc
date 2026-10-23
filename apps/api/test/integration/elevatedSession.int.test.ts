@@ -98,6 +98,14 @@ describe('elevated sessions end when idle', () => {
     expect(await elevation(admin)).toMatchObject({ active: true, idleExpiresAt: iso(49) });
   });
 
+  it('tells the client the moved idle end on every response', async () => {
+    const admin = await steppedUpAdmin();
+
+    at(10);
+    const res = await admin.get('/api/settings');
+    expect(res.headers['x-elevated-idle-expires-at']).toBe(iso(25));
+  });
+
   it('does not rewrite the session for activity that barely moves the idle end', async () => {
     const admin = await steppedUpAdmin();
 

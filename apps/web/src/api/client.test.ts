@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiFetch, setUnauthorizedHandler } from './client.js';
+import { ApiError, apiFetch, setElevatedIdleEndHandler, setUnauthorizedHandler } from './client.js';
 
 const respond = (status: number, body: unknown) =>
   vi.fn(async () => new Response(JSON.stringify(body), { status }));
@@ -38,5 +38,34 @@ describe('apiFetch on 401', () => {
 
     await expect(apiFetch('/users/1/unlock', { method: 'POST' })).rejects.toThrow();
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiFetch and the elevated idle end', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setElevatedIdleEndHandler(() => {});
+  });
+
+  it('passes on the idle end a response carries, error or not', async () => {
+    const onIdleEnd = vi.fn();
+    setElevatedIdleEndHandler(onIdleEnd);
+    const headers = { 'x-elevated-idle-expires-at': '2999-01-01T00:15:00.000Z' };
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response('{}', { status: 200, headers }))
+        .mockResolvedValueOnce(new Response('{}', { status: 400, headers }))
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })),
+    );
+
+    await apiFetch('/users');
+    await expect(apiFetch('/users')).rejects.toThrow();
+    await apiFetch('/users');
+    expect(onIdleEnd.mock.calls).toEqual([
+      [headers['x-elevated-idle-expires-at']],
+      [headers['x-elevated-idle-expires-at']],
+    ]);
   });
 });
