@@ -1,28 +1,44 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Computer routes — read-only mirror of the users/groups patterns.
+// Computer routes.
 //
 // Endpoints:
-//   GET /api/computers           cache search (paged + filtered)
-//   GET /api/computers/:id       detail (live-refreshed from AD)
+//   GET  /api/computers                    cache search (paged + filtered)
+//   GET  /api/computers/:id                detail (live-refreshed from AD)
+//   POST /api/computers/:id/disable        set ACCOUNTDISABLE
+//   POST /api/computers/:id/enable         clear ACCOUNTDISABLE
+//   POST /api/computers/:id/reset-account  ADUC's Reset Account
+//   POST /api/computers/:id/move           modifyDN to another OU
 //
-// Both bind as the service account: cache search is purely DB; detail does a
-// single live LDAP read so the operator sees the latest dnsHostName / OS /
-// last logon between syncs.
+// Reads bind as the service account: cache search is purely DB; detail does
+// a single live LDAP read so the operator sees the latest dnsHostName / OS /
+// last logon between syncs. Writes bind as the operator.
 
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   computerDetailSchema,
   computerSearchQuerySchema,
   computerSearchResponseSchema,
+  moveRequestSchema,
   type ComputerDetail,
   type ComputerSearchResponse,
 } from '@openaduc/shared';
-import { NotFound } from '../plugins/errorHandler.js';
-import { auditContextFromRequest } from '../services/auditContext.js';
+import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import type {
+  DirectoryComputer,
+  DirectoryObjectIdentifier,
+  DirectoryProvider,
+  MutationResult,
+  WriteContext,
+} from '../providers/types.js';
+import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { upsertComputer } from '../services/computerCache.js';
+import { findCachedOu } from '../services/ouCache.js';
 import { rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { directoryRefusal } from './directoryRefusal.js';
+import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -247,4 +263,134 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       return { computer: computerDetailSchema.parse(detail) };
     },
   });
+
+  // ---- POST /api/computers/:id/disable + /enable -----------------------
+  app.post('/api/computers/:id/disable', {
+    config: {
+      policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, {
+        action: 'computer.disable',
+        verb: 'disable',
+        write: (provider, id, c) => provider.disableComputer(id, c),
+      }),
+  });
+
+  app.post('/api/computers/:id/enable', {
+    config: {
+      policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, {
+        action: 'computer.enable',
+        verb: 'enable',
+        write: (provider, id, c) => provider.enableComputer(id, c),
+      }),
+  });
+
+  // ---- POST /api/computers/:id/reset-account ---------------------------
+  // The computer's secure channel breaks until it rejoins the domain, which
+  // it can then do under the same name.
+  app.post('/api/computers/:id/reset-account', {
+    config: {
+      policy: { capability: 'write:computer.resetAccount', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, {
+        action: 'computer.reset',
+        verb: 'reset the account',
+        forbidden: 'directory refused the reset — you may lack the Reset Password right',
+        write: (provider, id, c) => provider.resetComputerAccount(id, c),
+      }),
+  });
+
+  // ---- POST /api/computers/:id/move ------------------------------------
+  // Body: { targetOuDn }, an OU the cache knows.
+  app.post('/api/computers/:id/move', {
+    config: { policy: { capability: 'write:computer.move', stepUp: true, directory: 'caller' } },
+    handler: async (req) => {
+      const body = moveRequestSchema.parse(req.body);
+      const provider = await app.services.providers.buildForRequest(req);
+      const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
+      if (!targetOu) throw app.httpErrors.badRequest('target OU not found in directory cache');
+      return writeComputer(app, req, {
+        action: 'computer.move',
+        verb: 'move',
+        metadata: { targetOuDn: targetOu.distinguished_name, targetOuName: targetOu.name },
+        write: (p, id, c) => p.moveComputer(id, targetOu.distinguished_name, c),
+      });
+    },
+  });
+}
+
+/** Read a computer live and put it in the cache, so lists show it as it is now. */
+async function refreshComputer(
+  app: FastifyInstance,
+  provider: DirectoryProvider,
+  id: string,
+): Promise<DirectoryComputer | null> {
+  const live = await provider.getComputer({ kind: 'objectGuid', value: id });
+  if (live) await upsertComputer(app.db, provider.id, live);
+  return live;
+}
+
+/** One audited write to the computer `:id`, as the operator, with the cache updated after. */
+async function writeComputer(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  spec: {
+    action: string;
+    /** What was refused, as in "cannot disable". */
+    verb: string;
+    forbidden?: string;
+    metadata?: Record<string, unknown>;
+    write: (
+      provider: DirectoryProvider,
+      id: DirectoryObjectIdentifier,
+      writeCtx: WriteContext,
+    ) => Promise<MutationResult>;
+  },
+): Promise<{ ok: true; before: unknown; after: unknown }> {
+  const { id } = idParamSchema.parse(req.params);
+  const actor = req.actor!;
+  if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+  const provider = await app.services.providers.buildForRequest(req);
+
+  const before = await refreshComputer(app, provider, id);
+  if (!before) throw NotFound('computer not found');
+
+  const result = await withAudit(
+    app.services.audit,
+    {
+      ...auditContextFromRequest(req),
+      action: spec.action,
+      actorAuthMethod: 'ad-password',
+      providerId: provider.id,
+      targetType: 'computer',
+      targetId: before.objectGuid,
+      targetDn: before.distinguishedName,
+      ...(spec.metadata ? { metadata: spec.metadata } : {}),
+    },
+    async () => {
+      const r = await spec.write(provider, { kind: 'objectGuid', value: id }, ctx(actor, req));
+      return {
+        ok: r.ok,
+        before: r.before ?? null,
+        after: r.after ?? null,
+        errorCode: r.reason ?? null,
+        errorMessage: r.errorMessage ?? null,
+      };
+    },
+  );
+  if (!result.ok) {
+    throw directoryRefusal(app, result, {
+      verb: spec.verb,
+      notFound: 'computer not found',
+      ...(spec.forbidden ? { forbidden: spec.forbidden } : {}),
+    });
+  }
+
+  await refreshComputer(app, provider, id);
+  return { ok: true, before: result.before, after: result.after };
 }

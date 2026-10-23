@@ -134,7 +134,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 | **Dashboard**       | Sync status, recent activity, locked-account counts                                                                                                        |
 | **Users**           | Search, view, edit attributes, rename (logon names and email included), reset passwords, unlock, enable/disable, move OU, delete disabled accounts in bulk |
 | **Groups**          | Search, view members and memberOf, add/remove members                                                                                                      |
-| **Computers**       | Search, view, disable, locate in OU                                                                                                                        |
+| **Computers**       | Search, view, disable/enable, reset account, move OU                                                                                                       |
 | **OUs**             | Browse the directory tree                                                                                                                                  |
 | **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                 |
 | **Password policy** | View domain default and fine-grained policies                                                                                                              |

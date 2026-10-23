@@ -54,6 +54,8 @@ Three writes carry extra guard rails because they're hard to undo:
 
 Creating a group (`write:group.create`, admin and operator) checks its name among the OU's children and its pre-Windows 2000 name across the domain, both before the operator submits and again on the operator's own bind before writing.
 
+Computer accounts can be disabled and enabled (`write:computer.enableDisable`), moved (`write:computer.move`) and reset (`write:computer.resetAccount`), all three admin and operator. Reset works as ADUC's Reset Account does: the password becomes the lowercase computer name without the `$`, cut to 14 characters, which is what a computer rejoining under the same name tries. The domain password policy doesn't apply to machine accounts, so the short password is accepted; the operator needs the Reset Password right on the computer. Until it rejoins, the computer can't authenticate to the domain, so the UI asks first.
+
 A failed capability check returns 403 and writes an `authz.deny` row to the audit log with the required capability, the actor, and the request correlation id.
 
 ## Step-up authentication

@@ -3,11 +3,11 @@ import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
   csvRow,
+  moveRequestSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
   userDeletePreflightRequestSchema,
   userDeleteRequestSchema,
-  userMoveRequestSchema,
   userRenameRequestSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
@@ -956,7 +956,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     config: { policy: { capability: 'write:user.move', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
-      const body = userMoveRequestSchema.parse(req.body);
+      const body = moveRequestSchema.parse(req.body);
       const actor = req.actor!;
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
