@@ -239,7 +239,7 @@ function userItems(r: Row): CtxItem[] {
   if (can('write:user.move')) {
     items.push({
       label: 'Move…',
-      onSelect: () => store.openDialog({ kind: 'move', id: r.id, label: r.name }),
+      onSelect: () => store.openDialog({ kind: 'move', account: 'user', id: r.id, label: r.name }),
     });
   }
   const canDelete = can('write:user.delete');

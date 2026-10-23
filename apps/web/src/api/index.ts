@@ -572,6 +572,30 @@ export const api = {
     get(id: string): Promise<{ computer: ComputerDetail }> {
       return apiFetch(`/computers/${encodeURIComponent(id)}`);
     },
+    disable(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/disable`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    enable(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/enable`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    resetAccount(id: string): Promise<{ ok: boolean }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/reset-account`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    move(id: string, body: MoveRequest): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/move`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
   },
   deletedComputers: {
     search(

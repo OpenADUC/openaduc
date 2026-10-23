@@ -43,7 +43,7 @@ import type {
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
-import { useUserMove } from '../design/composables/useUserMove.js';
+import { useAccountMove } from '../design/composables/useAccountMove.js';
 import {
   membershipChangeText,
   membershipDoneText,
@@ -559,11 +559,11 @@ const {
   ouName,
   retry: retryMove,
   dismiss: dismissMoveFailure,
-} = useUserMove({
+} = useAccountMove({
   onMoved: async (u, to, offer) => {
     toast.add(
       undoable(
-        { severity: 'success', summary: `Moved ${nameOf(u)} to ${ouName(to)}`, life: 4000 },
+        { severity: 'success', summary: `Moved ${u.name} to ${ouName(to)}`, life: 4000 },
         offer,
       ),
     );
@@ -587,7 +587,7 @@ function openMoveDialog(): void {
 }
 
 const { inDialog: moveDialogFailure, onPage: movePageFailure } = placeFailure(moveFailure, {
-  belongsHere: (f) => f.op.user.id === props.id,
+  belongsHere: (f) => f.op.account.id === props.id,
   dialog: { open: () => moveDialogOpen.value, made: (f) => !f.undo },
 });
 
@@ -617,7 +617,7 @@ const actionFailure = computed<ObjectActionFailure | null>(() => {
   const move = movePageFailure.value;
   if (move) {
     return {
-      summary: `Couldn’t move ${nameOf(move.op.user)} to ${ouName(move.op.destinationDn)}`,
+      summary: `Couldn’t move ${move.op.account.name} to ${ouName(move.op.destinationDn)}`,
       message: move.message,
       retry: retryMove,
       dismiss: dismissMoveFailure,

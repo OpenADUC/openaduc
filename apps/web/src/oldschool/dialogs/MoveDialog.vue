@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1
-     Classic "Move…" dialog for a user: pick a destination OU from the
-     tree and OK. -->
+     Classic "Move…" dialog for a user or computer: pick a destination OU
+     from the tree and OK. -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
@@ -8,29 +8,33 @@ import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
-import { useUserMove } from '../../design/composables/useUserMove.js';
+import { useAccountMove } from '../../design/composables/useAccountMove.js';
+import type { AccountKind } from '../../design/composables/useAccountActions.js';
 import type { DirectoryOu } from '@openaduc/shared';
 
-const props = defineProps<{ windowId: number; id: string; label: string }>();
+const props = defineProps<{ windowId: number; account: AccountKind; id: string; label: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const store = useOldSchool();
 const toast = useToast();
 // Runs for an Undo too, after this dialog has closed.
-const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useUserMove({
-  onMoved: (_user, to, offer) => {
-    toast.add(
-      undoable(
-        { severity: 'success', summary: `Moved ${props.label} to ${ouName(to)}.`, life: 3000 },
-        offer,
-      ),
-    );
-    store.bumpData();
-    emit('close');
+const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useAccountMove(
+  {
+    kind: props.account,
+    onMoved: (_user, to, offer) => {
+      toast.add(
+        undoable(
+          { severity: 'success', summary: `Moved ${props.label} to ${ouName(to)}.`, life: 3000 },
+          offer,
+        ),
+      );
+      store.bumpData();
+      emit('close');
+    },
+    onFailed: ({ message }) =>
+      store.reportError(`Windows cannot move object ${props.label} because:\n${message}`),
   },
-  onFailed: ({ message }) =>
-    store.reportError(`Windows cannot move object ${props.label} because:\n${message}`),
-});
+);
 
 onMounted(() => load(props.id));
 
