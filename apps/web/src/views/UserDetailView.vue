@@ -54,6 +54,7 @@ import {
   type MembershipFailure,
 } from '../design/composables/useGroupMembership.js';
 import { placeFailure } from '../design/lib/failurePlacement.js';
+import { ouTreeNodes } from '../design/lib/ouTree.js';
 import type { UndoOffer } from '../design/lib/undoableWrite.js';
 import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
@@ -577,35 +578,7 @@ const moveSelection = computed<Record<string, boolean>>({
   set: (keys) => (moveDestination.value = Object.keys(keys).find((k) => keys[k]) ?? null),
 });
 
-// OUs whose parent isn't in the list (the domain root, a non-OU container)
-// become roots of the tree.
-const moveOuTree = computed<TreeNode[]>(() => {
-  const all = moveOus.value;
-  const byDn = new Map<string, TreeNode & { children: TreeNode[] }>();
-  for (const ou of all) {
-    byDn.set(ou.distinguishedName.toLowerCase(), {
-      key: ou.distinguishedName,
-      label: ou.name,
-      data: { dn: ou.distinguishedName, stale: ou.stale },
-      icon: 'pi pi-folder',
-      children: [],
-    });
-  }
-  const roots: TreeNode[] = [];
-  for (const ou of all) {
-    const node = byDn.get(ou.distinguishedName.toLowerCase())!;
-    const parentKey = ou.parentDn?.toLowerCase();
-    const parent = parentKey ? byDn.get(parentKey) : undefined;
-    if (parent) parent.children!.push(node);
-    else roots.push(node);
-  }
-  const sortRec = (nodes: TreeNode[]): void => {
-    nodes.sort((a, b) => (a.label ?? '').localeCompare(b.label ?? ''));
-    for (const n of nodes) if (n.children) sortRec(n.children);
-  };
-  sortRec(roots);
-  return roots;
-});
+const moveOuTree = computed<TreeNode[]>(() => ouTreeNodes(moveOus.value));
 
 function openMoveDialog(): void {
   if (!user.value) return;

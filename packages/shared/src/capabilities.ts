@@ -17,6 +17,8 @@ export const CAPABILITIES = [
   'write:user.delete',
   'write:user.restore',
   'write:group.membership',
+  'write:group.create',
+  'write:group.delete',
   'write:ou.create',
   'write:ou.update',
   'write:ou.delete',
@@ -44,6 +46,7 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     'write:user.move',
     'write:user.rename',
     'write:group.membership',
+    'write:group.create',
   ],
   auditor: ['read:user', 'read:group', 'read:computer', 'view:audit'],
 };

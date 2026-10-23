@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Entry } from 'ldapts';
 import { describe, expect, it } from 'vitest';
-import { normalizeComputer, normalizeUser } from './normalize.js';
+import { groupTypeValue, normalizeComputer, normalizeGroup, normalizeUser } from './normalize.js';
 
 const base = (dn: string): Entry =>
   ({
@@ -43,5 +43,28 @@ describe('raw attributes never carry secrets', () => {
       'ms-mcs-admpwd',
     );
     expect(Object.keys(user.rawAttributes)).not.toContain('msDS-ManagedPassword');
+  });
+});
+
+describe('groupTypeValue', () => {
+  it('sets the scope bit, and the security bit as AD’s signed 32-bit value', () => {
+    expect(groupTypeValue('global', 'security')).toBe(-2147483646);
+    expect(groupTypeValue('domain-local', 'security')).toBe(-2147483644);
+    expect(groupTypeValue('universal', 'security')).toBe(-2147483640);
+    expect(groupTypeValue('global', 'distribution')).toBe(2);
+    expect(groupTypeValue('domain-local', 'distribution')).toBe(4);
+    expect(groupTypeValue('universal', 'distribution')).toBe(8);
+  });
+
+  it('reads back as the scope and type it was built from', () => {
+    for (const scope of ['domain-local', 'global', 'universal'] as const) {
+      for (const type of ['security', 'distribution'] as const) {
+        const group = normalizeGroup({
+          ...base('CN=G,DC=corp,DC=example'),
+          groupType: String(groupTypeValue(scope, type)),
+        } as unknown as Entry);
+        expect([group.groupScope, group.groupType]).toEqual([scope, type]);
+      }
+    }
   });
 });

@@ -38,10 +38,21 @@ Each role is granted to the **direct** members of one AD group; nested membershi
 
 The capability set is intentionally fine-grained (`read:user`, `write:user.resetPassword`, `write:user.unlock`, `write:user.attributes`, `write:group.membership`, `configure:directory`, `view:audit`, `view:raw_attributes`, etc.) so that giving someone "the ability to unlock accounts" doesn't also give them "the ability to reset passwords." A password reset can also clear the account's lockout in the same directory change; asking it to needs `write:user.unlock` as well, checked and audited like the route's own capability.
 
-Two user writes carry extra guard rails because they're hard to undo:
+Three writes carry extra guard rails because they're hard to undo:
 
 - **Delete** (`write:user.delete`, admin role only) works on disabled accounts only, and never on accounts AD marks `isCriticalSystemObject` or creates for itself (RID below 1000: Guest, krbtgt, DefaultAccount, …). The API re-checks both against the live entry immediately before deleting, and each request must repeat the account's sAMAccountName, so a stale list or a wrong id can't delete the wrong person. The audit row keeps the account's attributes and group memberships, which is the only record left on domains without the AD Recycle Bin.
 - **Rename** (`write:user.rename`, admin and operator) changes how a person signs in: cn, sAMAccountName, userPrincipalName and the primary SMTP address. New values are checked for collisions across the domain before anything is written, and if the attribute write fails after the cn has changed, the cn is renamed back.
+- **Group delete** (`write:group.delete`, admin role only; map another group to the admin role, or change the role bundles, to grant it more widely) refuses:
+  - critical system objects (`isCriticalSystemObject`);
+  - built-in groups: in `CN=Builtin`, flagged builtin in `groupType`, or a well-known RID below 1000;
+  - groups AdminSDHolder protects (`adminCount=1`);
+  - groups mapped to an OpenADUC role, which would lock that role out;
+  - groups directly in a protected group (Administrators, Account/Server/Print/Backup Operators, Replicator, Domain Admins, Domain Controllers, Schema Admins, Enterprise Admins, Read-only Domain Controllers, Key Admins, Enterprise Key Admins, recognized by well-known SID, or any `adminCount=1` group), since AdminSDHolder may not have flagged them yet. DnsAdmins and DnsUpdateProxy have no well-known SID, so only their `adminCount` protects them;
+  - groups that are some account's primary group (`primaryGroupID`), which AD refuses anyway.
+
+  The API checks these against the live entry, its parent groups and AD's primary-group count, again on the operator's own bind immediately before deleting, and audits a refusal as a failed `group.delete` with the reason. Each request must repeat the group's pre-Windows 2000 name. The audit row keeps the group's members and parent groups, which a tombstone doesn't.
+
+Creating a group (`write:group.create`, admin and operator) checks its name among the OU's children and its pre-Windows 2000 name across the domain, both before the operator submits and again on the operator's own bind before writing.
 
 A failed capability check returns 403 and writes an `authz.deny` row to the audit log with the required capability, the actor, and the request correlation id.
 

@@ -9,6 +9,7 @@ import {
   type SearchResults,
 } from '../composables/useDirectorySearch.js';
 import Avatar from '../primitives/Avatar.vue';
+import { dnPath, rdns } from '../lib/dn.js';
 
 interface ResultRow {
   kind: SearchKind;
@@ -30,33 +31,10 @@ const inputRef = ref<HTMLInputElement | null>(null);
 const resultsRef = ref<HTMLElement | null>(null);
 const highlight = ref(0);
 
-// The RDNs of a DN, unescaped: "OU=Sales\, East,DC=corp" → ["OU=Sales, East", "DC=corp"].
-function rdns(dn: string): string[] {
-  const out: string[] = [];
-  let cur = '';
-  for (let i = 0; i < dn.length; i++) {
-    const ch = dn[i]!;
-    if (ch === '\\' && i + 1 < dn.length) cur += dn[++i];
-    else if (ch === ',') {
-      out.push(cur);
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur);
-  return out;
-}
-
 // Where an OU sits, for its result row: OU=Sales,OU=Corp,DC=corp,DC=example
 // reads "corp.example / Corp".
 function ouPath(ou: DirectoryOu): string {
-  const parents = rdns(ou.distinguishedName).slice(1);
-  const value = (rdn: string) => rdn.slice(rdn.indexOf('=') + 1);
-  const ous = parents.filter((r) => /^OU=/i.test(r)).map(value);
-  const domain = parents
-    .filter((r) => /^DC=/i.test(r))
-    .map(value)
-    .join('.');
-  return [domain, ...ous.reverse()].filter(Boolean).join(' / ');
+  return dnPath(rdns(ou.distinguishedName).slice(1), ' / ');
 }
 
 // Display order of the result groups; arrow keys walk them in this order.

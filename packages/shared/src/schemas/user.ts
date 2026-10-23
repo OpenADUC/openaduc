@@ -359,20 +359,27 @@ export type UserUpdateRequest = z.infer<typeof userUpdateRequestSchema>;
 // signs in and where mail is delivered, and because cn needs a modifyDN
 // rather than a modify.
 
-// AD's rules for the pre-Windows 2000 logon name: at most 20 characters,
-// none of " / \ [ ] : ; | = , + * ? < > @, not only dots and spaces, and no
-// trailing dot.
+// AD's rules for a pre-Windows 2000 name: none of
+// " / \ [ ] : ; | = , + * ? < > @, not only dots and spaces, and no
+// trailing dot. A user's logon name is at most 20 characters; a group's
+// may be longer.
 const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
-export const samAccountNameSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(20)
-  .refine((v) => !SAM_FORBIDDEN.test(v), {
-    message: 'cannot contain " / \\ [ ] : ; | = , + * ? < > @',
-  })
-  .refine((v) => !/^[. ]+$/.test(v), { message: 'cannot be only dots and spaces' })
-  .refine((v) => !v.endsWith('.'), { message: 'cannot end with a dot' });
+// eslint-disable-next-line no-control-regex -- matching them is the point
+export const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+export function samAccountNameSchemaOf(maxLength: number) {
+  return z
+    .string()
+    .trim()
+    .min(1)
+    .max(maxLength)
+    .refine((v) => !SAM_FORBIDDEN.test(v), {
+      message: 'cannot contain " / \\ [ ] : ; | = , + * ? < > @',
+    })
+    .refine((v) => !CONTROL_CHARS.test(v), { message: 'cannot contain control characters' })
+    .refine((v) => !/^[. ]+$/.test(v), { message: 'cannot be only dots and spaces' })
+    .refine((v) => !v.endsWith('.'), { message: 'cannot end with a dot' });
+}
+export const samAccountNameSchema = samAccountNameSchemaOf(20);
 
 export const userPrincipalNameSchema = z
   .string()

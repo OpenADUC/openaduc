@@ -19,6 +19,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
+import DeleteGroupDialog from '../design/feedback/DeleteGroupDialog.vue';
 import { undoable } from '../design/feedback/undoToast.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
@@ -196,7 +197,34 @@ const actions = computed<ObjectAction[]>(() => [
     disabled: pending.value !== null,
     run: openAdd,
   },
+  {
+    label: 'Delete…',
+    icon: 'pi-trash',
+    capability: 'write:group.delete',
+    danger: true,
+    disabled: pending.value !== null,
+    run: () => {
+      deleteOpen.value = true;
+    },
+  },
 ]);
+
+// ---- Delete ------------------------------------------------------------------
+
+const deleteOpen = ref(false);
+
+async function onDeleted(): Promise<void> {
+  const name = group.value?.name ?? group.value?.samAccountName ?? 'The group';
+  deleteOpen.value = false;
+  // The group list shows the toast, so it waits until the list is there.
+  await router.push({ name: 'group-search' });
+  toast.add({
+    severity: 'success',
+    summary: 'Group deleted',
+    detail: `${name} was deleted.`,
+    life: 5000,
+  });
+}
 
 const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
 </script>
@@ -392,6 +420,13 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
         </Card>
       </template>
     </ObjectPageLayout>
+
+    <DeleteGroupDialog
+      v-if="deleteOpen"
+      v-model:visible="deleteOpen"
+      :id="props.id"
+      @deleted="onDeleted"
+    />
 
     <!-- Add-member dialog -->
     <Dialog

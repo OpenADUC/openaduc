@@ -41,3 +41,9 @@ export function rawArrayValues(v: unknown): string[] {
   }
   return out;
 }
+
+/** An LDAP boolean (`TRUE`/`FALSE`, last value wins) from a raw attribute. */
+export function rawFlag(v: unknown): boolean {
+  const value = Array.isArray(v) ? v[v.length - 1] : v;
+  return typeof value === 'string' ? value.toUpperCase() === 'TRUE' : value === true;
+}

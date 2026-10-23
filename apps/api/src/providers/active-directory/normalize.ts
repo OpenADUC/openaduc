@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Entry } from 'ldapts';
+import type { GroupScope, GroupType } from '@openaduc/shared';
 import type {
   DirectoryComputer,
   DirectoryDeletedComputer,
@@ -172,6 +173,9 @@ export const GROUP_ATTRS = [
   'mail',
   'groupType',
   'member',
+  'memberOf',
+  'isCriticalSystemObject',
+  'adminCount',
   'whenCreated',
   'whenChanged',
 ];
@@ -419,7 +423,7 @@ export function leafRdn(dn: string): string {
 }
 
 /** Return the value of the leftmost RDN ("OU=Sales,…" → "Sales"), or null. */
-function leafRdnValue(dn: string): string | null {
+export function leafRdnValue(dn: string): string | null {
   const { head } = splitDnHead(dn);
   const eq = head.indexOf('=');
   if (eq < 0) return null;
@@ -567,6 +571,21 @@ export function normalizeDeletedComputer(entry: Entry): DirectoryDeletedComputer
   };
 }
 
+// groupType bits. AD stores the attribute as a signed 32-bit integer, so
+// the security bit is negative.
+export const GROUP_TYPE = {
+  builtin: 0x1,
+  global: 0x2,
+  'domain-local': 0x4,
+  universal: 0x8,
+  security: 0x80000000 | 0,
+} as const;
+
+/** The groupType value AD expects for a new group of this scope and type. */
+export function groupTypeValue(scope: GroupScope, type: GroupType): number {
+  return GROUP_TYPE[scope] | (type === 'security' ? GROUP_TYPE.security : 0);
+}
+
 export function normalizeGroup(entry: Entry): DirectoryGroup {
   const guidBuf = asBuffer(entry.objectGUID);
   if (!guidBuf) {
@@ -584,14 +603,10 @@ export function normalizeGroup(entry: Entry): DirectoryGroup {
   if (groupTypeRaw !== null) {
     const gt = Number.parseInt(groupTypeRaw, 10);
     if (Number.isFinite(gt)) {
-      const SECURITY = 0x80000000 | 0;
-      const SCOPE_GLOBAL = 0x2;
-      const SCOPE_DOMAIN_LOCAL = 0x4;
-      const SCOPE_UNIVERSAL = 0x8;
-      groupType = (gt & SECURITY) !== 0 ? 'security' : 'distribution';
-      if ((gt & SCOPE_GLOBAL) !== 0) groupScope = 'global';
-      else if ((gt & SCOPE_DOMAIN_LOCAL) !== 0) groupScope = 'domain-local';
-      else if ((gt & SCOPE_UNIVERSAL) !== 0) groupScope = 'universal';
+      groupType = (gt & GROUP_TYPE.security) !== 0 ? 'security' : 'distribution';
+      if ((gt & GROUP_TYPE.global) !== 0) groupScope = 'global';
+      else if ((gt & GROUP_TYPE['domain-local']) !== 0) groupScope = 'domain-local';
+      else if ((gt & GROUP_TYPE.universal) !== 0) groupScope = 'universal';
     }
   }
 
@@ -619,6 +634,7 @@ export function normalizeGroup(entry: Entry): DirectoryGroup {
     groupType,
     groupScope,
     memberDns: asStringArray(entry.member),
+    memberOfDns: asStringArray(entry.memberOf),
     rawAttributes: raw,
   };
 }
@@ -765,4 +781,42 @@ export function parseGpLinkValue(
     });
   });
   return out;
+}
+
+/**
+ * Strict RFC 4514 §2.4 RDN value escaping. Used for tombstone
+ * reanimation, where AD's modify primitive validates the new DN
+ * strictly: comma/equals/etc. inside a CN must be escaped, but spaces
+ * in the middle of the value must NOT be escaped. The general-purpose
+ * `escapeRdnValue` above is over-aggressive for that case.
+ */
+export function escapeRdnValueRfc(value: string): string {
+  if (!value) return value;
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (
+      ch === ',' ||
+      ch === '+' ||
+      ch === '"' ||
+      ch === '\\' ||
+      ch === '<' ||
+      ch === '>' ||
+      ch === ';' ||
+      ch === '=' ||
+      ch === '\x00'
+    ) {
+      out += '\\' + ch;
+    } else {
+      out += ch;
+    }
+  }
+  if (out.startsWith('#') || out.startsWith(' ')) out = '\\' + out;
+  if (out.length > 1 && out.endsWith(' ')) out = out.slice(0, -1) + '\\ ';
+  return out;
+}
+
+/** The DN of a new child: `CN=<escaped value>,<parent>`. */
+export function childDn(attribute: string, value: string, parent: string): string {
+  return `${attribute}=${escapeRdnValueRfc(value)},${parent}`;
 }
