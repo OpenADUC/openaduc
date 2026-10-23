@@ -854,7 +854,7 @@ const actions = computed<ObjectAction[]>(() => {
           run: () => runOnUser('enable'),
         },
     {
-      label: 'Account expiry…',
+      label: expirySubmitting.value ? 'Saving expiry…' : 'Account expiry…',
       icon: 'pi-calendar',
       capability: 'write:user.enableDisable',
       disabled: busy,
@@ -1042,7 +1042,7 @@ watch(user, (u) => {
           :icon="`pi ${primaryFix.icon}`"
           :size="compact ? 'small' : undefined"
           :loading="primaryFixRunning"
-          :disabled="accountActionRunning !== null || expirySubmitting"
+          :disabled="accountActionRunning !== null || moveSubmitting || expirySubmitting"
           @click="runFix(primaryFix)"
         />
       </template>
