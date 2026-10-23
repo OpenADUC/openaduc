@@ -23,7 +23,9 @@
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .btn:hover {
@@ -135,6 +137,16 @@
   letter-spacing: -0.005em;
   margin: 0;
   color: var(--text);
+}
+
+/* A count beside a tab label or card title. */
+.ds-tab-count {
+  font-size: 11px;
+  margin-left: 6px;
+  color: var(--text-3);
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 3px;
 }
 
 .dc-card-sub {
@@ -466,7 +478,8 @@
 }
 
 @keyframes lc-pulse {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 0 0 currentColor;
     opacity: 1;
   }
@@ -662,53 +675,6 @@
   color: var(--red);
 }
 
-/* ---------- Hero (used on detail pages) ----------
- * The hero's gradient is intentionally directional and asymmetric: a
- * soft accent wash from top-left fades into the surface, with a faint
- * border-strong inner edge to anchor it on light backgrounds where the
- * 1px border alone reads as anemic. The combination gives the hero a
- * sense of identity without resorting to a saturated colored panel. */
-.detail-hero {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 18px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background:
-    radial-gradient(at 0% 0%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 55%),
-    linear-gradient(180deg, color-mix(in oklab, var(--accent) 5%, var(--surface)), var(--surface));
-  box-shadow: var(--shadow-sm);
-}
-
-.detail-hero-name {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--text);
-}
-
-.detail-hero-title {
-  color: var(--text-2);
-  font-size: 13px;
-  margin-top: 2px;
-}
-
-.detail-hero-dn {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin-top: 6px;
-  word-break: break-all;
-}
-
-.detail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-}
-
 /* ---------- Attribute grid ---------- */
 .attr-grid {
   display: grid;
@@ -759,7 +725,9 @@
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 /* Editable: dashed border + always-visible pencil at low opacity so users
@@ -1105,24 +1073,6 @@
 
 /* Tablet/mobile */
 @media (max-width: 767.98px) {
-  /* Detail hero stacks vertically. .detail-hero-top is the row
-     containing the avatar+meta column and the actions aside. */
-  .detail-hero-top {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 16px;
-  }
-
-  .detail-hero-aside {
-    width: 100%;
-  }
-
-  .hero-actions-stack {
-    flex-direction: row;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
   /* Tabs scroll horizontally rather than wrap, so labels stay readable */
   .ds-tabs {
     overflow-x: auto;
@@ -1158,17 +1108,6 @@
   .attr-grid,
   .attr-grid.cols-3 {
     grid-template-columns: 1fr !important;
-  }
-
-  /* Hero name + status badge wrap together; identifier line wraps freely */
-  .detail-hero-row {
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-
-  /* Action buttons in the hero go full-width for easy thumb targeting */
-  .hero-actions-stack .p-button {
-    width: 100%;
   }
 
   /* KPI cards stack 1-up */

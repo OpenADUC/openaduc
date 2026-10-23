@@ -196,17 +196,17 @@ const freshnessText = computed(() => {
 
     <nav
       :ref="setTabsNav"
-      class="ds-tabs ds-tabs-with-actions"
+      class="object-tabs"
       :class="{ compact: tabsCompact, 'hero-compact': heroCompact }"
     >
       <!-- Only the tabs are in the tablist; refresh and Actions sit beside it. -->
-      <div class="ds-tablist" role="tablist" :aria-label="`${kindLabel} sections`">
+      <div class="object-tablist" role="tablist" :aria-label="`${kindLabel} sections`">
         <button
           v-for="t in visibleTabs"
           :key="t.id"
           type="button"
           role="tab"
-          class="ds-tab"
+          class="object-tab"
           :class="{ active: activeTab === t.id, 'icon-only': t.iconOnly }"
           :aria-selected="activeTab === t.id"
           :title="tabsCompact || t.iconOnly ? t.label : undefined"
@@ -214,11 +214,11 @@ const freshnessText = computed(() => {
           @click="select(t.id)"
         >
           <i :class="['pi', t.icon]" aria-hidden="true" />
-          <span class="ds-tab-label">{{ t.label }}</span>
+          <span class="object-tab-label">{{ t.label }}</span>
           <span v-if="t.count !== undefined" class="ds-tab-count mono">{{ t.count }}</span>
         </button>
       </div>
-      <div class="ds-tabs-spacer" />
+      <div class="object-tabs-spacer" />
       <Button
         icon="pi pi-refresh"
         text
@@ -226,10 +226,10 @@ const freshnessText = computed(() => {
         size="small"
         :loading="refreshing"
         title="Refresh from directory"
-        class="ds-tabs-refresh"
+        class="object-tabs-refresh"
         @click="$emit('refresh')"
       />
-      <div v-if="menuItems.length > 0" class="ds-tabs-actions">
+      <div v-if="menuItems.length > 0" class="object-tabs-actions">
         <Button
           label="Actions"
           icon="pi pi-chevron-down"
@@ -259,6 +259,10 @@ const freshnessText = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* No scroll anchoring: as the header shrinks into its compact state the
+     browser would adjust scrollTop to keep content still, which fights
+     useStickyHeader's detection and flickers at the threshold. */
+  overflow-anchor: none;
 }
 
 /* Hero ------------------------------------------------------------------- */
@@ -266,6 +270,7 @@ const freshnessText = computed(() => {
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
+  box-shadow: var(--shadow-sm);
   background: linear-gradient(
     180deg,
     color-mix(in oklab, var(--accent) 5%, var(--surface)),
@@ -473,22 +478,25 @@ const freshnessText = computed(() => {
   }
 }
 
+/* Name and badges wrap together on phones. */
+@media (max-width: 639.98px) {
+  .detail-hero-row {
+    row-gap: 6px;
+  }
+}
+
 /* Tab bar ---------------------------------------------------------------- */
 
 /* The tablist wrapper doesn't take part in the tab bar's flex layout. */
-.ds-tablist {
+.object-tablist {
   display: contents;
 }
 
-.ds-tabs-with-actions {
-  align-items: center;
-}
-
-.ds-tabs-spacer {
+.object-tabs-spacer {
   flex: 1 1 auto;
 }
 
-.ds-tabs-actions {
+.object-tabs-actions {
   display: inline-flex;
   align-items: center;
   margin-left: 4px;
@@ -504,8 +512,9 @@ const freshnessText = computed(() => {
   color: var(--red);
 }
 
-.ds-tabs {
+.object-tabs {
   display: flex;
+  align-items: center;
   gap: 2px;
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -522,12 +531,12 @@ const freshnessText = computed(() => {
 /* The compact hero keeps its side borders; mirror them so hero and tab bar
    read as one bordered rectangle rather than the bar sticking out ~1px on
    each side. */
-.ds-tabs.hero-compact {
+.object-tabs.hero-compact {
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
 }
 
-.ds-tab {
+.object-tab {
   background: transparent;
   border: 0;
   display: inline-flex;
@@ -543,20 +552,20 @@ const freshnessText = computed(() => {
   font-family: var(--font-sans);
 }
 
-.ds-tab > .pi {
+.object-tab > .pi {
   font-size: 14px;
   line-height: 1;
 }
 
-.ds-tab:hover {
+.object-tab:hover {
   color: var(--text);
 }
 
-.ds-tab.active {
+.object-tab.active {
   color: var(--text);
 }
 
-.ds-tab.active::after {
+.object-tab.active::after {
   content: '';
   position: absolute;
   left: 8px;
@@ -567,57 +576,68 @@ const freshnessText = computed(() => {
   border-radius: 2px;
 }
 
-.ds-tab-count {
-  font-size: 11px;
-  margin-left: 6px;
-  color: var(--text-3);
-  background: var(--surface-3);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-
-.ds-tab.active .ds-tab-count {
+.object-tab.active .ds-tab-count {
   color: var(--text-2);
 }
 
 /* useCompactTabs flips .compact when the bar would overflow: labels hide
    and each tab shrinks to its icon (and count); the title attribute keeps
    the label on hover. */
-.ds-tabs.compact .ds-tab {
+.object-tabs.compact .object-tab {
   padding: 9px 10px;
 }
 
-.ds-tabs.compact .ds-tab-label {
+.object-tabs.compact .object-tab-label {
   display: none;
 }
 
-.ds-tabs.compact .ds-tab-count {
+.object-tabs.compact .ds-tab-count {
   margin-left: 4px;
 }
 
-.ds-tab.icon-only {
+.object-tab.icon-only {
   padding: 9px 10px;
 }
-.ds-tab.icon-only .ds-tab-label {
+.object-tab.icon-only .object-tab-label {
   display: none;
 }
 
 /* useCompactTabs applies .measuring for a single frame to read the bar's
    natural width with labels shown and nothing shrunk. Icon-only tabs stay
    icon-only: the question is whether the labelled tabs would fit. */
-.ds-tabs.measuring .ds-tabs-spacer {
+.object-tabs.measuring .object-tabs-spacer {
   display: none;
 }
-.ds-tabs.measuring .ds-tab,
-.ds-tabs.measuring .ds-tabs-refresh,
-.ds-tabs.measuring .ds-tabs-actions {
+.object-tabs.measuring .object-tab,
+.object-tabs.measuring .object-tabs-refresh,
+.object-tabs.measuring .object-tabs-actions {
   flex: none;
 }
-.ds-tabs.measuring .ds-tab-label {
+.object-tabs.measuring .object-tab-label {
   display: inline;
 }
-.ds-tabs.measuring .ds-tab.icon-only .ds-tab-label {
+.object-tabs.measuring .object-tab.icon-only .object-tab-label {
   display: none;
+}
+
+/* Tabs scroll sideways rather than wrap, so labels stay readable. */
+@media (max-width: 767.98px) {
+  .object-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+  }
+
+  .object-tabs > * {
+    scroll-snap-align: start;
+  }
+
+  .object-tabs-refresh,
+  .object-tabs-actions {
+    flex: 0 0 auto;
+  }
 }
 
 .freshness-foot {

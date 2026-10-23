@@ -439,9 +439,6 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* Disable browser scroll anchoring inside the detail page — see the
-     User detail page for rationale. */
-  overflow-anchor: none;
 }
 
 .detail-grid {
@@ -475,16 +472,6 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-/* Counts beside card titles, styled like the tab bar's. */
-.ds-tab-count {
-  font-size: 11px;
-  margin-left: 6px;
-  color: var(--text-3);
-  background: var(--surface-3);
-  padding: 1px 5px;
-  border-radius: 3px;
 }
 
 .member-list {

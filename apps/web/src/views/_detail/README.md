@@ -20,6 +20,9 @@ Pages mount it once their record has loaded and pass:
 The default slot renders the body; it gets `tab` (the active tab) and
 `select(id)` to switch tabs from the body.
 
+The header and tab bar are styled only by the layout's own CSS; nothing in
+`theme.css` reaches them except the shared `.ds-tab-count` chip.
+
 `useStickyHeader` drives the compact-on-scroll header. The layout binds its
 `setHero` to the header `<section>` and toggles `is-compact` from its
 `compact` ref; CSS transitions do the rest: padding tightens, the avatar
@@ -34,7 +37,7 @@ mid-shrink-animation. The Group Policy page uses it on its own.
 `setNav` to the tab `<nav>` and toggles `compact` from its ref. A
 `ResizeObserver` on the nav compares `scrollWidth` to `clientWidth` (with
 hysteresis) and flips the ref when content would overflow. CSS hides
-`.ds-tab-label` while the class is set; each tab's `title` attribute
+`.object-tab-label` while the class is set; each tab's `title` attribute
 carries the full label so the native browser tooltip identifies icons.
 
 `useRouteTab` keeps the active tab in the `tab` query parameter, so reload,
