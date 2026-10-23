@@ -25,12 +25,22 @@ import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
+import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
+import { lastDayOf } from '../design/lib/accountExpiry.js';
+import SignInStatus from '../design/primitives/SignInStatus.vue';
+import {
+  lockoutEnd,
+  signInBlockers,
+  signInFix,
+  type SignInBlocker,
+  type SignInFix,
+} from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
-import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
+import { fmtAbsolute, userStatus, type UserStatusKind } from '../design/lib/format.js';
 import type { UserDetail } from '@openaduc/shared';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type {
@@ -41,6 +51,7 @@ import type {
 } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useMoveDialog } from './_detail/useMoveDialog';
+import { useExpiryDialog } from './_detail/useExpiryDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
 import {
@@ -551,12 +562,83 @@ const {
   submitting: moveSubmitting,
 } = useMoveDialog({ kind: 'user', id: () => props.id, onMoved: () => load() });
 
+// ---- Account expiry ------------------------------------------------------
+
+const {
+  expiry,
+  open: expiryDialogOpen,
+  show: showExpiryDialog,
+  close: closeExpiryDialog,
+  dialogFailure: expiryDialogFailure,
+  pageFailure: expiryPageFailure,
+  submitting: expirySubmitting,
+} = useExpiryDialog({ id: () => props.id, onSet: () => load() });
+
+function openExpiryDialog(): void {
+  const u = user.value;
+  if (u) showExpiryDialog({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
+}
+
+// ---- Sign-in status --------------------------------------------------------
+
+const blockers = computed(() => (user.value ? signInBlockers(user.value) : []));
+
+// The fix for the most severe condition: fixing a lesser one wouldn't let
+// the user sign in, so an operator who can't make it gets no button.
+const primaryFix = computed<SignInFix | null>(() => {
+  const top = blockers.value[0];
+  if (!top) return null;
+  const fix = signInFix(top);
+  return auth.hasCapability(fix.capability) ? fix : null;
+});
+
+const primaryFixRunning = computed(() => {
+  const fix = primaryFix.value?.fix;
+  if (fix === 'enable' || fix === 'unlock') return accountActionRunning.value === fix;
+  return fix === 'extend-expiry' && expirySubmitting.value;
+});
+
+function runFix(fix: SignInFix): void {
+  switch (fix.fix) {
+    case 'enable':
+    case 'unlock':
+      runOnUser(fix.fix);
+      break;
+    case 'reset-password':
+      openResetDialog();
+      break;
+    case 'extend-expiry':
+      openExpiryDialog();
+      break;
+  }
+}
+
+const BADGE_KIND: Record<SignInBlocker['kind'], UserStatusKind> = {
+  disabled: 'disabled',
+  locked: 'locked',
+  'password-expired': 'pwd-expired',
+  'account-expired': 'expired',
+  'must-change-password': 'pwd-must-change',
+};
+
+// The badge names the same condition the status line leads with.
+const badgeKind = computed<UserStatusKind>(() => {
+  const top = blockers.value[0];
+  if (top) return BADGE_KIND[top.kind];
+  return user.value ? userStatus(user.value) : 'active';
+});
+
+const lockoutEndText = computed(() => {
+  const locked = blockers.value.find((b) => b.kind === 'locked');
+  return locked ? lockoutEnd(locked) : null;
+});
+
 const { onPage: accountPageFailure } = placeFailure(accountFailure, {
   belongsHere: (f) => f.op.account.id === props.id,
 });
 
-// A failed account action, or a failed move the dialog isn't showing (an
-// Undo), shows under the Actions menu.
+// A failed account action, or a failed move or expiry change its dialog
+// isn't showing (an Undo), shows under the Actions menu.
 const actionFailure = computed<ObjectActionFailure | null>(() => {
   const account = accountPageFailure.value;
   if (account) {
@@ -568,7 +650,7 @@ const actionFailure = computed<ObjectActionFailure | null>(() => {
       dismiss: dismissAccountFailure,
     };
   }
-  return movePageFailure.value;
+  return movePageFailure.value ?? expiryPageFailure.value;
 });
 
 // ---- Group membership: remove + add --------------------------------------
@@ -658,6 +740,7 @@ watch(
   () => {
     dismissAccountFailure();
     mover.dismiss();
+    expiry.dismiss();
     dismissRemoveFailure();
     dismissAddFailure();
   },
@@ -757,7 +840,8 @@ const actions = computed<ObjectAction[]>(() => {
   if (!u) return [];
   // The only disable case is "an action of this kind is already running" so
   // the operator can't double-fire.
-  const busy = accountActionRunning.value !== null || moveSubmitting.value;
+  const busy =
+    accountActionRunning.value !== null || moveSubmitting.value || expirySubmitting.value;
   return [
     {
       label: accountActionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
@@ -790,6 +874,13 @@ const actions = computed<ObjectAction[]>(() => {
           disabled: busy,
           run: () => runOnUser('enable'),
         },
+    {
+      label: 'Account expiry…',
+      icon: 'pi-calendar',
+      capability: 'write:user.enableDisable',
+      disabled: busy,
+      run: openExpiryDialog,
+    },
     {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
@@ -934,7 +1025,7 @@ watch(user, (u) => {
       :tabs="tabs"
       fallback-tab="overview"
       :actions="actions"
-      :actions-busy="accountActionRunning !== null || moveSubmitting"
+      :actions-busy="accountActionRunning !== null || moveSubmitting || expirySubmitting"
       :action-failure="actionFailure"
       :refreshing="refreshing"
       :cached-at="user.freshness.cachedAt"
@@ -942,7 +1033,7 @@ watch(user, (u) => {
       @refresh="refreshFromAd"
     >
       <template #badges>
-        <StatusBadge :user="user" size="lg" />
+        <StatusBadge :kind="badgeKind" size="lg" />
         <span
           v-if="user.isPrivileged"
           class="badge badge-amber badge-lg"
@@ -960,6 +1051,21 @@ watch(user, (u) => {
         <span v-if="user.freshness.isStale" class="badge badge-amber badge-lg stale-flag">
           <span class="badge-dot" /> Cache stale
         </span>
+      </template>
+
+      <template #status>
+        <SignInStatus :blockers="blockers" :last-logon-at="user.lastLogonAt" />
+      </template>
+
+      <template v-if="primaryFix" #primary="{ compact }">
+        <Button
+          :label="primaryFix.label"
+          :icon="`pi ${primaryFix.icon}`"
+          :size="compact ? 'small' : undefined"
+          :loading="primaryFixRunning"
+          :disabled="accountActionRunning !== null || expirySubmitting"
+          @click="runFix(primaryFix)"
+        />
       </template>
 
       <template #default="{ tab: activeTab, select: selectTab }">
@@ -1015,7 +1121,7 @@ watch(user, (u) => {
           <Card title="Account">
             <dl class="kv-grid">
               <dt class="fld-label">Status</dt>
-              <dd><StatusBadge :user="user" /></dd>
+              <dd><StatusBadge :kind="badgeKind" /></dd>
               <dt class="fld-label">Last logon</dt>
               <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
               <template v-if="user.entra">
@@ -1492,24 +1598,16 @@ watch(user, (u) => {
           <Card title="Sign-in & Identity">
             <dl class="kv-grid">
               <dt class="fld-label">Status</dt>
-              <dd><StatusBadge :user="user" /></dd>
+              <dd><StatusBadge :kind="badgeKind" /></dd>
               <dt class="fld-label">Locked</dt>
               <dd>{{ user.locked ? 'Yes' : 'No' }}</dd>
               <template v-if="user.lockedAt">
                 <dt class="fld-label">Locked at</dt>
                 <dd class="mono">{{ fmtAbsolute(user.lockedAt) }}</dd>
               </template>
-              <template v-if="user.locked">
-                <dt class="fld-label">Auto-unlocks</dt>
-                <dd class="mono">
-                  <template v-if="user.autoUnlockAt">
-                    {{ fmtAbsolute(user.autoUnlockAt) }}
-                    <span class="text-muted"> · {{ fmtRelative(user.autoUnlockAt) }}</span>
-                  </template>
-                  <template v-else>
-                    <span class="text-muted">manual unlock required</span>
-                  </template>
-                </dd>
+              <template v-if="lockoutEndText">
+                <dt class="fld-label">Lockout ends</dt>
+                <dd>{{ lockoutEndText }}</dd>
               </template>
               <dt class="fld-label">Last logon</dt>
               <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
@@ -1559,7 +1657,11 @@ watch(user, (u) => {
             <dl class="kv-grid">
               <dt class="fld-label">Account expires</dt>
               <dd class="mono">
-                {{ user.accountExpiresAt ? fmtAbsolute(user.accountExpiresAt) : 'never' }}
+                {{
+                  user.accountExpiresAt
+                    ? `End of ${lastDayOf(user.accountExpiresAt).toLocaleDateString()}`
+                    : 'never'
+                }}
               </dd>
               <dt class="fld-label">Last modified</dt>
               <dd class="mono">{{ fmtAbsolute(user.modifiedAtSource) }}</dd>
@@ -1751,6 +1853,12 @@ watch(user, (u) => {
       :name="user ? nameOf(user) : ''"
       :failure="moveDialogFailure"
       @close="closeMoveDialog"
+    />
+    <AccountExpiryDialog
+      :visible="expiryDialogOpen"
+      :expiry="expiry"
+      :failure="expiryDialogFailure"
+      @close="closeExpiryDialog"
     />
 
     <!-- Add group dialog: search by name; groups the user is directly in are
