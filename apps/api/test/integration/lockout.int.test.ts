@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   configureDirectory,
+  DC,
   readDirectoryUser,
   reseedDirectory,
   sambaTool,
@@ -22,6 +23,8 @@ describe('locked status', () => {
         .where('sam_account_name', '=', 'dave.diaz')
         .executeTakeFirstOrThrow()
     ).locked;
+  const daveId = async () =>
+    (await admin.get('/api/users?q=dave.diaz')).json<{ rows: { id: string }[] }>().rows[0]!.id;
   const run = async (task: 'users.locked' | 'users.full') =>
     expect((await api.app.services.sync.runOnce(api.directoryId!, task)).ok).toBe(true);
 
@@ -41,9 +44,7 @@ describe('locked status', () => {
   });
 
   it('says a lockout with no duration lasts until someone unlocks the account', async () => {
-    const id = (await admin.get('/api/users?q=dave.diaz')).json<{ rows: { id: string }[] }>()
-      .rows[0]!.id;
-    const res = await admin.get(`/api/users/${id}`);
+    const res = await admin.get(`/api/users/${await daveId()}`);
     expect(res.statusCode).toBe(200);
     const { user } = res.json<{ user: Record<string, unknown> }>();
     expect(user).toMatchObject({
@@ -64,6 +65,37 @@ describe('locked status', () => {
     expect(at('carol.chen')).toBeGreaterThanOrEqual(0);
     expect(at('carol.chen')).toBeLessThan(at('dave.diaz'));
     expect(at('dave.diaz')).toBeLessThan(at('erin.evans'));
+  });
+
+  it('takes the lockout end from a fine-grained password policy, or admits it can’t', async () => {
+    const PSO = 'oa-lockout-test';
+    const psoDn = `CN=${PSO},CN=Password Settings Container,CN=System,${DC.baseDn}`;
+    const daveLockout = async () =>
+      (await admin.get(`/api/users/${await daveId()}`)).json<{
+        user: { lockedAt: string; autoUnlockAt: string | null; lockedUntilUnlocked: boolean };
+      }>().user;
+    // The domain keeps lockouts until someone unlocks them; the PSO lasts 600 minutes.
+    sambaTool(
+      ...['domain', 'passwordsettings', 'pso', 'create', PSO, '1'],
+      ...['--account-lockout-duration=600', '--account-lockout-threshold=5'],
+      '--reset-account-lockout-after=600',
+    );
+    try {
+      sambaTool('domain', 'passwordsettings', 'pso', 'apply', PSO, 'dave.diaz');
+
+      // As in AD, only Domain Admins can read a PSO's settings by default.
+      expect(await daveLockout()).toMatchObject({ autoUnlockAt: null, lockedUntilUnlocked: false });
+
+      const svcSid = /objectSid: (\S+)/.exec(
+        sambaTool('user', 'show', DC.serviceAccount, '--attributes=objectSid'),
+      )![1];
+      sambaTool('dsacl', 'set', `--objectdn=${psoDn}`, `--sddl=(A;;RPLCLORC;;;${svcSid})`);
+      const readable = await daveLockout();
+      expect(readable.lockedUntilUnlocked).toBe(false);
+      expect(Date.parse(readable.autoUnlockAt!) - Date.parse(readable.lockedAt)).toBe(600 * 60_000);
+    } finally {
+      sambaTool('domain', 'passwordsettings', 'pso', 'delete', PSO);
+    }
   });
 
   it('clears once the lockout duration has passed, though lockoutTime is still set', async () => {

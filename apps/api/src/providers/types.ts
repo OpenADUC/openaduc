@@ -45,6 +45,12 @@ export interface DirectoryUser {
    * attribute yet — useful for "last locked at" display either way.
    */
   lockedAt: Date | null;
+  /**
+   * DN of the fine-grained password policy (PSO) that applies, from AD's
+   * constructed msDS-ResultantPSO; null when none does or it wasn't asked
+   * for or readable.
+   */
+  resultantPsoDn: string | null;
   // Reflects the DONT_EXPIRE_PASSWORD bit (0x10000) of userAccountControl.
   // True for service accounts and other accounts AD will never force a
   // password rotation on.
@@ -386,6 +392,8 @@ export interface DirectoryProvider {
    * changes); callers should not need to throttle.
    */
   getDomainPolicy(): Promise<DirectoryDomainPolicy>;
+  /** A PSO's lockout duration in ms (0 = until unlocked), or null if it can't be read. */
+  getPsoLockoutDuration(psoDn: string): Promise<number | null>;
 
   getUser(identifier: DirectoryObjectIdentifier): Promise<DirectoryUser | null>;
   searchUsers(query: DirectoryUserSearchQuery): Promise<DirectoryUser[]>;

@@ -81,11 +81,13 @@ export const userDetailSchema = userSummarySchema.extend({
   // here can co-exist with `locked=false` (we treat the successful bind as
   // the authoritative liveness signal).
   lockedAt: z.string().nullable(),
-  // Computed = lockedAt + domain `lockoutDuration`. Null when the account
-  // is not locked, when the domain keeps lockouts until someone unlocks the
-  // account (`lockedUntilUnlocked`), or when we couldn't read the policy.
+  // Computed = lockedAt + the lockout duration that applies: the user's
+  // fine-grained password policy (PSO) if one does, else the domain's. Null
+  // when the account is not locked, when that policy keeps lockouts until
+  // someone unlocks the account (`lockedUntilUnlocked`), or when it couldn't
+  // be read (a PSO usually can't be without Domain Admin rights).
   autoUnlockAt: z.string().nullable(),
-  // Locked, and the domain policy has no lockout duration (0, or AD's
+  // Locked, and the policy that applies has no lockout duration (0, or AD's
   // "never"), so the lockout lasts until someone unlocks the account.
   lockedUntilUnlocked: z.boolean(),
   // AD `badPwdCount`: failed sign-ins since the last good one. Each DC keeps
