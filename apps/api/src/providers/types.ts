@@ -440,6 +440,17 @@ export interface DirectoryProvider {
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult>;
+  // Nest a group in another (or take it out) through the parent's `member`.
+  addGroupToGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
+  removeGroupFromGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
   // Move a user to a new parent OU (LDAP modifyDN keeping the existing RDN).
   // Idempotent: if already under `targetOuDn`, returns ok with a no-op.
   moveUser(

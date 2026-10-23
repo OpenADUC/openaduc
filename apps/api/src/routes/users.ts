@@ -3,7 +3,6 @@ import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
   csvRow,
-  groupMembershipChangeSchema,
   resetPasswordRequestSchema,
   userDetailSchema,
   userDeletePreflightRequestSchema,
@@ -25,6 +24,7 @@ import { StepUpBindFailedError, type DirectoryProvider } from '../providers/type
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { changeMembership } from './groupMembership.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -932,16 +932,16 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- POST /api/users/:id/groups (add) + DELETE (remove) --------------
-  // Body: { password, groupId }. The server resolves the group's DN by
-  // its objectGuid via the cache, then asks the provider to do the modify.
+  // Body: { groupId }. The same change as /api/groups/:id/groups, for a
+  // user.
   app.post('/api/users/:id/groups', {
     config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
-    handler: async (req) => modifyMembership(req, app, 'add'),
+    handler: async (req) => changeMembership(app, req, 'user', 'add'),
   });
 
   app.delete('/api/users/:id/groups', {
     config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
-    handler: async (req) => modifyMembership(req, app, 'remove'),
+    handler: async (req) => changeMembership(app, req, 'user', 'remove'),
   });
 
   // ---- POST /api/users/:id/move (modifyDN to a new parent OU) ----------
@@ -1315,90 +1315,6 @@ async function toggleEnabled(
     );
   }
   await app.services.userLiveRefresh.refresh(provider, id);
-  return { ok: true, before: result.before, after: result.after };
-}
-
-async function modifyMembership(
-  req: import('fastify').FastifyRequest,
-  app: import('fastify').FastifyInstance,
-  op: 'add' | 'remove',
-): Promise<{ ok: true; before: unknown; after: unknown }> {
-  const { id } = idParamSchema.parse(req.params);
-  const body = groupMembershipChangeSchema.parse(req.body);
-  const actor = req.actor!;
-  if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
-  const provider = await app.services.providers.buildForRequest(req);
-
-  const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
-  if (!beforeRefresh) throw NotFound('user not found');
-
-  // Validate the group id belongs to this provider before bothering AD.
-  const groupRow = await app.db
-    .selectFrom('group_cache_records')
-    .select(['object_guid', 'distinguished_name', 'name'])
-    .where('provider_id', '=', provider.id)
-    .where('object_guid', '=', body.groupId)
-    .executeTakeFirst();
-  if (!groupRow) throw NotFound('group not found');
-
-  const result = await withAudit(
-    app.services.audit,
-    {
-      ...auditContextFromRequest(req),
-      action: op === 'add' ? 'user.group.add' : 'user.group.remove',
-      actorAuthMethod: 'ad-password',
-      providerId: provider.id,
-      targetType: 'user',
-      targetId: beforeRefresh.user.objectGuid,
-      targetDn: beforeRefresh.user.distinguishedName,
-      metadata: {
-        groupId: body.groupId,
-        groupDn: groupRow.distinguished_name,
-        groupName: groupRow.name,
-      },
-    },
-    async () => {
-      const r = await (op === 'add'
-        ? provider.addUserToGroup(
-            { kind: 'objectGuid', value: id },
-            { kind: 'objectGuid', value: body.groupId },
-            ctx(actor, req),
-          )
-        : provider.removeUserFromGroup(
-            { kind: 'objectGuid', value: id },
-            { kind: 'objectGuid', value: body.groupId },
-            ctx(actor, req),
-          ));
-      return {
-        ok: r.ok,
-        before: r.before ?? null,
-        after: r.after ?? null,
-        errorCode: r.reason ?? null,
-      };
-    },
-  );
-
-  if (!result.ok) {
-    if (result.errorCode === 'permission_denied') {
-      throw app.httpErrors.forbidden('directory rejected the change');
-    }
-    if (result.errorCode === 'not_found') {
-      throw app.httpErrors.notFound('user or group not found in directory');
-    }
-    throw app.httpErrors.badGateway(`group ${op} failed: ${result.errorCode ?? 'unknown'}`);
-  }
-
-  // Refresh the user's cache so memberOf reflects the change on next read,
-  // and reconcile direct-membership rows so the GET response shows the
-  // change without waiting for the next full sync.
-  const after = await app.services.userLiveRefresh.refresh(provider, id);
-  if (after) {
-    await app.services.userLiveRefresh.reconcileDirectMemberships(
-      provider.id,
-      id,
-      after.user.memberOfDns,
-    );
-  }
   return { ok: true, before: result.before, after: result.after };
 }
 
