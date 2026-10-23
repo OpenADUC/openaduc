@@ -10,19 +10,7 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 // Known gaps, keyed by route. Each breaks a rule today; #72 closes them and
 // empties this list. Don't add to it to get a new route past the test.
 const ALLOWLIST: Record<string, string> = {
-  // Cross-directory access: an operator signed into one directory can reach
-  // another's Entra data by changing the id in the URL.
-  'GET /api/directories/:id/entra': "reads any directory's Entra config, not just the caller's",
-  'PUT /api/directories/:id/entra': "changes any directory's Entra config",
-  'DELETE /api/directories/:id/entra': "removes any directory's Entra config",
-  'POST /api/directories/:id/entra/test':
-    "tests any directory's stored Entra secret, without step-up, and records the result",
-  'GET /api/directories/:id/signin-events': "reads any directory's sign-in events (IPs, apps)",
-  'GET /api/directories/:id/signin-events/apps': "reads any directory's sign-in app list",
-  'GET /api/directories/:id/signin-events/:eventId': "reads any directory's sign-in event",
-  'GET /api/directories/:id/mfa-registration': "reads any directory's MFA registration state",
-  'GET /api/directories/:id/mfa-registration/methods': "reads any directory's MFA method counts",
-  'GET /api/directories/:id/users/:userId/photo': "reads any directory's user photos",
+  // Cross-directory access.
   'GET /api/audit-events': "returns every directory's audit rows; no directory filter",
 
   // Writes without step-up.
