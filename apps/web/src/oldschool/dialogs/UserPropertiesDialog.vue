@@ -76,7 +76,7 @@ const LABELS: Partial<Record<UserAttribute, string>> = {
   description: 'Description',
   phone: 'Telephone number',
   email: 'E-mail',
-  homePostalAddress: 'Street',
+  streetAddress: 'Street',
   l: 'City',
   st: 'State/province',
   postalCode: 'Zip/Postal Code',
@@ -388,9 +388,9 @@ const upnLogonName = computed(() => {
             id="street"
             class="os-textarea"
             rows="3"
-            v-model="draft.homePostalAddress"
+            v-model="draft.streetAddress"
             :disabled="!canEditAttributes || saving"
-            :aria-invalid="!!problems.homePostalAddress"
+            :aria-invalid="!!problems.streetAddress"
           />
           <label class="label" for="pobox">P.O. Box:</label>
           <input id="pobox" class="os-input" :value="user.postOfficeBox ?? ''" disabled />
@@ -923,7 +923,8 @@ const upnLogonName = computed(() => {
 </template>
 
 <style scoped>
-.os-input[aria-invalid='true'] {
+.os-input[aria-invalid='true'],
+.os-textarea[aria-invalid='true'] {
   border-color: #b30000;
 }
 .os-attr-list {
