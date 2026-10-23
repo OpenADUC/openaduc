@@ -13,8 +13,12 @@ import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
+import {
+  useUserAttributeEdit,
+  type UserAttribute,
+} from '../../design/composables/useUserAttributeEdit.js';
 import { useToast } from 'primevue/usetoast';
-import type { UserDetail, UserUpdateRequest } from '@openaduc/shared';
+import type { UserDetail } from '@openaduc/shared';
 
 const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -31,95 +35,19 @@ const user = ref<UserDetail | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
 
-// Mutable "draft" mirrors UserDetail writable subset. Dirty when any
-// field differs from the loaded snapshot.
-type StringField =
-  | 'displayName'
-  | 'givenName'
-  | 'surname'
-  | 'description'
-  | 'email'
-  | 'phone'
-  | 'mobile'
-  | 'title'
-  | 'department'
-  | 'company'
-  | 'employeeID'
-  | 'employeeNumber'
-  | 'ipPhone'
-  | 'homePhone'
-  | 'homePostalAddress'
-  | 'c'
-  | 'co'
-  | 'l'
-  | 'st'
-  | 'postalCode';
-
-interface Draft {
-  // Writable scalar fields.
-  values: Record<StringField, string>;
-  // Whether to flip the unlock action on Apply (only meaningful when locked).
-  doUnlock: boolean;
-}
-
-const draft = ref<Draft>({
-  values: {
-    displayName: '',
-    givenName: '',
-    surname: '',
-    description: '',
-    email: '',
-    phone: '',
-    mobile: '',
-    title: '',
-    department: '',
-    company: '',
-    employeeID: '',
-    employeeNumber: '',
-    ipPhone: '',
-    homePhone: '',
-    homePostalAddress: '',
-    c: '',
-    co: '',
-    l: '',
-    st: '',
-    postalCode: '',
-  },
-  doUnlock: false,
+const {
+  draft,
+  reset: resetDraft,
+  dirty: attributesDirty,
+  problems,
+  valid,
+  saving,
+  save: saveAttributes,
+} = useUserAttributeEdit({
+  onFailed: (message) =>
+    toast.add({ severity: 'error', summary: 'Apply failed', detail: message, life: 6000 }),
 });
-const snapshot = ref<Draft | null>(null);
-
-function strField(v: string | null | undefined): string {
-  return v ?? '';
-}
-
-function snapshotFrom(u: UserDetail): Draft {
-  return {
-    values: {
-      displayName: strField(u.displayName),
-      givenName: strField(u.givenName),
-      surname: strField(u.surname),
-      description: strField(u.description),
-      email: strField(u.email),
-      phone: strField(u.phone),
-      mobile: strField(u.mobile),
-      title: strField(u.title),
-      department: strField(u.department),
-      company: strField(u.company),
-      employeeID: strField(u.employeeID),
-      employeeNumber: strField(u.employeeNumber),
-      ipPhone: strField(u.ipPhone),
-      homePhone: strField(u.homePhone),
-      homePostalAddress: strField(u.homePostalAddress),
-      c: strField(u.c),
-      co: strField(u.co),
-      l: strField(u.l),
-      st: strField(u.st),
-      postalCode: strField(u.postalCode),
-    },
-    doUnlock: false,
-  };
-}
+const doUnlock = ref(false);
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -127,9 +55,8 @@ async function load(): Promise<void> {
   try {
     const resp = await api.users.get(props.id);
     user.value = resp.user;
-    const snap = snapshotFrom(resp.user);
-    draft.value = JSON.parse(JSON.stringify(snap));
-    snapshot.value = JSON.parse(JSON.stringify(snap));
+    resetDraft(resp.user);
+    doUnlock.value = false;
   } catch (e) {
     err.value = e instanceof ApiError ? e.message : (e as Error).message;
   } finally {
@@ -139,13 +66,31 @@ async function load(): Promise<void> {
 onMounted(load);
 watch(() => store.dataVersion, load);
 
-const dirty = computed(() => {
-  if (!snapshot.value) return false;
-  if (draft.value.doUnlock) return true;
-  for (const k of Object.keys(draft.value.values) as StringField[]) {
-    if (draft.value.values[k] !== snapshot.value.values[k]) return true;
-  }
-  return false;
+const dirty = computed(() => attributesDirty.value || doUnlock.value);
+
+// ADUC's labels for the attributes this dialog edits.
+const LABELS: Partial<Record<UserAttribute, string>> = {
+  givenName: 'First name',
+  surname: 'Last name',
+  displayName: 'Display name',
+  description: 'Description',
+  phone: 'Telephone number',
+  email: 'E-mail',
+  streetAddress: 'Street',
+  l: 'City',
+  st: 'State/province',
+  postalCode: 'Zip/Postal Code',
+  co: 'Country/region',
+  homePhone: 'Home',
+  mobile: 'Mobile',
+  ipPhone: 'IP phone',
+  title: 'Title',
+  department: 'Department',
+  company: 'Company',
+};
+const problem = computed(() => {
+  const [key, message] = (Object.entries(problems.value) as [UserAttribute, string][])[0] ?? [];
+  return key ? `${LABELS[key] ?? key}: ${message}` : null;
 });
 
 // --- Dialog title -----------------------------------------------------
@@ -230,60 +175,52 @@ const attributeRows = computed(() => {
     .map(([k, v]) => ({ key: k, value: formatAttrValue(v) }));
 });
 
-// --- Save -------------------------------------------------------------
-async function save(closeAfter: boolean): Promise<void> {
-  if (!user.value || !snapshot.value) return;
+// --- Apply ----------------------------------------------------------
+interface ApplyIntent {
+  close: boolean;
+  unlock: boolean;
+}
+
+function apply(close: boolean): void {
+  if (!user.value) return;
   if (!dirty.value) {
-    if (closeAfter) emit('close');
+    if (close) emit('close');
     return;
   }
-  const patch: UserUpdateRequest['patch'] = {};
-  for (const k of Object.keys(draft.value.values) as StringField[]) {
-    const next = draft.value.values[k];
-    const prev = snapshot.value.values[k];
-    if (next === prev) continue;
-    if (k === 'email') {
-      // The PATCH schema treats '' as null for email.
-      (patch as Record<string, unknown>)[k] = next.trim() === '' ? null : next.trim();
-    } else {
-      (patch as Record<string, unknown>)[k] = next === '' ? null : next;
-    }
-  }
-  const wantUnlock = draft.value.doUnlock && user.value.locked;
+  const intent: ApplyIntent = { close, unlock: doUnlock.value && user.value.locked };
+  if (attributesDirty.value) saveAttributes(() => finishApply(intent, true));
+  else
+    auth.requireStepUp(
+      () => finishApply(intent, false),
+      'Updating a user requires step-up authentication.',
+    );
+}
 
-  const hasPatch = Object.keys(patch).length > 0;
-  let patchApplied = !hasPatch;
-  const apply = async (): Promise<void> => {
+async function finishApply(intent: ApplyIntent, attributesSaved: boolean): Promise<void> {
+  if (intent.unlock) {
     try {
-      if (!patchApplied) {
-        await api.users.update(props.id, { patch });
-        patchApplied = true;
-      }
-      if (wantUnlock) await api.users.unlock(props.id);
-      toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
-      store.bumpData();
-      // Refresh local snapshot from the new state.
-      await load();
-      if (closeAfter) emit('close');
+      await api.users.unlock(props.id);
     } catch (e) {
-      if (auth.retryAfterStepUp(e, apply)) return;
+      if (auth.retryAfterStepUp(e, () => finishApply(intent, attributesSaved))) return;
       toast.add({
         severity: 'error',
-        summary: !patchApplied
-          ? 'Apply failed'
-          : hasPatch
-            ? 'Changes applied, but the account was not unlocked.'
-            : 'Unlock failed',
+        summary: attributesSaved
+          ? 'Changes applied, but the account was not unlocked.'
+          : 'Unlock failed',
         detail: e instanceof ApiError ? e.message : (e as Error).message,
         life: 6000,
       });
-      if (hasPatch && patchApplied) {
+      if (attributesSaved) {
         store.bumpData();
         await load();
       }
+      return;
     }
-  };
-  auth.requireStepUp(apply, 'Updating a user requires step-up authentication.');
+  }
+  toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
+  store.bumpData();
+  await load();
+  if (intent.close) emit('close');
 }
 
 // --- Member Of helpers -----------------------------------------------
@@ -342,10 +279,10 @@ const upnLogonName = computed(() => {
     :window-id="windowId"
     :title="dialogTitle"
     icon="user"
-    :can-apply="dirty"
-    :can-ok="!loading"
-    @ok="save(true)"
-    @apply="save(false)"
+    :can-apply="dirty && valid"
+    :can-ok="!loading && valid"
+    @ok="apply(true)"
+    @apply="apply(false)"
     @cancel="$emit('close')"
     @close="$emit('close')"
   >
@@ -373,8 +310,9 @@ const upnLogonName = computed(() => {
             <input
               id="givenName"
               class="os-input"
-              v-model="draft.values.givenName"
-              :disabled="!canEditAttributes"
+              v-model="draft.givenName"
+              :disabled="!canEditAttributes || saving"
+              :aria-invalid="!!problems.givenName"
             />
             <label class="label" style="flex: 0 0 60px; text-align: right; align-self: center"
               >Initials:</label
@@ -385,22 +323,25 @@ const upnLogonName = computed(() => {
           <input
             id="surname"
             class="os-input"
-            v-model="draft.values.surname"
-            :disabled="!canEditAttributes"
+            v-model="draft.surname"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.surname"
           />
           <label class="label" for="displayName">Display name:</label>
           <input
             id="displayName"
             class="os-input"
-            v-model="draft.values.displayName"
-            :disabled="!canEditAttributes"
+            v-model="draft.displayName"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.displayName"
           />
           <label class="label" for="description">Description:</label>
           <input
             id="description"
             class="os-input"
-            v-model="draft.values.description"
-            :disabled="!canEditAttributes"
+            v-model="draft.description"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.description"
           />
           <label class="label" for="office">Office:</label>
           <input
@@ -417,8 +358,9 @@ const upnLogonName = computed(() => {
             <input
               id="phone"
               class="os-input"
-              v-model="draft.values.phone"
-              :disabled="!canEditAttributes"
+              v-model="draft.phone"
+              :disabled="!canEditAttributes || saving"
+              :aria-invalid="!!problems.phone"
             />
             <button class="os-btn" disabled style="min-width: 70px">Other…</button>
           </div>
@@ -426,8 +368,9 @@ const upnLogonName = computed(() => {
           <input
             id="email"
             class="os-input"
-            v-model="draft.values.email"
-            :disabled="!canEditAttributes"
+            v-model="draft.email"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.email"
           />
           <label class="label" for="webPage">Web page:</label>
           <div style="display: flex; gap: 6px">
@@ -445,8 +388,9 @@ const upnLogonName = computed(() => {
             id="street"
             class="os-textarea"
             rows="3"
-            v-model="draft.values.homePostalAddress"
-            :disabled="!canEditAttributes"
+            v-model="draft.streetAddress"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.streetAddress"
           />
           <label class="label" for="pobox">P.O. Box:</label>
           <input id="pobox" class="os-input" :value="user.postOfficeBox ?? ''" disabled />
@@ -454,29 +398,33 @@ const upnLogonName = computed(() => {
           <input
             id="city"
             class="os-input"
-            v-model="draft.values.l"
-            :disabled="!canEditAttributes"
+            v-model="draft.l"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.l"
           />
           <label class="label" for="state">State/province:</label>
           <input
             id="state"
             class="os-input"
-            v-model="draft.values.st"
-            :disabled="!canEditAttributes"
+            v-model="draft.st"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.st"
           />
           <label class="label" for="zip">Zip/Postal Code:</label>
           <input
             id="zip"
             class="os-input"
-            v-model="draft.values.postalCode"
-            :disabled="!canEditAttributes"
+            v-model="draft.postalCode"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.postalCode"
           />
           <label class="label" for="country">Country/region:</label>
           <input
             id="country"
             class="os-input"
-            v-model="draft.values.co"
-            :disabled="!canEditAttributes"
+            v-model="draft.co"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.co"
             placeholder="(name)"
           />
         </div>
@@ -499,7 +447,7 @@ const upnLogonName = computed(() => {
         </div>
         <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
         <label v-if="canUnlock" class="os-check" :class="{ disabled: !user.locked }">
-          <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked" />
+          <input type="checkbox" v-model="doUnlock" :disabled="!user.locked" />
           Unlock account. This account is currently
           {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
           Controller.
@@ -602,21 +550,32 @@ const upnLogonName = computed(() => {
             <label class="label">Home:</label>
             <input
               class="os-input"
-              v-model="draft.values.homePhone"
-              :disabled="!canEditAttributes"
+              v-model="draft.homePhone"
+              :disabled="!canEditAttributes || saving"
+              :aria-invalid="!!problems.homePhone"
             />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Pager:</label>
             <input class="os-input" :value="user.pager ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Mobile:</label>
-            <input class="os-input" v-model="draft.values.mobile" :disabled="!canEditAttributes" />
+            <input
+              class="os-input"
+              v-model="draft.mobile"
+              :disabled="!canEditAttributes || saving"
+              :aria-invalid="!!problems.mobile"
+            />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Fax:</label>
             <input class="os-input" :value="user.facsimileTelephoneNumber ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">IP phone:</label>
-            <input class="os-input" v-model="draft.values.ipPhone" :disabled="!canEditAttributes" />
+            <input
+              class="os-input"
+              v-model="draft.ipPhone"
+              :disabled="!canEditAttributes || saving"
+              :aria-invalid="!!problems.ipPhone"
+            />
             <button class="os-btn" disabled>Other…</button>
           </div>
         </fieldset>
@@ -630,15 +589,26 @@ const upnLogonName = computed(() => {
       <template v-else-if="activeTab === 'organization'">
         <div class="os-form">
           <label class="label">Title:</label>
-          <input class="os-input" v-model="draft.values.title" :disabled="!canEditAttributes" />
+          <input
+            class="os-input"
+            v-model="draft.title"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.title"
+          />
           <label class="label">Department:</label>
           <input
             class="os-input"
-            v-model="draft.values.department"
-            :disabled="!canEditAttributes"
+            v-model="draft.department"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.department"
           />
           <label class="label">Company:</label>
-          <input class="os-input" v-model="draft.values.company" :disabled="!canEditAttributes" />
+          <input
+            class="os-input"
+            v-model="draft.company"
+            :disabled="!canEditAttributes || saving"
+            :aria-invalid="!!problems.company"
+          />
         </div>
         <fieldset class="os-groupbox">
           <legend>Manager</legend>
@@ -947,11 +917,16 @@ const upnLogonName = computed(() => {
           <button class="os-btn" disabled>Filter…</button>
         </div>
       </template>
+      <div v-if="problem" class="os-error" role="alert">{{ problem }}</div>
     </div>
   </WinDialog>
 </template>
 
 <style scoped>
+.os-input[aria-invalid='true'],
+.os-textarea[aria-invalid='true'] {
+  border-color: #b30000;
+}
 .os-attr-list {
   min-height: 280px;
   max-height: none;

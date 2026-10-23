@@ -112,6 +112,49 @@ describe('the Old School user properties', () => {
     expect(api.users.update).toHaveBeenCalledTimes(2);
   });
 
+  it('apply Street to the work address, and are clean once applied', async () => {
+    const { dialog } = await openProperties(['read:user', 'write:user.attributes'], ELEVATED);
+    await openTab(dialog, 'Address');
+    await dialog.get('#street').setValue('1 Main Street');
+    expect(button(dialog, 'Apply').attributes('disabled')).toBeUndefined();
+
+    const applied = { user: aUserDetail({ streetAddress: '1 Main Street' }) };
+    api.users.get.mockResolvedValueOnce(applied).mockResolvedValueOnce(applied);
+    await button(dialog, 'Apply').trigger('click');
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledWith('u1', {
+      patch: { streetAddress: '1 Main Street' },
+    });
+    expect((dialog.get('#street').element as HTMLTextAreaElement).value).toBe('1 Main Street');
+    expect(button(dialog, 'Apply').attributes('disabled')).toBeDefined();
+  });
+
+  it('say why a value can’t be applied, and won’t apply it', async () => {
+    const { dialog } = await openProperties(['read:user', 'write:user.attributes'], ELEVATED);
+
+    await dialog.get('#email').setValue('not an address');
+    expect(dialog.text()).toContain('E-mail: Not an email address');
+    expect(dialog.get('#email').attributes('aria-invalid')).toBe('true');
+    expect(button(dialog, 'Apply').attributes('disabled')).toBeDefined();
+    expect(button(dialog, 'OK').attributes('disabled')).toBeDefined();
+  });
+
+  it('apply the attributes, then unlock, in one Apply', async () => {
+    const { dialog } = await openProperties(
+      ['read:user', 'write:user.attributes', 'write:user.unlock'],
+      ELEVATED,
+    );
+
+    await dialog.get('#displayName').setValue(' Jane Q. Doe ');
+    await openTab(dialog, 'Account');
+    await dialog.get('input[type="checkbox"]').setValue(true);
+    await button(dialog, 'Apply').trigger('click');
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledWith('u1', { patch: { displayName: 'Jane Q. Doe' } });
+    expect(api.users.unlock).toHaveBeenCalledOnce();
+    expect(toast.add).toHaveBeenCalledWith(expect.objectContaining({ severity: 'success' }));
+  });
+
   it('say when the account could not be unlocked', async () => {
     const { dialog } = await openProperties(['read:user', 'write:user.unlock'], ELEVATED);
     api.users.unlock.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
