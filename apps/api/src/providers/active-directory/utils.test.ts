@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
 import {
+  adDurationToMs,
+  dateToFiletime,
   encodeUnicodePassword,
   escapeDnValue,
   escapeLdapFilter,
@@ -87,6 +89,34 @@ describe('filetimeToDate', () => {
 
   it('returns null for malformed input', () => {
     expect(filetimeToDate('not-a-number')).toBeNull();
+  });
+});
+
+describe('dateToFiletime', () => {
+  it('is the inverse of filetimeToDate', () => {
+    const date = new Date('2031-03-01T05:00:00.000Z');
+    expect(filetimeToDate(dateToFiletime(date))?.toISOString()).toBe(date.toISOString());
+    expect(dateToFiletime(new Date(0))).toBe('116444736000000000');
+  });
+});
+
+describe('adDurationToMs', () => {
+  it('converts a negative 100-ns interval to milliseconds', () => {
+    // 30 minutes, as AD stores lockoutDuration.
+    expect(adDurationToMs('-18000000000')).toBe(30 * 60_000);
+  });
+
+  it('reads 0 and the "never" sentinel as no duration', () => {
+    expect(adDurationToMs('0')).toBe(0);
+    // What AD and Samba store for "until an administrator unlocks it" and
+    // "passwords never expire": the minimum 64-bit integer.
+    expect(adDurationToMs('-9223372036854775808')).toBe(0);
+  });
+
+  it('returns null when missing or malformed', () => {
+    expect(adDurationToMs(null)).toBeNull();
+    expect(adDurationToMs('')).toBeNull();
+    expect(adDurationToMs('soon')).toBeNull();
   });
 });
 

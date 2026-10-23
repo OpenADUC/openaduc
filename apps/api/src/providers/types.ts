@@ -45,6 +45,12 @@ export interface DirectoryUser {
    * attribute yet — useful for "last locked at" display either way.
    */
   lockedAt: Date | null;
+  /**
+   * DN of the fine-grained password policy (PSO) that applies, from AD's
+   * constructed msDS-ResultantPSO; null when none does or it wasn't asked
+   * for or readable.
+   */
+  resultantPsoDn: string | null;
   // Reflects the DONT_EXPIRE_PASSWORD bit (0x10000) of userAccountControl.
   // True for service accounts and other accounts AD will never force a
   // password rotation on.
@@ -65,6 +71,8 @@ export interface DirectoryUser {
   // FILETIME of the most recent failed authentication attempt (AD's
   // `badPasswordTime`). Per-DC, replicated late — treat as approximate.
   lastBadPasswordAt: Date | null;
+  /** AD's `badPwdCount`, as the answering DC counts it (not replicated). */
+  badPasswordCount: number | null;
   createdAtSource: Date | null;
   modifiedAtSource: Date | null;
   // Direct group memberships only. Nested are derived elsewhere.
@@ -328,7 +336,6 @@ export interface UserAttributePatch {
   st?: string | null | undefined;
   postalCode?: string | null | undefined;
   managerDn?: string | null | undefined;
-  accountExpiresAt?: Date | null | undefined;
   // Multi-valued attributes — null or empty array clears, non-empty replaces.
   otherMailbox?: string[] | null | undefined;
   otherHomePhone?: string[] | null | undefined;
@@ -385,6 +392,8 @@ export interface DirectoryProvider {
    * changes); callers should not need to throttle.
    */
   getDomainPolicy(): Promise<DirectoryDomainPolicy>;
+  /** A PSO's lockout duration in ms (0 = until unlocked), or null if it can't be read. */
+  getPsoLockoutDuration(psoDn: string): Promise<number | null>;
 
   getUser(identifier: DirectoryObjectIdentifier): Promise<DirectoryUser | null>;
   searchUsers(query: DirectoryUserSearchQuery): Promise<DirectoryUser[]>;
@@ -429,6 +438,12 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult>;
   enableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
+  /** Set `accountExpires` to when the account stops working, or null for never. */
+  setAccountExpiry(
+    userId: DirectoryObjectIdentifier,
+    expiresAt: Date | null,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
   updateUserAttributes(
     userId: DirectoryObjectIdentifier,

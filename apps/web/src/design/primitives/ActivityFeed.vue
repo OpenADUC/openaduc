@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AuditEventRow } from '../../api/index.js';
+import { expiryText } from '../lib/accountExpiry.js';
 import { fmtAbsolute, fmtRelative } from '../lib/format.js';
 import EmptyState from './EmptyState.vue';
 
@@ -30,6 +31,11 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
     title: 'Password reset',
     iconClass: 'pi pi-key',
     tone: 'tone-amber',
+  },
+  'user.accountExpiry.set': {
+    title: 'Account expiry changed',
+    iconClass: 'pi pi-calendar',
+    tone: 'tone-blue',
   },
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },
@@ -89,6 +95,9 @@ function detailFor(e: AuditEventRow): string {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
+  if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
+    return expiryText(md.expiresAt ? String(md.expiresAt) : null, true);
+  }
   return '';
 }
 </script>

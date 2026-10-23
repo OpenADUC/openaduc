@@ -60,6 +60,8 @@ defineEmits<{ refresh: [] }>();
 defineSlots<{
   default(props: { tab: T; select: (id: T) => void }): unknown;
   badges?(): unknown;
+  /** The object's state, under the name; it folds away with the header. */
+  status?(): unknown;
   /** The object's primary actions, beside the identity. */
   primary?(props: { compact: boolean }): unknown;
 }>();
@@ -154,6 +156,10 @@ const freshnessText = computed(() => {
         <div class="detail-hero-row">
           <h1 class="detail-hero-name">{{ name }}</h1>
           <slot name="badges" />
+        </div>
+
+        <div v-if="$slots.status" class="detail-hero-status">
+          <slot name="status" />
         </div>
 
         <div v-if="subtitle" class="detail-hero-title">{{ subtitle }}</div>
@@ -356,6 +362,7 @@ const freshnessText = computed(() => {
 }
 
 /* Secondary rows collapse together via max-height + opacity. */
+.detail-hero-status,
 .detail-hero-title,
 .detail-hero-upn,
 .detail-hero-actions-row,
@@ -369,6 +376,7 @@ const freshnessText = computed(() => {
     margin 200ms ease;
 }
 
+.detail-hero.is-compact .detail-hero-status,
 .detail-hero.is-compact .detail-hero-title,
 .detail-hero.is-compact .detail-hero-upn,
 .detail-hero.is-compact .detail-hero-actions-row,
@@ -377,6 +385,11 @@ const freshnessText = computed(() => {
   opacity: 0;
   margin: 0;
   pointer-events: none;
+}
+
+/* Room for every condition a user page lists. */
+.detail-hero-status {
+  max-height: 160px;
 }
 
 .detail-hero-title {

@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  accountExpiryRequestSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -19,6 +20,7 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
+import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
@@ -397,8 +399,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       };
       const orderDir = q.sortDir === 'desc' ? 'desc' : 'asc';
 
-      // `status` is a derived sort: order by a priority CASE so locked
-      // accounts come first, disabled second, etc. The literal numbers are
+      // `status` is a derived sort: order by a priority CASE in the order
+      // the SPA ranks what stops sign-in (design/lib/signIn.ts), so the list
+      // and each user's badge agree. The literal numbers are
       // safe (no user input reaches the SQL), and the rest of the search
       // remains parameterized.
       let orderedQuery;
@@ -406,13 +409,14 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         orderedQuery = baseQuery.selectAll().orderBy(
           sql<number>`
               case
-                when locked then 1
-                when not enabled then 2
-                when account_expires_at is not null and account_expires_at < now() then 3
-                when password_never_expires then 6
-                when password_must_change then 4
-                when ${expiry} < now() then 4
-                when ${expiry} < now() + interval '14 days' then 5
+                when not enabled then 1
+                when locked then 2
+                when not password_never_expires and not password_must_change
+                  and ${expiry} <= now() then 3
+                when account_expires_at <= now() then 4
+                when password_must_change then 5
+                when not password_never_expires
+                  and ${expiry} <= now() + interval '14 days' then 6
                 else 7
               end
             `,
@@ -536,19 +540,22 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
       const maxAgeDays = await resolveMaxPwdAgeDays(provider);
 
-      // Lockout policy: only fetch when there's a chance the user is or was
-      // locked. The vast majority of detail loads return early with a null
-      // policy fetch.
+      // Lockout policy: only fetch when the user is locked. The vast
+      // majority of detail loads skip it.
       const lockoutFiletime = refreshed.user.lockedAt;
-      let autoUnlockAt: Date | null = null;
+      let lockout: ReturnType<typeof lockoutEnd> = {
+        autoUnlockAt: null,
+        lockedUntilUnlocked: false,
+      };
       if (refreshed.user.locked && lockoutFiletime) {
         try {
-          const policy = await provider.getDomainPolicy();
-          if (policy.lockoutDurationMs && policy.lockoutDurationMs > 0) {
-            autoUnlockAt = new Date(lockoutFiletime.getTime() + policy.lockoutDurationMs);
-          }
+          const duration = await lockoutDurationFor(refreshed.user.resultantPsoDn, {
+            domain: async () => (await provider.getDomainPolicy()).lockoutDurationMs,
+            pso: (dn) => provider.getPsoLockoutDuration(dn),
+          });
+          lockout = lockoutEnd(lockoutFiletime, duration);
         } catch (err) {
-          req.log.warn({ err }, 'failed to load domain policy for autoUnlockAt');
+          req.log.warn({ err }, 'failed to load lockout policy for autoUnlockAt');
         }
       }
 
@@ -604,7 +611,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         enabled: refreshed.user.enabled,
         locked: refreshed.user.locked,
         lockedAt: dateOrNull(refreshed.user.lockedAt),
-        autoUnlockAt: dateOrNull(autoUnlockAt),
+        autoUnlockAt: dateOrNull(lockout.autoUnlockAt),
+        lockedUntilUnlocked: lockout.lockedUntilUnlocked,
+        badPasswordCount: refreshed.user.badPasswordCount,
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
         passwordMustChange: refreshed.user.passwordMustChange,
         passwordExpiresAt: computeExpiresAt(
@@ -868,6 +877,64 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
     },
     handler: async (req) => toggleEnabled(req, app, false),
+  });
+
+  // ---- POST /api/users/:id/account-expiry ------------------------------
+  // Expiry decides whether the account works, as enabling does: AD keeps
+  // accountExpires and userAccountControl in the same property set
+  // (Account Restrictions), so it takes the same capability.
+  app.post('/api/users/:id/account-expiry', {
+    config: {
+      policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) => {
+      const { id } = idParamSchema.parse(req.params);
+      const body = accountExpiryRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
+      if (!beforeRefresh) throw NotFound('user not found');
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'user.accountExpiry.set',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'user',
+          targetId: beforeRefresh.user.objectGuid,
+          targetDn: beforeRefresh.user.distinguishedName,
+          metadata: { expiresAt: body.expiresAt },
+        },
+        async () => {
+          const r = await provider.setAccountExpiry(
+            { kind: 'objectGuid', value: id },
+            body.expiresAt === null ? null : new Date(body.expiresAt),
+            ctx(actor, req),
+          );
+          return {
+            ok: r.ok,
+            before: r.before ?? null,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+          };
+        },
+      );
+
+      if (!result.ok) {
+        if (result.errorCode === 'permission_denied') {
+          throw app.httpErrors.forbidden('directory rejected the change');
+        }
+        throw app.httpErrors.badGateway(
+          `setting account expiry failed: ${result.errorCode ?? 'unknown'}`,
+        );
+      }
+      await app.services.userLiveRefresh.refresh(provider, id);
+      return { ok: true, before: result.before, after: result.after };
+    },
   });
 
   // ---- POST /api/users/:id/reset-password ------------------------------

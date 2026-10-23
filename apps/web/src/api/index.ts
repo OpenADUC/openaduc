@@ -3,6 +3,7 @@
 // shape are handled in one place.
 
 import type {
+  AccountExpiryRequest,
   ComputerDetail,
   ComputerSearchQuery,
   ComputerSearchResponse,
@@ -432,6 +433,15 @@ export const api = {
       return apiFetch(`/users/${encodeURIComponent(id)}/enable`, {
         method: 'POST',
         body: JSON.stringify({}),
+      });
+    },
+    setAccountExpiry(
+      id: string,
+      body: AccountExpiryRequest,
+    ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/account-expiry`, {
+        method: 'POST',
+        body: JSON.stringify(body),
       });
     },
     resetPassword(id: string, body: ResetPasswordRequest): Promise<{ ok: boolean }> {

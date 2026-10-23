@@ -129,17 +129,17 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 
 ## What's in the box
 
-| Surface             | What you can do today                                                                                                                                      |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**       | Sync status, recent activity, locked-account counts                                                                                                        |
-| **Users**           | Search, view, edit attributes, rename (logon names and email included), reset passwords, unlock, enable/disable, move OU, delete disabled accounts in bulk |
-| **Groups**          | Search, view members and memberOf, add/remove members                                                                                                      |
-| **Computers**       | Search, view, disable/enable, reset account, move OU                                                                                                       |
-| **OUs**             | Browse the directory tree                                                                                                                                  |
-| **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                 |
-| **Password policy** | View domain default and fine-grained policies                                                                                                              |
-| **Audit**           | Every write is logged with actor, target, before/after, and step-up status                                                                                 |
-| **Setup wizard**    | First-run flow: directory connection, service account, policy, initial sync                                                                                |
+| Surface             | What you can do today                                                                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**       | Sync status, recent activity, locked-account counts                                                                                                                                                           |
+| **Users**           | Search, view, see why someone can't sign in, edit attributes, rename (logon names and email included), reset passwords, unlock, enable/disable, set account expiry, move OU, delete disabled accounts in bulk |
+| **Groups**          | Search, view members and memberOf, add/remove members                                                                                                                                                         |
+| **Computers**       | Search, view, disable/enable, reset account, move OU                                                                                                                                                          |
+| **OUs**             | Browse the directory tree                                                                                                                                                                                     |
+| **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                                                                    |
+| **Password policy** | View domain default and fine-grained policies                                                                                                                                                                 |
+| **Audit**           | Every write is logged with actor, target, before/after, and step-up status                                                                                                                                    |
+| **Setup wizard**    | First-run flow: directory connection, service account, policy, initial sync                                                                                                                                   |
 
 ## Stack
 
