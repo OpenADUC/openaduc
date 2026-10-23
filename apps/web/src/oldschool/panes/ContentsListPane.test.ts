@@ -145,6 +145,7 @@ describe('a computer in the Old School contents list', () => {
     dnsHostName: null,
     operatingSystem: null,
     enabled: true,
+    writeBlock: null,
   };
   const ALL = [
     'read:computer',
@@ -184,17 +185,31 @@ describe('a computer in the Old School contents list', () => {
 
     expect(oldSchool.windows.map((w) => w.dialog)).toEqual([
       { kind: 'reset-computer', id: 'c1', label: 'WS01' },
-      { kind: 'move', account: 'computer', id: 'c1', label: 'WS01' },
+      { kind: 'move', accountKind: 'computer', id: 'c1', label: 'WS01' },
     ]);
   });
 
-  it('greys out what the operator may not do', async () => {
+  it('leaves out what the operator may not do', async () => {
     const { pane } = await openStaff(['read:computer']);
+
+    const labels = (await menu(pane)).map((i) => i.text());
+    for (const label of ['Disable Account', 'Reset Account', 'Move…']) {
+      expect(labels, label).not.toContain(label);
+    }
+  });
+
+  it('greys out disable, reset and move on a domain controller', async () => {
+    api.ous.contents.mockReset();
+    api.ous.contents.mockResolvedValueOnce({
+      users: [],
+      groups: [],
+      computers: [{ ...ws01, name: 'DC1', writeBlock: 'domain_controller' }],
+    } as never);
+    const { pane } = await openStaff(ALL);
 
     const items = await menu(pane);
     for (const label of ['Disable Account', 'Reset Account', 'Move…']) {
-      const item = items.find((i) => i.text() === label);
-      expect(item?.classes(), label).toContain('disabled');
+      expect(items.find((i) => i.text() === label)?.classes(), label).toContain('disabled');
     }
   });
 });

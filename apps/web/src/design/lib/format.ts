@@ -118,3 +118,12 @@ export function truncMid(input: string, head = 24, tail = 18): string {
   if (input.length <= head + tail + 1) return input;
   return `${input.slice(0, head)}…${input.slice(-tail)}`;
 }
+
+/** What to call a computer: its name, else its pre-Windows 2000 name, else its DN. */
+export function computerName(c: {
+  name: string | null;
+  samAccountName: string | null;
+  distinguishedName: string;
+}): string {
+  return c.name ?? c.samAccountName ?? c.distinguishedName;
+}

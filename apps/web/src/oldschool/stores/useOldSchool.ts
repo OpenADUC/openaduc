@@ -29,7 +29,7 @@ export type DialogSpec =
   | { kind: 'delete-user'; id: string; label: string }
   | { kind: 'new-group'; parentDn: string }
   | { kind: 'delete-group'; id: string; label: string }
-  | { kind: 'move'; account: AccountKind; id: string; label: string }
+  | { kind: 'move'; accountKind: AccountKind; id: string; label: string }
   | { kind: 'reset-computer'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | { kind: 'message'; title: string; message: string }

@@ -63,6 +63,8 @@ interface Row {
   /** Optional sub-state used for sort + status bar. */
   disabled?: boolean;
   locked?: boolean;
+  /** A domain controller or critical computer, which OpenADUC won't disable, reset or move. */
+  protected?: boolean;
 }
 
 const rows = computed<Row[]>(() => {
@@ -98,6 +100,7 @@ const rows = computed<Row[]>(() => {
       description: c.operatingSystem ?? c.dnsHostName ?? '',
       icon: c.enabled ? 'computer' : 'computer-disabled',
       disabled: !c.enabled,
+      protected: c.writeBlock !== null,
     });
   }
   return out;
@@ -249,7 +252,8 @@ function userItems(r: Row): CtxItem[] {
   if (can('write:user.move')) {
     items.push({
       label: 'Move…',
-      onSelect: () => store.openDialog({ kind: 'move', account: 'user', id: r.id, label: r.name }),
+      onSelect: () =>
+        store.openDialog({ kind: 'move', accountKind: 'user', id: r.id, label: r.name }),
     });
   }
   const canDelete = can('write:user.delete');
@@ -309,38 +313,44 @@ function groupItems(r: Row): CtxItem[] {
 }
 
 function computerItems(r: Row): CtxItem[] {
-  const canToggle = can('write:computer.enableDisable') && computerRunningOn(r.id) === null;
-  return [
-    {
-      label: 'Manage',
-      disabled: true,
-    },
-    {
+  const busy = computerRunningOn(r.id) !== null;
+  const items: CtxItem[] = [{ label: 'Manage', disabled: true }];
+  if (can('write:computer.move')) {
+    items.push({
       label: 'Move…',
-      disabled: !can('write:computer.move'),
+      disabled: r.protected,
       onSelect: () =>
-        store.openDialog({ kind: 'move', account: 'computer', id: r.id, label: r.name }),
-    },
-    {
-      label: 'All Tasks',
-      kind: 'header',
-    },
-    r.disabled
-      ? {
-          label: 'Enable Account',
-          disabled: !canToggle,
-          onSelect: () => runComputerAction('enable', r),
-        }
-      : {
-          label: 'Disable Account',
-          disabled: !canToggle,
-          onSelect: () => runComputerAction('disable', r),
-        },
-    {
+        store.openDialog({ kind: 'move', accountKind: 'computer', id: r.id, label: r.name }),
+    });
+  }
+  const canToggle = can('write:computer.enableDisable');
+  const canReset = can('write:computer.resetAccount');
+  if (canToggle || canReset) items.push({ label: 'All Tasks', kind: 'header' });
+  if (canToggle) {
+    // Enabling a domain controller is harmless; disabling one isn't.
+    items.push(
+      r.disabled
+        ? {
+            label: 'Enable Account',
+            disabled: busy,
+            onSelect: () => runComputerAction('enable', r),
+          }
+        : {
+            label: 'Disable Account',
+            disabled: busy || r.protected,
+            onSelect: () => runComputerAction('disable', r),
+          },
+    );
+  }
+  if (canReset) {
+    items.push({
       label: 'Reset Account',
-      disabled: !can('write:computer.resetAccount'),
+      disabled: r.protected,
       onSelect: () => store.openDialog({ kind: 'reset-computer', id: r.id, label: r.name }),
-    },
+    });
+  }
+  return [
+    ...items,
     { kind: 'separator' },
     {
       label: 'Properties',

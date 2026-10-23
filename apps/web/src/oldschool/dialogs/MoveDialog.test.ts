@@ -51,9 +51,9 @@ async function openMove() {
     elevated: { active: false, idleExpiresAt: null, absoluteExpiresAt: null },
   } as never;
   const oldSchool = useOldSchool();
-  oldSchool.openDialog({ kind: 'move', account: 'user', id: 'u1', label: 'Jane Doe' });
+  oldSchool.openDialog({ kind: 'move', accountKind: 'user', id: 'u1', label: 'Jane Doe' });
   const dialog = mount(MoveDialog, {
-    props: { windowId: oldSchool.windows[0]!.id, account: 'user', id: 'u1', label: 'Jane Doe' },
+    props: { windowId: oldSchool.windows[0]!.id, accountKind: 'user', id: 'u1', label: 'Jane Doe' },
     global: { plugins: [pinia, PrimeVue], stubs: { teleport: true } },
   });
   await flushPromises();
