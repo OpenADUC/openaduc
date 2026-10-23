@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  ELEVATED_SESSION_LIMITS,
   ROLE_MEMBERS_SHOWN,
   ROLES,
   rolesResponseSchema,
@@ -13,6 +14,8 @@ import {
 import { z } from 'zod';
 import { BadRequest, Conflict } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+
+const { idleTimeout, absoluteLifetime } = ELEVATED_SESSION_LIMITS;
 
 // Settings exposed to the operator UI. Not every app_settings row is here —
 // internal-only keys (e.g. `authz.*` group DNs) don't belong in a generic
@@ -36,8 +39,12 @@ const ALLOWED_SETTINGS: Record<
   'audit.retention_days': { type: 'number', min: -1, max: 36500 },
   'session.idle_timeout_minutes': { type: 'number', min: 1, max: 1440 },
   'session.absolute_timeout_hours': { type: 'number', min: 1, max: 168 },
-  'stepup.idle_timeout_minutes': { type: 'number', min: 1, max: 480 },
-  'stepup.absolute_lifetime_minutes': { type: 'number', min: 1, max: 1440 },
+  [idleTimeout.key]: { type: 'number', min: idleTimeout.min, max: idleTimeout.max },
+  [absoluteLifetime.key]: {
+    type: 'number',
+    min: absoluteLifetime.min,
+    max: absoluteLifetime.max,
+  },
   'sync.cron': { type: 'string-nullable' },
 };
 

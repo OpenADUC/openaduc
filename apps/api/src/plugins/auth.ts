@@ -1,25 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 import fp from 'fastify-plugin';
 import type { FastifyRequest } from 'fastify';
-import type { Capability } from '@openaduc/shared';
+import {
+  BACKGROUND_REQUEST_HEADER,
+  ELEVATED_IDLE_END_HEADER,
+  type Capability,
+} from '@openaduc/shared';
 import type { AdminSession, ElevatedSession } from '../services/sessions.js';
 import { Forbidden, NotFound, SessionRequired, StepUpRequired } from './errorHandler.js';
 
 export const SESSION_COOKIE_NAME = 'openaduc_sid';
-
-/**
- * On every response to an elevated operator: when their elevated session
- * ends if they do nothing more. Activity moves it, so the client can't
- * work it out from the step-up response alone.
- */
-export const ELEVATED_IDLE_HEADER = 'x-elevated-idle-expires-at';
-
-/**
- * Sent by the SPA on requests it makes by itself (polling a running task).
- * Those aren't the operator's activity, so they don't hold the elevated
- * session open. A client can only shorten its own session with this.
- */
-export const BACKGROUND_REQUEST_HEADER = 'x-background-request';
 
 /**
  * Who may call a route. `public` routes run without a session; the others
@@ -106,7 +96,7 @@ export default fp(async (app) => {
         });
         if (elevated) app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
       }
-      if (elevated) reply.header(ELEVATED_IDLE_HEADER, elevated.idleExpiresAt.toISOString());
+      if (elevated) reply.header(ELEVATED_IDLE_END_HEADER, elevated.idleExpiresAt.toISOString());
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
       req.actor = { session, elevated, elevatedPassword };
       req.directoryId = session.directoryId;

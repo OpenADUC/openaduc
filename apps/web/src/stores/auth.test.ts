@@ -37,7 +37,7 @@ describe('the elevated idle end', () => {
     respondWithIdleEnd(LATER);
 
     await apiFetch('/users');
-    expect(auth.elevatedExpiresAt).toBe(LATER);
+    expect(auth.elevatedIdleEndsAt).toBe(LATER);
   });
 
   it("doesn't bring back an elevated session the operator ended", async () => {
