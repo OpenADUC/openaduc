@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
-import { computed, onMounted, ref, type ComponentPublicInstance } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
@@ -20,7 +20,6 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
-import { useListShortcuts } from '../design/composables/useListShortcuts.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
@@ -58,28 +57,24 @@ const rows = ref<GroupSummary[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const drawerOpen = ref(false);
 const {
   skeleton,
   table: listTable,
   title: pageTitle,
   status: listStatus,
-} = useListLoading({
+  searchField,
+} = useListLoading<GroupSummary>({
   rows,
   loading,
   error,
   total: () => total.value,
   title: 'Groups',
   noun: ['group', 'groups'],
-});
-const drawerOpen = ref(false);
-const searchField = ref<ComponentPublicInstance | null>(null);
-const { setTable: setListTable, pt: listPt } = useListShortcuts<GroupSummary>({
-  noun: ['group', 'groups'],
   open: openDetail,
   showSearch: () => {
     drawerOpen.value = true;
   },
-  searchField: searchField,
 });
 
 const filters = ref<{
@@ -260,8 +255,6 @@ onMounted(load);
       scroll-height="flex"
       @row-click="(ev) => openDetail(ev.data as GroupSummary)"
       v-bind="listTable"
-      :ref="setListTable"
-      :pt="listPt"
       class="groups-table"
     >
       <template #empty>
