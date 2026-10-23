@@ -20,6 +20,7 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
+import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
@@ -539,21 +540,22 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
       const maxAgeDays = await resolveMaxPwdAgeDays(provider);
 
-      // Lockout policy: only fetch when there's a chance the user is or was
-      // locked. The vast majority of detail loads return early with a null
-      // policy fetch.
+      // Lockout policy: only fetch when the user is locked. The vast
+      // majority of detail loads skip it.
       const lockoutFiletime = refreshed.user.lockedAt;
-      let autoUnlockAt: Date | null = null;
-      let lockedUntilUnlocked = false;
+      let lockout: ReturnType<typeof lockoutEnd> = {
+        autoUnlockAt: null,
+        lockedUntilUnlocked: false,
+      };
       if (refreshed.user.locked && lockoutFiletime) {
         try {
-          const policy = await provider.getDomainPolicy();
-          if (policy.lockoutDurationMs === 0) lockedUntilUnlocked = true;
-          else if (policy.lockoutDurationMs && policy.lockoutDurationMs > 0) {
-            autoUnlockAt = new Date(lockoutFiletime.getTime() + policy.lockoutDurationMs);
-          }
+          const duration = await lockoutDurationFor(refreshed.user.resultantPsoDn, {
+            domain: async () => (await provider.getDomainPolicy()).lockoutDurationMs,
+            pso: (dn) => provider.getPsoLockoutDuration(dn),
+          });
+          lockout = lockoutEnd(lockoutFiletime, duration);
         } catch (err) {
-          req.log.warn({ err }, 'failed to load domain policy for autoUnlockAt');
+          req.log.warn({ err }, 'failed to load lockout policy for autoUnlockAt');
         }
       }
 
@@ -609,8 +611,8 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         enabled: refreshed.user.enabled,
         locked: refreshed.user.locked,
         lockedAt: dateOrNull(refreshed.user.lockedAt),
-        autoUnlockAt: dateOrNull(autoUnlockAt),
-        lockedUntilUnlocked,
+        autoUnlockAt: dateOrNull(lockout.autoUnlockAt),
+        lockedUntilUnlocked: lockout.lockedUntilUnlocked,
         badPasswordCount: refreshed.user.badPasswordCount ?? null,
         passwordNeverExpires: refreshed.user.passwordNeverExpires,
         passwordMustChange: refreshed.user.passwordMustChange,

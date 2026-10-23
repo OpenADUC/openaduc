@@ -148,6 +148,7 @@ export const USER_ATTRS_FULL = [
   '*',
   'msDS-UserPasswordExpiryTimeComputed',
   'msDS-User-Account-Control-Computed',
+  'msDS-ResultantPSO',
 ];
 
 /** msDS-User-Account-Control-Computed bit: locked out right now. */
@@ -350,6 +351,7 @@ export function normalizeUser(entry: Entry): DirectoryUser {
     enabled: uac.enabled,
     locked: lockedNow,
     lockedAt: lockoutFiletime,
+    resultantPsoDn: asString(entry['msDS-ResultantPSO']),
     passwordNeverExpires: uac.passwordNeverExpires,
     passwordLastSetAt: passwordLastSet,
     // Constructed by AD from the effective policy (domain or PSO). Never-

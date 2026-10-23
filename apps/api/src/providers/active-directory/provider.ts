@@ -321,6 +321,22 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
    * throwing — user detail rendering shouldn't break because we couldn't
    * read maxPwdAge.
    */
+  async getPsoLockoutDuration(psoDn: string): Promise<number | null> {
+    try {
+      return await this.withServiceBind(async (client) => {
+        const { searchEntries } = await client.search(psoDn, {
+          scope: 'base',
+          filter: '(objectClass=msDS-PasswordSettings)',
+          attributes: ['msDS-LockoutDuration'],
+        });
+        return adDurationToMs(asString(searchEntries[0]?.['msDS-LockoutDuration']));
+      });
+    } catch {
+      // By default only Domain Admins can read PSOs.
+      return null;
+    }
+  }
+
   async getDomainPolicy(): Promise<DirectoryDomainPolicy> {
     const now = Date.now();
     if (this.domainPolicyCache && this.domainPolicyCache.expiresAt > now) {
