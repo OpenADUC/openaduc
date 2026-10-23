@@ -116,6 +116,21 @@ describe('elevated sessions end when idle', () => {
     expect((await elevation(admin)).active).toBe(false);
   });
 
+  it('treats a session that ended before its activity was recorded as ended', async () => {
+    const admin = await steppedUpAdmin();
+    const sessions = api.app.services.sessions;
+    const latest = await api.app.db
+      .selectFrom('elevated_sessions')
+      .select('admin_session_id')
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+    const elevated = (await sessions.findActiveElevated(latest.admin_session_id))!;
+
+    expect((await admin.delete('/api/auth/step-up')).statusCode).toBe(200);
+    at(10);
+    expect(await sessions.recordElevatedActivity(elevated)).toBeNull();
+  });
+
   it('does not rewrite the session for activity that barely moves the idle end', async () => {
     const admin = await steppedUpAdmin();
 

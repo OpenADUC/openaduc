@@ -245,7 +245,8 @@ export class SessionsService {
 
   /**
    * The operator was active: push the idle end to a full idle timeout from
-   * now, capped at the absolute end. Returns the session as it now stands.
+   * now, capped at the absolute end. Returns the session as it now stands,
+   * or null if it ended (idle or revoked) since it was looked up.
    *
    * Activity that would move the idle end by less than a twentieth of the
    * timeout isn't written, so a busy operator costs one UPDATE every 45
@@ -253,7 +254,7 @@ export class SessionsService {
    * The session can therefore end up to that much before a full timeout
    * after the operator's last request.
    */
-  async recordElevatedActivity(elevated: ElevatedSession): Promise<ElevatedSession> {
+  async recordElevatedActivity(elevated: ElevatedSession): Promise<ElevatedSession | null> {
     const { idleMs } = await this.elevationLimits();
     const now = Date.now();
     const next = Math.min(now + idleMs, elevated.absoluteExpiresAt.getTime());
@@ -266,7 +267,7 @@ export class SessionsService {
       .where('idle_expires_at', '>', new Date(now))
       .returningAll()
       .executeTakeFirst();
-    return row ? rowToElevated(row) : elevated;
+    return row ? rowToElevated(row) : null;
   }
 
   private async elevationLimits(): Promise<{ idleMs: number; absoluteMs: number }> {
