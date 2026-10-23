@@ -51,9 +51,10 @@ fallback, and a `ready` flag for when visibility is final (tabs that
 depend on the loaded record); unknown or hidden tabs fall back and are
 dropped from the URL.
 
-`useMoveDialog` is the Move to OU action for the user and computer pages:
-it owns the move workflow and the dialog's open state, toasts a move with
-Undo, and places a failed move in the dialog that made it or, for an
-Undo, as `pageFailure` for `actionFailure`. Render it with
-`MoveToOuDialog`. `useExpiryDialog` does the same for a user's account
-expiry, rendered with `AccountExpiryDialog`.
+`useUndoableDialog` is a dialog that makes one undoable write: it owns
+the workflow and the dialog's open state, toasts the write with Undo,
+and places a failed write in the dialog that made it or, for an Undo, as
+`pageFailure` for `actionFailure`. `useMoveDialog` (Move to OU on the
+user and computer pages, rendered with `MoveToOuDialog`) and
+`useExpiryDialog` (a user's account expiry, rendered with
+`AccountExpiryDialog`) are built on it.
