@@ -4,7 +4,7 @@
 // complexity on, three kinds of character and none of the account's names.
 // AD also refuses recently used passwords, which only it can check.
 
-import type { DirectoryPolicy } from '@openaduc/shared';
+import { RESET_PASSWORD_MIN_LENGTH, type DirectoryPolicy } from '@openaduc/shared';
 
 export type PasswordPolicy = Pick<DirectoryPolicy, 'minPwdLength' | 'complexityRequired'>;
 
@@ -21,12 +21,10 @@ export interface PasswordCheck {
   text: string;
 }
 
-// resetPasswordRequestSchema's floor, whatever the domain allows.
-const API_MIN_LENGTH = 8;
 const GENERATED_LENGTH = 16;
 
 function minimumLength(policy: PasswordPolicy | null): number {
-  return Math.max(API_MIN_LENGTH, policy?.minPwdLength ?? 0);
+  return Math.max(RESET_PASSWORD_MIN_LENGTH, policy?.minPwdLength ?? 0);
 }
 
 export function checkPassword(
