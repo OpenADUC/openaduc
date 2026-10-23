@@ -124,12 +124,18 @@ locked || { echo "seed: failed to lock out dave.diaz" >&2; exit 1; }
 # --- Computers
 computer WS01 "OU=Workstations,$ROOT"
 computer WS02 "OU=Workstations,$ROOT"
-# samba-tool creates computers disabled; WS01 is the enabled one.
+# samba-tool creates computers disabled; WS01 is the enabled one. Both
+# are put back, since tests enable and disable them.
 ldbmodify -H "$SAM" >/dev/null <<EOF
 dn: CN=WS01,OU=Workstations,$ROOT,$BASE
 changetype: modify
 replace: userAccountControl
 userAccountControl: 4096
+
+dn: CN=WS02,OU=Workstations,$ROOT,$BASE
+changetype: modify
+replace: userAccountControl
+userAccountControl: 4098
 EOF
 
 echo "seeded"

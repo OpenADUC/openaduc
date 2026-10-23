@@ -49,3 +49,9 @@ entry instead of pushing one. Pass it the tab list with visibility, a
 fallback, and a `ready` flag for when visibility is final (tabs that
 depend on the loaded record); unknown or hidden tabs fall back and are
 dropped from the URL.
+
+`useMoveDialog` is the Move to OU action for the user and computer pages:
+it owns the move workflow and the dialog's open state, toasts a move with
+Undo, and places a failed move in the dialog that made it or, for an
+Undo, as `pageFailure` for `actionFailure`. Render it with
+`MoveToOuDialog`.

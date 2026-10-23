@@ -5,16 +5,23 @@ import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import Message from 'primevue/message';
-import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import type { ComputerDetail } from '@openaduc/shared';
+import type { ComputerDetail, ComputerWriteBlock } from '@openaduc/shared';
 import Card from '../design/primitives/Card.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
-import { fmtRelative } from '../design/lib/format.js';
+import AppToast from '../design/feedback/AppToast.vue';
+import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
+import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
+import { undoable } from '../design/feedback/undoToast.js';
+import { computerName, fmtRelative } from '../design/lib/format.js';
+import { placeFailure } from '../design/lib/failurePlacement.js';
+import { useAccountActions } from '../design/composables/useAccountActions.js';
+import { useComputerReset } from '../design/composables/useComputerReset.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
-import type { ObjectPageTab } from './_detail/objectPage';
+import type { ObjectAction, ObjectActionFailure, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
+import { useMoveDialog } from './_detail/useMoveDialog';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -56,6 +63,153 @@ function openGroup(g: ComputerDetail['groupMemberships'][number]): void {
   void router.push({ name: 'group-detail', params: { id: g.id } });
 }
 
+// ---- Actions ---------------------------------------------------------------
+// Disable, enable and move act at once and offer Undo; a reset can't be
+// undone, so it asks first.
+
+const {
+  runningOn: accountActionOn,
+  run: runAccountAction,
+  failure: accountFailure,
+  retry: retryAccountAction,
+  dismiss: dismissAccountFailure,
+} = useAccountActions<ComputerDetail, 'computer'>({
+  kind: 'computer',
+  onDone: async (action, c, offer) => {
+    const done = action === 'disable' ? 'Disabled' : 'Enabled';
+    toast.add(
+      undoable({ severity: 'success', summary: `${done} ${computerName(c)}`, life: 3000 }, offer),
+    );
+    await load();
+  },
+});
+
+const {
+  pending: resetPending,
+  ask: askReset,
+  confirm: confirmReset,
+  cancel: cancelReset,
+  runningOn: resetRunningOn,
+  failure: resetFailure,
+  retry: retryReset,
+  dismiss: dismissResetFailure,
+} = useComputerReset<ComputerDetail>({
+  onReset: async (c) => {
+    toast.add({
+      severity: 'success',
+      summary: `Reset the account of ${computerName(c)}`,
+      detail: 'Rejoin it to the domain under the same name.',
+      life: 5000,
+    });
+    await load();
+  },
+});
+
+const {
+  move: mover,
+  open: moveDialogOpen,
+  show: openMoveDialog,
+  close: closeMoveDialog,
+  dialogFailure: moveDialogFailure,
+  pageFailure: movePageFailure,
+  submitting: moveSubmitting,
+} = useMoveDialog({ kind: 'computer', id: () => props.id, onMoved: () => load() });
+
+const { onPage: accountPageFailure } = placeFailure(accountFailure, {
+  belongsHere: (f) => f.op.account.id === props.id,
+});
+const { onPage: resetPageFailure } = placeFailure(resetFailure, {
+  belongsHere: (f) => f.op.computer.id === props.id,
+});
+
+const actionFailure = computed<ObjectActionFailure | null>(() => {
+  const account = accountPageFailure.value;
+  if (account) {
+    const { action, account: c } = account.op;
+    return {
+      summary: `Couldn’t ${action} ${computerName(c)}`,
+      message: account.message,
+      retry: retryAccountAction,
+      dismiss: dismissAccountFailure,
+    };
+  }
+  const reset = resetPageFailure.value;
+  if (reset) {
+    return {
+      summary: `Couldn’t reset the account of ${computerName(reset.op.computer)}`,
+      message: reset.message,
+      retry: retryReset,
+      dismiss: dismissResetFailure,
+    };
+  }
+  return movePageFailure.value;
+});
+
+const accountActionRunning = computed(() => accountActionOn(props.id));
+const busy = computed(
+  () => accountActionRunning.value !== null || resetRunningOn(props.id) || moveSubmitting.value,
+);
+
+const actions = computed<ObjectAction[]>(() => {
+  const c = computer.value;
+  if (!c) return [];
+  // Disabling, resetting or moving a domain controller can take the domain
+  // down; the server refuses them too.
+  const writable = c.writeBlock === null;
+  return [
+    c.enabled
+      ? {
+          label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
+          icon: 'pi-ban',
+          capability: 'write:computer.enableDisable',
+          available: writable,
+          danger: true,
+          disabled: busy.value,
+          run: () => runAccountAction('disable', c),
+        }
+      : {
+          label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
+          icon: 'pi-check',
+          capability: 'write:computer.enableDisable',
+          disabled: busy.value,
+          run: () => runAccountAction('enable', c),
+        },
+    {
+      label: resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
+      icon: 'pi-refresh',
+      capability: 'write:computer.resetAccount',
+      available: writable,
+      danger: true,
+      disabled: busy.value,
+      run: () => askReset(c),
+    },
+    {
+      label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
+      icon: 'pi-folder-open',
+      capability: 'write:computer.move',
+      available: writable,
+      disabled: busy.value,
+      run: openMoveDialog,
+    },
+  ];
+});
+
+const WRITE_BLOCK: Record<ComputerWriteBlock, { label: string; title: string }> = {
+  domain_controller: {
+    label: 'domain controller',
+    title: 'OpenADUC won’t disable, reset or move a domain controller.',
+  },
+  read_only_domain_controller: {
+    label: 'read-only domain controller',
+    title: 'OpenADUC won’t disable, reset or move a domain controller.',
+  },
+  critical_system_object: {
+    label: 'critical',
+    title:
+      'AD marks this computer as a critical system object, so OpenADUC won’t disable, reset or move it.',
+  },
+};
+
 function openManagedBy(): void {
   if (!computer.value?.managedBy?.id) return;
   void router.push({
@@ -66,7 +220,7 @@ function openManagedBy(): void {
 </script>
 
 <template>
-  <Toast />
+  <AppToast />
   <div class="page-inner computer-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
@@ -86,6 +240,9 @@ function openManagedBy(): void {
       :dn="computer.distinguishedName"
       :tabs="tabs"
       fallback-tab="overview"
+      :actions="actions"
+      :actions-busy="busy"
+      :action-failure="actionFailure"
       :refreshing="refreshing"
       :cached-at="computer.freshness.cachedAt"
       @refresh="refreshFromAd"
@@ -96,6 +253,13 @@ function openManagedBy(): void {
         </span>
         <span v-else class="badge badge-red badge-lg" title="disabled">
           <i class="pi pi-ban" /> disabled
+        </span>
+        <span
+          v-if="computer.writeBlock"
+          class="badge badge-violet badge-lg"
+          :title="WRITE_BLOCK[computer.writeBlock].title"
+        >
+          <i class="pi pi-shield" /> {{ WRITE_BLOCK[computer.writeBlock].label }}
         </span>
         <span
           v-if="computer.freshness.isStale"
@@ -212,6 +376,27 @@ function openManagedBy(): void {
         </Card>
       </template>
     </ObjectPageLayout>
+
+    <ConfirmDialog
+      v-if="computer"
+      :visible="resetPending !== null"
+      :title="`Reset the account of ${computerName(computer)}?`"
+      :message="`${computerName(computer)} can’t sign in to the domain until it rejoins under the same name. This can’t be undone.`"
+      confirm-label="Reset account"
+      severity="danger"
+      @update:visible="(v) => !v && cancelReset()"
+      @cancel="cancelReset"
+      @confirm="confirmReset"
+    />
+    <MoveToOuDialog
+      v-if="computer"
+      :visible="moveDialogOpen"
+      :move="mover"
+      kind="computer"
+      :name="computerName(computer)"
+      :failure="moveDialogFailure"
+      @close="closeMoveDialog"
+    />
   </div>
 </template>
 

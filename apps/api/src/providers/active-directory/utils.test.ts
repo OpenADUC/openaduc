@@ -11,6 +11,7 @@ import {
   parseUserAccountControl,
   sidToString,
   bufferToLdapFilterValue,
+  defaultComputerPassword,
 } from './utils.js';
 
 describe('objectGuid', () => {
@@ -171,5 +172,15 @@ describe('encodeUnicodePassword', () => {
     const buf = encodeUnicodePassword('p');
     // Should be 6 bytes: ["][p]["] each 2 bytes LE.
     expect(buf).toEqual(Buffer.from([0x22, 0x00, 0x70, 0x00, 0x22, 0x00]));
+  });
+});
+
+describe('defaultComputerPassword', () => {
+  it('is the computer name without the trailing $, in lowercase', () => {
+    expect(defaultComputerPassword('WS01$')).toBe('ws01');
+  });
+
+  it('keeps only the first 14 characters, as a joining computer does', () => {
+    expect(defaultComputerPassword('FINANCE-LAPTOP7$')).toBe('finance-laptop');
   });
 });
