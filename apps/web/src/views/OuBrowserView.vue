@@ -19,7 +19,9 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import { api } from '../api/index.js';
 import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
-import type { DirectoryOu, OuContentsResponse } from '@openaduc/shared';
+import { useOuContents } from '../design/composables/useOuContents.js';
+import { useOuTree } from '../design/composables/useOuTree.js';
+import type { DirectoryOu } from '@openaduc/shared';
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -30,9 +32,7 @@ const canDeleteOu = computed(() => auth.hasCapability('write:ou.delete'));
 
 // ---- OU tree -------------------------------------------------------------
 
-const ous = ref<DirectoryOu[]>([]);
-const loadingTree = ref(false);
-const treeError = ref<string | null>(null);
+const { ous, loading: loadingTree, error: treeError, load: loadOus } = useOuTree();
 
 // Tracks whether we've already populated `expandedKeys` once. The first
 // successful tree load expands everything so the operator sees the whole
@@ -42,19 +42,10 @@ const treeError = ref<string | null>(null);
 let expandedInitialized = false;
 
 async function loadTree(): Promise<void> {
-  loadingTree.value = true;
-  treeError.value = null;
-  try {
-    const resp = await api.ous.list();
-    ous.value = resp.ous;
-    if (!expandedInitialized && resp.ous.length > 0) {
-      expandAll();
-      expandedInitialized = true;
-    }
-  } catch (err) {
-    treeError.value = err instanceof ApiError ? err.message : 'failed to load OUs';
-  } finally {
-    loadingTree.value = false;
+  await loadOus();
+  if (!expandedInitialized && ous.value.length > 0) {
+    expandAll();
+    expandedInitialized = true;
   }
 }
 
@@ -161,37 +152,21 @@ const selectedOu = computed<DirectoryOu | null>(() => {
 type TabId = 'all' | 'users' | 'groups' | 'computers' | 'policies';
 const activeTab = ref<TabId>('all');
 
-const emptyContents: OuContentsResponse = {
-  users: [],
-  groups: [],
-  computers: [],
-  linkedGroupPolicies: [],
-  inheritedGroupPolicies: [],
-};
-const contents = ref<OuContentsResponse>({ ...emptyContents });
-const loadingContents = ref(false);
-const contentsError = ref<string | null>(null);
+const {
+  contents,
+  loading: loadingContents,
+  error: contentsError,
+  load: loadContents,
+  clear: clearContents,
+} = useOuContents();
 
 const totalGpoCount = computed(
   () => contents.value.linkedGroupPolicies.length + contents.value.inheritedGroupPolicies.length,
 );
 
-async function loadContents(dn: string): Promise<void> {
-  loadingContents.value = true;
-  contentsError.value = null;
-  try {
-    contents.value = await api.ous.contents(dn);
-  } catch (err) {
-    contents.value = { ...emptyContents };
-    contentsError.value = err instanceof ApiError ? err.message : 'failed to load OU contents';
-  } finally {
-    loadingContents.value = false;
-  }
-}
-
 watch(selectedDn, (dn) => {
   if (dn) loadContents(dn);
-  else contents.value = { ...emptyContents };
+  else clearContents();
 });
 
 // ---- Selected OU in the URL ----------------------------------------------

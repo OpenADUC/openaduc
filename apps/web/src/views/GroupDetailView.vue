@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import { useGroupRecord } from '../design/composables/useDirectoryRecords.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -14,7 +14,7 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { api } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
-import type { GroupDetail, GroupMember, UserSummary } from '@openaduc/shared';
+import type { GroupMember, UserSummary } from '@openaduc/shared';
 import LiveBadge from '../design/primitives/LiveBadge.vue';
 import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
@@ -83,11 +83,8 @@ const {
   load,
   refreshing,
   refresh,
-} = useDetailRecord<GroupDetail>({
+} = useGroupRecord({
   id: () => props.id,
-  fetch: async (id) => (await api.groups.get(id)).group,
-  notFoundMessage: 'Group not found',
-  failedMessage: 'Failed to load group',
 });
 useRecordCrumb(
   () => props.id,

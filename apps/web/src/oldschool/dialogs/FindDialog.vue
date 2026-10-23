@@ -5,70 +5,71 @@
      Contacts, and Groups" dialog — we keep the field set small enough to
      feel responsive without re-implementing the saved-query feature. -->
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
-import { api } from '../../api/index.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
+import {
+  useDirectorySearch,
+  type SearchKind,
+} from '../../design/composables/useDirectorySearch.js';
 
 defineProps<{ windowId: number }>();
 defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
+const finder = useDirectorySearch({ pageSize: 100 });
+const { loading } = finder;
 
-const kind = ref<'user' | 'group' | 'computer'>('user');
+type Kind = Exclude<SearchKind, 'ou'>;
+const ALL_KINDS: { kind: Kind; label: string }[] = [
+  { kind: 'user', label: 'Users' },
+  { kind: 'group', label: 'Groups' },
+  { kind: 'computer', label: 'Computers' },
+];
+const kinds = computed(() => ALL_KINDS.filter((k) => finder.canSearch(k.kind)));
+
+const kind = ref<Kind>(kinds.value[0]?.kind ?? 'user');
+watch(kinds, (readable) => {
+  if (readable.length > 0 && !readable.some((k) => k.kind === kind.value)) {
+    kind.value = readable[0]!.kind;
+  }
+});
 const q = ref('');
-const loading = ref(false);
 
 interface Hit {
-  kind: 'user' | 'group' | 'computer';
+  kind: Kind;
   id: string;
   name: string;
   description: string;
 }
-const hits = ref<Hit[]>([]);
+const hits = computed<Hit[]>(() => {
+  const found = finder.results.value;
+  return [
+    ...found.user.map<Hit>((u) => ({
+      kind: 'user',
+      id: u.id,
+      name: u.displayName || u.samAccountName,
+      description: u.email ?? u.userPrincipalName ?? '',
+    })),
+    ...found.group.map<Hit>((g) => ({
+      kind: 'group',
+      id: g.id,
+      name: g.name ?? g.samAccountName ?? '(unnamed)',
+      description: g.description ?? '',
+    })),
+    ...found.computer.map<Hit>((c) => ({
+      kind: 'computer',
+      id: c.id,
+      name: c.name ?? '(unnamed)',
+      description: c.operatingSystem ?? c.dnsHostName ?? '',
+    })),
+  ];
+});
+const failed = computed(() => finder.failed.value.length > 0);
 const selectedId = ref<string | null>(null);
-let searchToken = 0;
 
-async function run(): Promise<void> {
-  const trimmed = q.value.trim();
-  if (!trimmed) {
-    hits.value = [];
-    return;
-  }
-  const token = ++searchToken;
-  loading.value = true;
-  try {
-    if (kind.value === 'user') {
-      const resp = await api.users.search({ q: trimmed, pageSize: 100 });
-      if (token !== searchToken) return;
-      hits.value = resp.rows.map((u) => ({
-        kind: 'user',
-        id: u.id,
-        name: u.displayName || u.samAccountName,
-        description: u.email ?? u.userPrincipalName ?? '',
-      }));
-    } else if (kind.value === 'group') {
-      const resp = await api.groups.search({ q: trimmed, pageSize: 100 });
-      if (token !== searchToken) return;
-      hits.value = resp.rows.map((g) => ({
-        kind: 'group',
-        id: g.id,
-        name: g.name ?? g.samAccountName ?? '(unnamed)',
-        description: g.description ?? '',
-      }));
-    } else {
-      const resp = await api.computers.search({ q: trimmed, pageSize: 100 });
-      if (token !== searchToken) return;
-      hits.value = resp.rows.map((c) => ({
-        kind: 'computer',
-        id: c.id,
-        name: c.name ?? '(unnamed)',
-        description: c.operatingSystem ?? c.dnsHostName ?? '',
-      }));
-    }
-  } finally {
-    if (token === searchToken) loading.value = false;
-  }
+function run(): void {
+  void finder.search(q.value, [kind.value]);
 }
 
 // 300ms debounce on q and immediate refresh on kind change.
@@ -78,7 +79,7 @@ watch(q, () => {
   timer = setTimeout(run, 300);
 });
 watch(kind, () => {
-  hits.value = [];
+  finder.clear();
   if (q.value.trim()) run();
 });
 
@@ -106,9 +107,7 @@ function openHit(h: Hit): void {
       <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
         <label class="label" for="findKind">Find:</label>
         <select id="findKind" class="os-select" v-model="kind">
-          <option value="user">Users</option>
-          <option value="group">Groups</option>
-          <option value="computer">Computers</option>
+          <option v-for="k in kinds" :key="k.kind" :value="k.kind">{{ k.label }}</option>
         </select>
         <label class="label" for="findName">Name:</label>
         <input id="findName" class="os-input" v-model="q" placeholder="Start typing…" />
@@ -117,6 +116,9 @@ function openHit(h: Hit): void {
       <div class="os-listbox" style="margin-top: 14px; min-height: 200px; max-height: 280px">
         <div v-if="loading && hits.length === 0" class="os-listbox-empty">Searching…</div>
         <div v-else-if="!q.trim()" class="os-listbox-empty">Enter a name to search.</div>
+        <div v-else-if="failed && !loading" class="os-listbox-empty os-error">
+          The search failed. Try again.
+        </div>
         <div v-else-if="hits.length === 0" class="os-listbox-empty">No matches.</div>
         <div
           v-for="h in hits"

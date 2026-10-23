@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Form state behind both rename dialogs (the modern one and the Old School
+// The rename behind both rename dialogs (the modern one and the Old School
 // "Rename User" window).
 //
 // Typing a new first or last name fills in the other fields by following
@@ -15,6 +15,9 @@ import {
   type UserDetail,
   type UserRenameRequest,
 } from '@openaduc/shared';
+import { api } from '../../api/index.js';
+import { useAuthStore } from '../../stores/auth.js';
+import { errorMessage } from '../lib/errorMessage.js';
 
 export const DERIVED_FIELDS: readonly RenameField[] = [
   'displayName',
@@ -24,13 +27,16 @@ export const DERIVED_FIELDS: readonly RenameField[] = [
   'email',
 ];
 
-export function useRenameForm() {
+export function useUserRename(options: { onRenamed: () => void | Promise<void> }) {
+  const auth = useAuthStore();
   const user = ref<UserDetail | null>(null);
   const original = ref<RenameIdentity>(emptyIdentity());
   const form = reactive<RenameIdentity>(emptyIdentity());
   const touched = ref(new Set<RenameField>());
   const unresolved = ref(new Set<RenameField>());
   const keepOldEmailAsAlias = ref(true);
+  const submitting = ref(false);
+  const error = ref<string | null>(null);
 
   function reset(u: UserDetail | null): void {
     user.value = u;
@@ -50,6 +56,7 @@ export function useRenameForm() {
     touched.value = new Set();
     unresolved.value = new Set();
     keepOldEmailAsAlias.value = true;
+    error.value = null;
   }
 
   function setName(key: 'givenName' | 'surname', value: string | undefined): void {
@@ -103,6 +110,27 @@ export function useRenameForm() {
     return body as UserRenameRequest;
   }
 
+  const ready = () => !!user.value && changedKeys.value.length > 0 && !submitting.value;
+
+  function submit(): void {
+    if (ready()) auth.requireStepUp(commit, 'Renaming a user requires step-up authentication.');
+  }
+
+  async function commit(): Promise<void> {
+    if (!ready()) return;
+    submitting.value = true;
+    error.value = null;
+    try {
+      await api.users.rename(user.value!.id, buildRequest());
+      await options.onRenamed();
+    } catch (err) {
+      if (auth.retryAfterStepUp(err, commit)) return;
+      error.value = errorMessage(err, 'Rename failed');
+    } finally {
+      submitting.value = false;
+    }
+  }
+
   return {
     original,
     form,
@@ -115,7 +143,9 @@ export function useRenameForm() {
     changedKeys,
     logonChanging,
     offerKeepAlias,
-    buildRequest,
+    submitting,
+    error,
+    submit,
   };
 }
 

@@ -2,19 +2,16 @@
 <!--
   Rename a person: name parts, display name, the directory name (cn), both
   logon names and the primary email in one change. Suggestion behaviour
-  lives in useRenameForm.
+  lives in useUserRename.
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { watch } from 'vue';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import type { RenameField, UserDetail } from '@openaduc/shared';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
-import { useRenameForm } from '../composables/useRenameForm.js';
-import { useAuthStore } from '../../stores/auth.js';
+import { useUserRename } from '../composables/useUserRename.js';
 
 const props = defineProps<{
   visible: boolean;
@@ -51,37 +48,23 @@ const {
   changedKeys,
   logonChanging,
   offerKeepAlias,
-  buildRequest,
-} = useRenameForm();
-const auth = useAuthStore();
-const submitting = ref(false);
-const error = ref<string | null>(null);
+  submitting,
+  error,
+  submit,
+} = useUserRename({
+  onRenamed: () => {
+    emit('renamed');
+    emit('update:visible', false);
+  },
+});
 
 watch(
   () => props.visible,
   (open) => {
-    if (!open) return;
-    reset(props.user);
-    error.value = null;
+    if (open) reset(props.user);
   },
   { immediate: true },
 );
-
-async function submit(): Promise<void> {
-  if (!props.user || changedKeys.value.length === 0 || submitting.value) return;
-  submitting.value = true;
-  error.value = null;
-  try {
-    await api.users.rename(props.user.id, buildRequest());
-    emit('renamed');
-    emit('update:visible', false);
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, submit)) return;
-    error.value = err instanceof ApiError ? err.message : String(err);
-  } finally {
-    submitting.value = false;
-  }
-}
 
 function close(): void {
   if (!submitting.value) emit('update:visible', false);

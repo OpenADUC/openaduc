@@ -1,23 +1,19 @@
 <!-- SPDX-License-Identifier: BUSL-1.1
      Classic "Rename User" dialog: full name, first/last, display name and
      both logon names, plus the email the modern dialog also covers. Same
-     form logic as the modern dialog (useRenameForm), so typing a new name
+     workflow as the modern dialog (useUserRename), so typing a new name
      fills the rest in by the account's existing pattern. -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
 import WinDialog from './WinDialog.vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
-import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
-import { useRenameForm } from '../../design/composables/useRenameForm.js';
+import { useUserRecord } from '../../design/composables/useDirectoryRecords.js';
+import { useUserRename } from '../../design/composables/useUserRename.js';
 import type { RenameField } from '@openaduc/shared';
 
 const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
-const auth = useAuthStore();
 const store = useOldSchool();
 const toast = useToast();
 const {
@@ -32,11 +28,23 @@ const {
   changedKeys,
   logonChanging,
   offerKeepAlias,
-  buildRequest,
-} = useRenameForm();
-
-const loading = ref(true);
-const err = ref<string | null>(null);
+  submitting,
+  error,
+  submit,
+} = useUserRename({
+  onRenamed: () => {
+    toast.add({
+      severity: 'success',
+      summary: 'User renamed.',
+      detail: `${original.value.samAccountName ?? 'The user'} has been renamed.`,
+      life: 4000,
+    });
+    store.bumpData();
+    emit('close');
+  },
+});
+const { loading, error: loadError, load } = useUserRecord({ id: () => props.id, onLoaded: reset });
+void load();
 
 const FIELDS: { key: RenameField; label: string; max: number }[] = [
   { key: 'cn', label: 'Full name:', max: 64 },
@@ -46,43 +54,10 @@ const FIELDS: { key: RenameField; label: string; max: number }[] = [
   { key: 'email', label: 'E-mail:', max: 256 },
 ];
 
-onMounted(async () => {
-  try {
-    const { user } = await api.users.get(props.id);
-    reset(user);
-  } catch (e) {
-    err.value = e instanceof ApiError ? e.message : (e as Error).message;
-  } finally {
-    loading.value = false;
-  }
-});
-
 function onInput(key: RenameField | 'givenName' | 'surname', ev: Event): void {
   const value = (ev.target as HTMLInputElement).value;
   if (key === 'givenName' || key === 'surname') setName(key, value);
   else setField(key, value);
-}
-
-function submit(): void {
-  if (changedKeys.value.length === 0) return;
-  err.value = null;
-  const apply = async (): Promise<void> => {
-    try {
-      await api.users.rename(props.id, buildRequest());
-      toast.add({
-        severity: 'success',
-        summary: 'User renamed.',
-        detail: `${original.value.samAccountName ?? 'The user'} has been renamed.`,
-        life: 4000,
-      });
-      store.bumpData();
-      emit('close');
-    } catch (e) {
-      if (auth.retryAfterStepUp(e, apply)) return;
-      err.value = e instanceof ApiError ? e.message : (e as Error).message;
-    }
-  };
-  auth.requireStepUp(apply, 'Renaming a user requires step-up authentication.');
 }
 </script>
 
@@ -92,7 +67,7 @@ function submit(): void {
     title="Rename User"
     icon="user"
     hide-apply
-    :can-ok="!loading && changedKeys.length > 0"
+    :can-ok="!loading && changedKeys.length > 0 && !submitting"
     @ok="submit"
     @cancel="emit('close')"
     @close="emit('close')"
@@ -105,6 +80,7 @@ function submit(): void {
           <input
             id="rn-given"
             class="os-input"
+            :disabled="submitting"
             maxlength="64"
             :value="form.givenName ?? ''"
             @input="onInput('givenName', $event)"
@@ -113,6 +89,7 @@ function submit(): void {
           <input
             id="rn-sn"
             class="os-input"
+            :disabled="submitting"
             maxlength="64"
             :value="form.surname ?? ''"
             @input="onInput('surname', $event)"
@@ -122,6 +99,7 @@ function submit(): void {
             <input
               :id="`rn-${f.key}`"
               class="os-input"
+              :disabled="submitting"
               :class="{ 'rn-unresolved': unresolved.has(f.key) }"
               :maxlength="f.max"
               spellcheck="false"
@@ -139,11 +117,13 @@ function submit(): void {
         </div>
 
         <label v-if="offerKeepAlias" class="os-check" style="margin-top: 10px">
-          <input v-model="keepOldEmailAsAlias" type="checkbox" /> Keep {{ original.email }} as an
-          e-mail alias
+          <input v-model="keepOldEmailAsAlias" type="checkbox" :disabled="submitting" /> Keep
+          {{ original.email }} as an e-mail alias
         </label>
 
-        <div v-if="err" class="os-error" style="margin-top: 12px">{{ err }}</div>
+        <div v-if="loadError || error" class="os-error" style="margin-top: 12px">
+          {{ loadError ?? error }}
+        </div>
         <div v-else-if="unresolved.size > 0" class="os-info" style="margin-top: 12px">
           Highlighted fields didn’t follow a pattern from the old name and were left as they were.
         </div>

@@ -152,6 +152,22 @@ describe('quick search', () => {
     );
   });
 
+  it('fetches the OU list once per opening, however the text changes', async () => {
+    const { search } = await searchFor('sal', ALL);
+    const input = search.find('input');
+    for (const text of ['s', 'sa', 'sales']) {
+      await input.setValue(text);
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    expect(api.ous.list).toHaveBeenCalledOnce();
+
+    await search.find('.gs-close').trigger('click');
+    await search.find('.gs-trigger').trigger('click');
+    await search.find('input').setValue('sal');
+    await vi.advanceTimersByTimeAsync(250);
+    expect(api.ous.list).toHaveBeenCalledTimes(2);
+  });
+
   it('drops a search that answers after the panel closed', async () => {
     let answer!: (v: unknown) => void;
     api.users.search.mockImplementationOnce(() => new Promise((r) => (answer = r)) as never);
