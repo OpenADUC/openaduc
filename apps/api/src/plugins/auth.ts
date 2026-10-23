@@ -14,8 +14,10 @@ export const SESSION_COOKIE_NAME = 'openaduc_sid';
  *
  * `directory` says which directory the route acts on: `caller` (the
  * session's, via req.directoryId), `param` (the `:id` in the URL, which must
- * be the session's; other ids get 404) or `none` (not one directory's data,
- * e.g. installation-wide configuration).
+ * be the session's) or `none` (not one directory's data, e.g.
+ * installation-wide configuration). Only `param` is enforced at runtime
+ * (other ids get 404); `caller` and `none` are declarations that
+ * routes/routePolicy.test.ts reasons about, and the handler must honour.
  */
 export type RoutePolicy =
   | { public: true }
