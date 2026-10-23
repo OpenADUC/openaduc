@@ -176,9 +176,19 @@ describe('the later setup steps', () => {
     const body = { passwordExpiringDays: 14, staleLogonDays: 90 };
     expectOk(await admin.delete('/api/auth/step-up'), 'end step-up');
 
-    const refused = await admin.post('/api/setup/policy', body);
-    expect(refused.statusCode).toBe(403);
-    expect(refused.json()).toMatchObject({ error: { code: 'step_up_required' } });
+    for (const [url, payload] of [
+      ['/api/setup/service-account', { username: DC.serviceAccount, password: DC.password }],
+      ['/api/setup/policy', body],
+      ['/api/setup/run-initial-sync', {}],
+      ['/api/setup/retry-task', {}],
+    ] as const) {
+      const res = await admin.post(url, payload);
+      expect({ url, status: res.statusCode, code: res.json().error?.code }).toEqual({
+        url,
+        status: 403,
+        code: 'step_up_required',
+      });
+    }
 
     await admin.stepUp();
     expect((await admin.post('/api/setup/policy', body)).statusCode).toBe(200);
