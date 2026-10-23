@@ -296,6 +296,19 @@ export const resetPasswordRequestSchema = z.object({
 });
 export type ResetPasswordRequest = z.infer<typeof resetPasswordRequestSchema>;
 
+// When the account stops working (AD `accountExpires`), or null for never.
+// A date already past expires the account at once, as ADUC allows.
+export const accountExpiryRequestSchema = z
+  .object({
+    expiresAt: z.iso
+      .datetime({ offset: true })
+      // FILETIME counts from 1601.
+      .refine((v) => Date.parse(v) > Date.UTC(1601, 0, 1), { message: 'must be after 1601' })
+      .nullable(),
+  })
+  .strict();
+export type AccountExpiryRequest = z.infer<typeof accountExpiryRequestSchema>;
+
 export const groupMembershipChangeSchema = z.object({
   groupId: z.guid(),
 });

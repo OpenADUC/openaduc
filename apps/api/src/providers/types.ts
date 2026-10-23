@@ -330,7 +330,6 @@ export interface UserAttributePatch {
   st?: string | null | undefined;
   postalCode?: string | null | undefined;
   managerDn?: string | null | undefined;
-  accountExpiresAt?: Date | null | undefined;
   // Multi-valued attributes — null or empty array clears, non-empty replaces.
   otherMailbox?: string[] | null | undefined;
   otherHomePhone?: string[] | null | undefined;
@@ -431,6 +430,12 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult>;
   enableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
+  /** Set `accountExpires` to when the account stops working, or null for never. */
+  setAccountExpiry(
+    userId: DirectoryObjectIdentifier,
+    expiresAt: Date | null,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
   updateUserAttributes(
     userId: DirectoryObjectIdentifier,

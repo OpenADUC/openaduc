@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import {
+  accountExpiryRequestSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -872,6 +873,64 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
     },
     handler: async (req) => toggleEnabled(req, app, false),
+  });
+
+  // ---- POST /api/users/:id/account-expiry ------------------------------
+  // Expiry decides whether the account works, as enabling does: AD keeps
+  // accountExpires and userAccountControl in the same property set
+  // (Account Restrictions), so it takes the same capability.
+  app.post('/api/users/:id/account-expiry', {
+    config: {
+      policy: { capability: 'write:user.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) => {
+      const { id } = idParamSchema.parse(req.params);
+      const body = accountExpiryRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
+      if (!beforeRefresh) throw NotFound('user not found');
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'user.accountExpiry.set',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'user',
+          targetId: beforeRefresh.user.objectGuid,
+          targetDn: beforeRefresh.user.distinguishedName,
+          metadata: { expiresAt: body.expiresAt },
+        },
+        async () => {
+          const r = await provider.setAccountExpiry(
+            { kind: 'objectGuid', value: id },
+            body.expiresAt === null ? null : new Date(body.expiresAt),
+            ctx(actor, req),
+          );
+          return {
+            ok: r.ok,
+            before: r.before ?? null,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+          };
+        },
+      );
+
+      if (!result.ok) {
+        if (result.errorCode === 'permission_denied') {
+          throw app.httpErrors.forbidden('directory rejected the change');
+        }
+        throw app.httpErrors.badGateway(
+          `setting account expiry failed: ${result.errorCode ?? 'unknown'}`,
+        );
+      }
+      await app.services.userLiveRefresh.refresh(provider, id);
+      return { ok: true, before: result.before, after: result.after };
+    },
   });
 
   // ---- POST /api/users/:id/reset-password ------------------------------
