@@ -479,7 +479,8 @@ function pwdExpiryLabel(u: UserSummary): string {
   if (!u.passwordExpiresAt) return '—';
   const ms = new Date(u.passwordExpiresAt).getTime() - Date.now();
   const days = Math.round(ms / (24 * 60 * 60 * 1000));
-  if (days < 0) return `Exp ${Math.abs(days)}d ago`;
+  // The column says what expired.
+  if (days < 0) return `${Math.abs(days)}d ago`;
   if (days === 0) return 'Today';
   return `${days}d`;
 }
@@ -631,11 +632,22 @@ onMounted(() => {
               :photo-url="rowPhotoUrl(data)"
             />
             <div class="user-cell-stack">
-              <div class="user-name">{{ data.displayName ?? data.samAccountName }}</div>
-              <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
-              <div v-if="bulkErrors.has(data.id)" class="user-bulk-error" role="alert">
+              <div class="user-name" :title="data.displayName ?? data.samAccountName">
+                {{ data.displayName ?? data.samAccountName }}
+              </div>
+              <!-- A failed bulk action takes the second line, so the row
+                   keeps the list's row height. -->
+              <div
+                v-if="bulkErrors.has(data.id)"
+                class="user-bulk-error"
+                role="alert"
+                :title="bulkErrors.get(data.id)"
+              >
                 <i class="pi pi-exclamation-circle" aria-hidden="true" />
-                {{ bulkErrors.get(data.id) }}
+                <span>{{ bulkErrors.get(data.id) }}</span>
+              </div>
+              <div v-else class="user-meta" :title="data.userPrincipalName ?? data.samAccountName">
+                {{ data.userPrincipalName ?? data.samAccountName }}
               </div>
             </div>
           </div>
@@ -651,10 +663,10 @@ onMounted(() => {
           <span
             class="badge"
             :class="`badge-${pwdExpiryTone(data)}`"
-            :title="data.passwordNeverExpires ? 'DONT_EXPIRE_PASSWORD set' : undefined"
+            :title="data.passwordNeverExpires ? 'DONT_EXPIRE_PASSWORD set' : pwdExpiryLabel(data)"
           >
             <span v-if="pwdHasDot(data)" class="badge-dot" />
-            {{ pwdExpiryLabel(data) }}
+            <span>{{ pwdExpiryLabel(data) }}</span>
           </span>
         </template>
       </Column>
@@ -952,9 +964,6 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .user-meta {
@@ -1013,9 +1022,22 @@ onMounted(() => {
   overflow: hidden;
 }
 
-:deep(.users-table td > .cell-muted) {
+:deep(.users-table td > .cell-muted),
+:deep(.users-table td > .cell-mono) {
   display: block;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Badges never cut off: one too long for its column ends in an ellipsis,
+   with the full text in its title. */
+:deep(.users-table td > .badge) {
+  max-width: 100%;
+}
+
+:deep(.users-table td > .badge > span:last-child) {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1114,9 +1136,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 2px;
-  font-size: 12px;
+  margin-top: 1px;
+  font-size: 11px;
   color: var(--red, #dc2626);
+  white-space: nowrap;
+}
+
+.user-bulk-error > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .confirm-text {
   margin: 0 0 8px;
