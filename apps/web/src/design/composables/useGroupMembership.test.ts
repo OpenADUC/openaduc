@@ -23,7 +23,7 @@ vi.mock('../../api/index.js', () => ({
   api: { users: { addGroup, removeGroup }, auth: { stepUp } },
 }));
 
-const { useGroupMembership } = await import('./useGroupMembership.js');
+const { membershipOf, useGroupMembership } = await import('./useGroupMembership.js');
 const { useAuthStore } = await import('../../stores/auth.js');
 
 const janeInSales = { userId: 'u1', userLabel: 'Jane Doe', groupId: 'g1', groupLabel: 'Sales' };
@@ -43,6 +43,22 @@ describe('useGroupMembership', () => {
     vi.clearAllMocks();
     addGroup.mockResolvedValue({ ok: true });
     removeGroup.mockResolvedValue({ ok: true });
+  });
+
+  it('labels a membership with the first name each side has', () => {
+    const group = { id: 'g1', name: '', samAccountName: null, distinguishedName: 'CN=Sales' };
+    expect(membershipOf({ id: 'u1', displayName: null, samAccountName: 'jdoe' }, group)).toEqual({
+      userId: 'u1',
+      userLabel: 'jdoe',
+      groupId: 'g1',
+      groupLabel: 'CN=Sales',
+    });
+    expect(
+      membershipOf(
+        { id: 'u1', displayName: 'Jane Doe', samAccountName: 'jdoe' },
+        { ...group, samAccountName: 'sales' },
+      ),
+    ).toMatchObject({ userLabel: 'Jane Doe', groupLabel: 'sales' });
   });
 
   it('adds the user to the group', async () => {

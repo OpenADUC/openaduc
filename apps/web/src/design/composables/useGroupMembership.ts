@@ -14,6 +14,23 @@ export interface Membership {
 
 export type MembershipChange = 'add' | 'remove';
 
+export function membershipOf(
+  user: { id: string; displayName: string | null; samAccountName: string },
+  group: {
+    id: string;
+    name: string | null;
+    samAccountName?: string | null;
+    distinguishedName: string;
+  },
+): Membership {
+  return {
+    userId: user.id,
+    userLabel: user.displayName || user.samAccountName,
+    groupId: group.id,
+    groupLabel: group.name || group.samAccountName || group.distinguishedName,
+  };
+}
+
 /** Add a user to a group or remove them from one, one change at a time. */
 export function useGroupMembership(options: {
   onChanged: (change: MembershipChange, membership: Membership) => void | Promise<void>;
