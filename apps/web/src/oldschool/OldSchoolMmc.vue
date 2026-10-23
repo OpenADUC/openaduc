@@ -28,6 +28,7 @@ import GroupPropertiesDialog from './dialogs/GroupPropertiesDialog.vue';
 import ComputerPropertiesDialog from './dialogs/ComputerPropertiesDialog.vue';
 import ResetPasswordDialog from './dialogs/ResetPasswordDialog.vue';
 import MoveDialog from './dialogs/MoveDialog.vue';
+import ResetComputerDialog from './dialogs/ResetComputerDialog.vue';
 import RenameUserDialog from './dialogs/RenameUserDialog.vue';
 import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
 import NewGroupDialog from './dialogs/NewGroupDialog.vue';
@@ -410,6 +411,13 @@ function exitOldSchool(): void {
         v-else-if="w.dialog.kind === 'move'"
         :window-id="w.id"
         :account="w.dialog.account"
+        :id="w.dialog.id"
+        :label="w.dialog.label"
+        @close="store.closeWindow(w.id)"
+      />
+      <ResetComputerDialog
+        v-else-if="w.dialog.kind === 'reset-computer'"
+        :window-id="w.id"
         :id="w.dialog.id"
         :label="w.dialog.label"
         @close="store.closeWindow(w.id)"

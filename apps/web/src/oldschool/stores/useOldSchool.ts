@@ -30,6 +30,7 @@ export type DialogSpec =
   | { kind: 'new-group'; parentDn: string }
   | { kind: 'delete-group'; id: string; label: string }
   | { kind: 'move'; account: AccountKind; id: string; label: string }
+  | { kind: 'reset-computer'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | { kind: 'message'; title: string; message: string }
   | { kind: 'about' }
@@ -83,6 +84,7 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
     case 'find':
       return { width: 580, height: 500 };
     case 'message':
+    case 'reset-computer':
       return { width: 420, height: 220 };
     case 'about':
       return { width: 460, height: 260 };
