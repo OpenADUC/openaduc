@@ -53,6 +53,7 @@ import {
   withFailover,
 } from './client.js';
 import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
+import { withAllMembers } from './memberRange.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
 import {
@@ -406,7 +407,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         explicitBufferAttributes: BINARY_ATTRS,
         paged: { pageSize: query.pageSize ?? 200 },
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -426,7 +427,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         attributes: GROUP_ATTRS,
         explicitBufferAttributes: BINARY_ATTRS,
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -486,7 +487,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         attributes: GROUP_ATTRS,
         explicitBufferAttributes: BINARY_ATTRS,
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -577,7 +578,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     const filter = input.modifiedSince
       ? `(&${GROUP_FILTER_BASE}(whenChanged>=${formatGeneralizedTime(input.modifiedSince)}))`
       : GROUP_FILTER_BASE;
-    yield* this.streamSearch(filter, GROUP_ATTRS, input.pageSize ?? 500, normalizeGroup);
+    yield* this.streamSearch(
+      filter,
+      GROUP_ATTRS,
+      input.pageSize ?? 500,
+      normalizeGroup,
+      withAllMembers,
+    );
   }
 
   async *syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer> {
@@ -1927,9 +1934,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   private async findGroupEntry(
     client: Client,
     identifier: DirectoryObjectIdentifier,
+    attributes: readonly string[] = GROUP_ATTRS,
   ): Promise<Entry | null> {
     const filter = identifierToFilter(identifier, GROUP_FILTER_BASE);
-    return this.searchOne(client, this.config.baseDn, filter, GROUP_ATTRS);
+    const entry = await this.searchOne(client, this.config.baseDn, filter, [...attributes]);
+    return entry ? withAllMembers(client, entry) : null;
   }
 
   private async findComputerEntry(
@@ -1988,6 +1997,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     attributes: string[],
     pageSize: number,
     map: (e: Entry) => T,
+    complete?: (client: Client, e: Entry) => Promise<Entry>,
   ): AsyncIterable<T> {
     // Yield each page as it arrives, so memory is bounded by the page size
     // rather than the directory size (users carry photos). Failover happens
@@ -2006,7 +2016,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         paged: { pageSize },
       });
       for await (const page of pages) {
-        for (const entry of page.searchEntries) yield map(entry);
+        for (const entry of page.searchEntries) {
+          yield map(complete ? await complete(client, entry) : entry);
+        }
       }
     } finally {
       await client.unbind().catch(() => undefined);
@@ -2015,6 +2027,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 }
 
 // ---- Module-private helpers ---------------------------------------------
+
+/** Normalize groups read in one search, with every member of the large ones. */
+async function normalizeGroups(client: Client, entries: Entry[]): Promise<DirectoryGroup[]> {
+  const groups: DirectoryGroup[] = [];
+  for (const entry of entries) groups.push(normalizeGroup(await withAllMembers(client, entry)));
+  return groups;
+}
 
 function looksLikeUpn(s: string): boolean {
   return s.includes('@') && !s.includes('=');
