@@ -29,10 +29,10 @@ import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { lastDayOf } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
 import {
+  describeBlocker,
   lockoutEnd,
   signInBlockers,
   signInFix,
-  type SignInBlocker,
   type SignInFix,
 } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
@@ -613,18 +613,10 @@ function runFix(fix: SignInFix): void {
   }
 }
 
-const BADGE_KIND: Record<SignInBlocker['kind'], UserStatusKind> = {
-  disabled: 'disabled',
-  locked: 'locked',
-  'password-expired': 'pwd-expired',
-  'account-expired': 'expired',
-  'must-change-password': 'pwd-must-change',
-};
-
 // The badge names the same condition the status line leads with.
 const badgeKind = computed<UserStatusKind>(() => {
   const top = blockers.value[0];
-  if (top) return BADGE_KIND[top.kind];
+  if (top) return describeBlocker(top).badge;
   return user.value ? userStatus(user.value) : 'active';
 });
 

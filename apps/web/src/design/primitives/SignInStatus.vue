@@ -14,16 +14,8 @@ const props = defineProps<{
   lastLogonAt: UserDetail['lastLogonAt'];
 }>();
 
-const ICONS: Record<SignInBlocker['kind'], string> = {
-  disabled: 'pi-ban',
-  locked: 'pi-lock',
-  'password-expired': 'pi-key',
-  'account-expired': 'pi-calendar-times',
-  'must-change-password': 'pi-key',
-};
-
 const conditions = computed(() =>
-  props.blockers.map((b) => ({ kind: b.kind, icon: ICONS[b.kind], ...describeBlocker(b) })),
+  props.blockers.map((b) => ({ kind: b.kind, ...describeBlocker(b) })),
 );
 
 const lastSignIn = computed(() =>
@@ -50,7 +42,6 @@ const lastSignIn = computed(() =>
     <div v-else class="sign-in-condition is-top">
       <i class="pi pi-check-circle" aria-hidden="true" />
       <span class="sign-in-condition-title">Can sign in</span>
-      <!-- lastLogonTimestamp replicates lazily, so it can trail the real sign-in. -->
       <span
         class="sign-in-condition-detail"
         title="From lastLogonTimestamp, which AD updates only every 9 to 14 days"
