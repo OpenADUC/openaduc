@@ -1,0 +1,128 @@
+// @vitest-environment happy-dom
+// SPDX-License-Identifier: BUSL-1.1
+import { createPinia, setActivePinia } from 'pinia';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { DirectoryPolicy } from '@openaduc/shared';
+import { ApiError } from '../../api/client.js';
+import { aUserDetail } from '../../test/userDetail.js';
+
+const policy: DirectoryPolicy = {
+  lockoutDurationMinutes: 0,
+  lockoutThreshold: 5,
+  lockoutObservationMinutes: 30,
+  maxPwdAgeDays: 42,
+  minPwdLength: 12,
+  pwdHistoryLength: 24,
+  complexityRequired: true,
+  fetchedAt: '2026-01-01T00:00:00.000Z',
+};
+
+const get = vi.fn();
+const resetPassword = vi.fn();
+const policyFetch = vi.fn(async () => ({ policy }));
+const stepUp = vi.fn(async () => ({
+  elevated: {
+    active: true,
+    idleExpiresAt: '2999-01-01T00:15:00.000Z',
+    absoluteExpiresAt: '2999-01-01T04:00:00.000Z',
+  },
+}));
+vi.mock('../../api/index.js', () => ({
+  api: { users: { get, resetPassword }, directories: { policy: policyFetch }, auth: { stepUp } },
+}));
+
+const { usePasswordReset } = await import('./usePasswordReset.js');
+const { useAuthStore } = await import('../../stores/auth.js');
+
+function setup() {
+  setActivePinia(createPinia());
+  useAuthStore().actor = { directoryId: 1, elevated: { active: false } } as never;
+  const onReset = vi.fn();
+  return { reset: usePasswordReset({ onReset }), onReset };
+}
+
+describe('usePasswordReset', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetPassword.mockResolvedValue({ ok: true });
+  });
+
+  it('offers to unlock a locked account, ticked, and unlocks it in the same request', async () => {
+    const { reset, onReset } = setup();
+    await reset.load(aUserDetail({ locked: true }));
+    expect(reset.offerUnlock.value).toBe(true);
+    expect(reset.alsoUnlock.value).toBe(true);
+
+    reset.password.value = 'Correct-Horse-9';
+    await reset.submit();
+
+    expect(resetPassword).toHaveBeenCalledOnce();
+    expect(resetPassword).toHaveBeenCalledWith('u1', {
+      newPassword: 'Correct-Horse-9',
+      forceChangeAtNextLogin: true,
+      unlock: true,
+    });
+    expect(onReset).toHaveBeenCalledWith({ unlocked: true, forceChangeAtNextLogin: true });
+  });
+
+  it('doesn’t offer to unlock an account that isn’t locked', async () => {
+    const { reset } = setup();
+    await reset.load(aUserDetail({ locked: false }));
+    expect(reset.offerUnlock.value).toBe(false);
+
+    reset.alsoUnlock.value = true;
+    reset.password.value = 'Correct-Horse-9';
+    await reset.submit();
+    expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));
+  });
+
+  it('reads the account by id, for a view that only has the id', async () => {
+    get.mockResolvedValue({ user: aUserDetail({ locked: true }) });
+    const { reset } = setup();
+    await reset.load('u1');
+    expect(get).toHaveBeenCalledWith('u1');
+    expect(reset.alsoUnlock.value).toBe(true);
+  });
+
+  it('checks against the domain’s policy and generates a password that passes it', async () => {
+    const { reset } = setup();
+    await reset.load(aUserDetail());
+
+    reset.password.value = 'Short-1a';
+    expect(reset.acceptable.value).toBe(false);
+    await reset.submit();
+    expect(resetPassword).not.toHaveBeenCalled();
+
+    reset.generate();
+    expect(reset.password.value.length).toBeGreaterThanOrEqual(12);
+    expect(reset.acceptable.value).toBe(true);
+    expect(reset.shown.value).toBe(true);
+    expect(reset.historyNote.value).toContain('24');
+  });
+
+  it('finishes the reset after the step-up its submit prompts', async () => {
+    const { reset, onReset } = setup();
+    await reset.load(aUserDetail({ locked: true }));
+    reset.password.value = 'Correct-Horse-9';
+    resetPassword.mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'));
+
+    await reset.submit();
+    expect(reset.error.value).toBeNull();
+    expect(onReset).not.toHaveBeenCalled();
+
+    await useAuthStore().stepUp('pw');
+    await vi.waitFor(() => expect(onReset).toHaveBeenCalledOnce());
+    expect(resetPassword).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows why the directory refused the password', async () => {
+    const { reset, onReset } = setup();
+    await reset.load(aUserDetail());
+    reset.password.value = 'Correct-Horse-9';
+    resetPassword.mockRejectedValueOnce(new ApiError(400, 'bad_request', 'directory rejected'));
+
+    await reset.submit();
+    expect(reset.error.value).toBe('directory rejected');
+    expect(onReset).not.toHaveBeenCalled();
+  });
+});
