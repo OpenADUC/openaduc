@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { aUserDetail } from '../../test/userDetail.js';
+import { ApiError } from '../../api/client.js';
 
 const SALES = 'OU=Sales,DC=corp,DC=example';
 const STAFF = 'OU=Staff,OU=Sales,DC=corp,DC=example';
@@ -90,5 +91,44 @@ describe('the Old School move dialog', () => {
     expect(api.users.move).toHaveBeenCalledWith('u1', { targetOuDn: SALES });
     expect(oldSchool.dataVersion).toBe(version + 1);
     expect(dialog.emitted('close')).toHaveLength(1);
+  });
+
+  it('says in a message box why a move failed, and stays open to try again', async () => {
+    api.users.move.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const { dialog, auth, oldSchool } = await openMove();
+    await auth.stepUp('pw');
+    await dialog
+      .findAll('.os-listbox-row')
+      .find((r) => r.text().includes('Sales'))!
+      .trigger('click');
+
+    await ok(dialog).trigger('click');
+    await flushPromises();
+    expect(oldSchool.windows.at(-1)!.dialog).toEqual({
+      kind: 'message',
+      title: 'Active Directory Domain Services',
+      message: 'Windows cannot move object Jane Doe because:\nDC unreachable',
+    });
+    expect(dialog.emitted('close')).toBeUndefined();
+  });
+
+  it('names where the user went, and its Undo moves them back', async () => {
+    const { dialog, auth } = await openMove();
+    await auth.stepUp('pw');
+    await dialog
+      .findAll('.os-listbox-row')
+      .find((r) => r.text().includes('Sales'))!
+      .trigger('click');
+    await ok(dialog).trigger('click');
+    await flushPromises();
+
+    const moved = toast.add.mock.calls.at(-1)![0] as { summary: string; undo: () => void };
+    expect(moved.summary).toBe('Moved Jane Doe to Sales.');
+    api.users.get.mockResolvedValueOnce({
+      user: aUserDetail({ distinguishedName: `CN=Jane Doe,${SALES}` }),
+    });
+    moved.undo();
+    await flushPromises();
+    expect(api.users.move).toHaveBeenLastCalledWith('u1', { targetOuDn: STAFF });
   });
 });

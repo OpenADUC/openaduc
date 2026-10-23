@@ -14,10 +14,14 @@ import { useOldSchool } from '../stores/useOldSchool.js';
 import { useUserRecord } from '../../design/composables/useDirectoryRecords.js';
 import type { UserAttribute } from '../../design/composables/useUserAttributeEdit.js';
 import { useUserChangesApply } from '../../design/composables/useUserChangesApply.js';
-import { membershipOf, useGroupMembership } from '../../design/composables/useGroupMembership.js';
+import {
+  membershipChangeText,
+  membershipDoneText,
+  membershipOf,
+  useGroupMembership,
+} from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
-import { membershipChanged, membershipFailed } from '../membershipText.js';
 
 const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -167,13 +171,19 @@ const selectedMembership = computed(
 );
 // Unlike ADUC, Remove doesn't ask first: the toast offers Undo instead.
 const { pending: membershipPending, remove: removeMembership } = useGroupMembership({
-  onChanged: (change, m, undo) => {
+  onChanged: (change, m, offer) => {
     toast.add(
-      undoable({ severity: 'success', summary: membershipChanged(change, m), life: 2500 }, undo),
+      undoable(
+        { severity: 'success', summary: `${membershipDoneText(change, m)}.`, life: 2500 },
+        offer,
+      ),
     );
     store.bumpData();
   },
-  onFailed: (change, m, message) => store.reportError(membershipFailed(change, m, message)),
+  onFailed: ({ op: { change, membership }, message }) =>
+    store.reportError(
+      `Windows cannot ${membershipChangeText(change, membership)} because:\n${message}`,
+    ),
 });
 
 function removeSelectedMembership(): void {

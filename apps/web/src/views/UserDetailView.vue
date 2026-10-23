@@ -45,11 +45,16 @@ import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
 import { useUserMove } from '../design/composables/useUserMove.js';
 import {
+  membershipChangeText,
+  membershipDoneText,
   membershipOf,
   useGroupMembership,
   type Membership,
   type MembershipChange,
+  type MembershipFailure,
 } from '../design/composables/useGroupMembership.js';
+import { placeFailure } from '../design/lib/failurePlacement.js';
+import type { UndoOffer } from '../design/lib/undoableWrite.js';
 import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
   useUserAttributeEdit,
@@ -475,32 +480,35 @@ const {
   retry: retryAccountAction,
   dismiss: dismissAccountFailure,
 } = useAccountActions<UserDetail>({
-  onDone: async (action, u, undo) => {
+  onDone: async (action, u, offer) => {
     toast.add(
       undoable(
         {
           severity: 'success',
-          summary: ACCOUNT_ACTION_SUMMARY[action].done,
+          summary: `${ACCOUNT_ACTION_TEXT[action].done} ${nameOf(u)}`,
           detail: action === 'unlock' ? unlockedDetail(u) : undefined,
           life: action === 'unlock' ? 5000 : 3000,
         },
-        undo,
+        offer,
       ),
     );
     await load();
   },
 });
 
-const ACCOUNT_ACTION_SUMMARY: Record<AccountAction, { done: string; failed: string }> = {
-  unlock: { done: 'Account unlocked', failed: 'Unlock failed' },
-  enable: { done: 'Account enabled', failed: 'Enable failed' },
-  disable: { done: 'Account disabled', failed: 'Disable failed' },
+const ACCOUNT_ACTION_TEXT: Record<AccountAction, { done: string; verb: string }> = {
+  unlock: { done: 'Unlocked', verb: 'unlock' },
+  enable: { done: 'Enabled', verb: 'enable' },
+  disable: { done: 'Disabled', verb: 'disable' },
 };
+
+const nameOf = (u: { displayName: string | null; samAccountName: string }) =>
+  u.displayName ?? u.samAccountName;
 
 // The account is as it was before the unlock, so this can still say when it
 // was locked even though the reload clears that.
 function unlockedDetail(u: UserDetail): string {
-  const detail = [`${u.displayName ?? u.samAccountName} can sign in now.`];
+  const detail = [`${nameOf(u)} can sign in now.`];
   if (u.lockedAt) detail.push(`Was locked at ${fmtAbsolute(u.lockedAt)}.`);
   if (u.autoUnlockAt) detail.push(`Would have auto-unlocked at ${fmtAbsolute(u.autoUnlockAt)}.`);
   return detail.join(' ');
@@ -547,14 +555,15 @@ const {
   failure: moveFailure,
   load: loadMove,
   submit: submitMove,
+  ouName,
   retry: retryMove,
   dismiss: dismissMoveFailure,
 } = useUserMove({
-  onMoved: async (_u, to, undo) => {
+  onMoved: async (u, to, offer) => {
     toast.add(
       undoable(
-        { severity: 'success', summary: 'User moved', detail: `Now under ${to}`, life: 4000 },
-        undo,
+        { severity: 'success', summary: `Moved ${nameOf(u)} to ${ouName(to)}`, life: 4000 },
+        offer,
       ),
     );
     moveDialogOpen.value = false;
@@ -604,28 +613,38 @@ function openMoveDialog(): void {
   void loadMove(user.value.id);
 }
 
+const { inDialog: moveDialogFailure, onPage: movePageFailure } = placeFailure(moveFailure, {
+  belongsHere: (f) => f.op.user.id === props.id,
+  dialog: { open: () => moveDialogOpen.value, made: (f) => !f.undo },
+});
+
 // Closing the dialog gives up on a move that failed in it.
 function closeMoveDialog(): void {
   moveDialogOpen.value = false;
-  dismissMoveFailure();
+  if (moveDialogFailure.value) dismissMoveFailure();
 }
+
+const { onPage: accountPageFailure } = placeFailure(accountFailure, {
+  belongsHere: (f) => f.op.account.id === props.id,
+});
 
 // A failed account action, or a failed move the dialog isn't showing (an
 // Undo), shows under the Actions menu.
 const actionFailure = computed<ObjectActionFailure | null>(() => {
-  const account = accountFailure.value;
+  const account = accountPageFailure.value;
   if (account) {
+    const { action, account: u } = account.op;
     return {
-      summary: ACCOUNT_ACTION_SUMMARY[account.action].failed,
+      summary: `Couldn’t ${ACCOUNT_ACTION_TEXT[action].verb} ${nameOf(u)}`,
       message: account.message,
       retry: retryAccountAction,
       dismiss: dismissAccountFailure,
     };
   }
-  const move = moveFailure.value;
-  if (move && !moveDialogOpen.value) {
+  const move = movePageFailure.value;
+  if (move) {
     return {
-      summary: 'Move failed',
+      summary: `Couldn’t move ${nameOf(move.op.user)} to ${ouName(move.op.destinationDn)}`,
       message: move.message,
       retry: retryMove,
       dismiss: dismissMoveFailure,
@@ -636,13 +655,14 @@ const actionFailure = computed<ObjectActionFailure | null>(() => {
 
 // ---- Group membership: remove + add --------------------------------------
 
-async function membershipChanged(
+async function onMembershipChanged(
   change: MembershipChange,
   m: Membership,
-  undo: (() => void) | null,
+  offer: UndoOffer,
 ): Promise<void> {
-  const summary = change === 'add' ? `Added to ${m.groupLabel}` : `Removed from ${m.groupLabel}`;
-  toast.add(undoable({ severity: 'success', summary, life: 3000 }, undo));
+  toast.add(
+    undoable({ severity: 'success', summary: membershipDoneText(change, m), life: 3000 }, offer),
+  );
   await load();
 }
 
@@ -652,7 +672,7 @@ const {
   failure: removeFailure,
   retry: retryRemove,
   dismiss: dismissRemoveFailure,
-} = useGroupMembership({ onChanged: membershipChanged });
+} = useGroupMembership({ onChanged: onMembershipChanged });
 
 function removeGroup(group: UserDetail['groupMemberships'][number]): void {
   if (user.value) removeMembership(membershipOf(user.value, group));
@@ -676,33 +696,41 @@ const {
   retry: retryAdd,
   dismiss: dismissAddFailure,
 } = useAddToGroup({
-  onChanged: async (change, m, undo) => {
+  onChanged: async (change, m, offer) => {
     if (change === 'add') addGroupOpen.value = false;
-    await membershipChanged(change, m, undo);
+    await onMembershipChanged(change, m, offer);
   },
+});
+
+const isThisUsers = (f: MembershipFailure) => f.op.membership.userId === props.id;
+const { onPage: removePageFailure } = placeFailure(removeFailure, { belongsHere: isThisUsers });
+const { inDialog: addDialogFailure, onPage: addPageFailure } = placeFailure(addFailure, {
+  belongsHere: isThisUsers,
+  dialog: { open: () => addGroupOpen.value, made: (f) => !f.undo },
 });
 
 // Closing the dialog gives up on an add that failed in it.
 function closeAddGroupDialog(): void {
   addGroupOpen.value = false;
-  dismissAddFailure();
+  if (addDialogFailure.value) dismissAddFailure();
 }
 
 // A failed remove, or a failed change the add dialog isn't showing (an
 // Undo), shows on the Groups tab.
 const groupFailure = computed(() => {
-  const f = removeFailure.value
-    ? { ...removeFailure.value, retry: retryRemove, dismiss: dismissRemoveFailure }
-    : addFailure.value && !addGroupOpen.value
-      ? { ...addFailure.value, retry: retryAdd, dismiss: dismissAddFailure }
-      : null;
+  const remove = removePageFailure.value;
+  const add = addPageFailure.value;
+  const [f, retry, dismiss] = remove
+    ? [remove, retryRemove, dismissRemoveFailure]
+    : add
+      ? [add, retryAdd, dismissAddFailure]
+      : [null, null, null];
   if (!f) return null;
-  const group = f.membership.groupLabel;
   return {
-    summary: f.change === 'add' ? `Couldn’t add to ${group}` : `Couldn’t remove from ${group}`,
+    summary: `Couldn’t ${membershipChangeText(f.op.change, f.op.membership)}`,
     message: f.message,
-    retry: f.retry,
-    dismiss: f.dismiss,
+    retry,
+    dismiss,
   };
 });
 
@@ -1834,8 +1862,8 @@ watch(user, (u) => {
         />
       </div>
       <Message v-if="moveError" severity="error" :closable="false">{{ moveError }}</Message>
-      <Message v-else-if="moveFailure" severity="error" closable @close="dismissMoveFailure">
-        {{ moveFailure.message }}
+      <Message v-else-if="moveDialogFailure" severity="error" closable @close="dismissMoveFailure">
+        {{ moveDialogFailure.message }}
       </Message>
       <Message v-else-if="moveTargetIsCurrent" severity="info" :closable="false">
         That's the user's current OU — pick a different one.
@@ -1919,8 +1947,10 @@ watch(user, (u) => {
         </p>
       </div>
       <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
-      <Message v-else-if="addFailure" severity="error" closable @close="dismissAddFailure">
-        Couldn’t add to {{ addFailure.membership.groupLabel }}: {{ addFailure.message }}
+      <Message v-else-if="addDialogFailure" severity="error" closable @close="dismissAddFailure">
+        Couldn’t
+        {{ membershipChangeText(addDialogFailure.op.change, addDialogFailure.op.membership) }}:
+        {{ addDialogFailure.message }}
       </Message>
       <template #footer>
         <Button label="Close" text severity="secondary" @click="closeAddGroupDialog" />

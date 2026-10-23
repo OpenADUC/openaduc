@@ -17,15 +17,18 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
 const toast = useToast();
 // Runs for an Undo too, after this dialog has closed.
-const { ous, loading, destination, atCurrent, ready, error, load, submit } = useUserMove({
-  onMoved: (_user, _to, undo) => {
+const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useUserMove({
+  onMoved: (_user, to, offer) => {
     toast.add(
-      undoable({ severity: 'success', summary: `${props.label} moved.`, life: 3000 }, undo),
+      undoable(
+        { severity: 'success', summary: `Moved ${props.label} to ${ouName(to)}.`, life: 3000 },
+        offer,
+      ),
     );
     store.bumpData();
     emit('close');
   },
-  onFailed: (_user, _to, message) =>
+  onFailed: ({ message }) =>
     store.reportError(`Windows cannot move object ${props.label} because:\n${message}`),
 });
 

@@ -200,7 +200,7 @@ describe('the Old School user properties', () => {
     expect(oldSchool.dataVersion).toBe(version + 1);
 
     const removed = toast.add.mock.calls.at(-1)![0] as { summary: string; undo: () => void };
-    expect(removed.summary).toBe('Jane Doe removed from Sales.');
+    expect(removed.summary).toBe('Removed Jane Doe from Sales.');
     removed.undo();
     await flushPromises();
     expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });

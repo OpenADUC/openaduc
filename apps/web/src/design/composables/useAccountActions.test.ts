@@ -87,7 +87,11 @@ describe('useAccountActions', () => {
 
     actions.run('disable', jane, after);
     await vi.waitFor(() =>
-      expect(onFailed).toHaveBeenCalledWith('disable', jane, 'directory rejected the change'),
+      expect(onFailed).toHaveBeenCalledWith({
+        op: { action: 'disable', account: jane },
+        message: 'directory rejected the change',
+        undo: false,
+      }),
     );
     expect(onDone).not.toHaveBeenCalled();
     expect(after).not.toHaveBeenCalled();
@@ -125,42 +129,24 @@ describe('useAccountActions', () => {
   it.each([
     ['disable', enable],
     ['enable', disable],
-  ] as const)(
-    'undoes a %s with the inverse action, which offers no undo itself',
-    async (action, inverse) => {
-      const { actions, onDone } = setup();
+  ] as const)('undoes a %s with the inverse action', async (action, inverse) => {
+    const { actions, onDone } = setup();
 
-      actions.run(action, jane);
-      await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
-      const undo = onDone.mock.calls[0]![2] as () => void;
-      expect(inverse).not.toHaveBeenCalled();
+    actions.run(action, jane);
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(inverse).not.toHaveBeenCalled();
 
-      undo();
-      await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
-      expect(inverse).toHaveBeenCalledWith('u1');
-      expect(onDone.mock.calls[1]![2]).toBeNull();
-    },
-  );
+    (onDone.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+    expect(inverse).toHaveBeenCalledWith('u1');
+    expect(onDone.mock.calls[1]![2]).toBeNull();
+  });
 
   it('can’t undo an unlock', async () => {
     const { actions, onDone } = setup();
 
     actions.run('unlock', jane);
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledWith('unlock', jane, null));
-  });
-
-  it('prompts step-up for an undo once the elevated session has ended', async () => {
-    const { actions, auth, onDone } = setup();
-    actions.run('disable', jane);
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
-    auth.actor = { capabilities: [], elevated: NOT_ELEVATED } as never;
-
-    (onDone.mock.calls[0]![2] as () => void)();
-    expect(auth.stepUpRequested).toBe(true);
-    expect(enable).not.toHaveBeenCalled();
-
-    await auth.stepUp('pw');
-    await vi.waitFor(() => expect(enable).toHaveBeenCalledWith('u1'));
   });
 
   it('keeps a failure until it’s retried', async () => {
@@ -170,9 +156,9 @@ describe('useAccountActions', () => {
     actions.run('disable', jane);
     await vi.waitFor(() =>
       expect(actions.failure.value).toEqual({
-        action: 'disable',
-        account: jane,
+        op: { action: 'disable', account: jane },
         message: 'DC unreachable',
+        undo: false,
       }),
     );
 
@@ -180,30 +166,5 @@ describe('useAccountActions', () => {
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
     expect(disable).toHaveBeenCalledTimes(2);
     expect(actions.failure.value).toBeNull();
-  });
-
-  it('keeps a failed undo as an undo when it’s retried', async () => {
-    const { actions, onDone } = setup();
-    actions.run('disable', jane);
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
-    enable.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
-
-    (onDone.mock.calls[0]![2] as () => void)();
-    await vi.waitFor(() => expect(actions.failure.value?.action).toBe('enable'));
-    actions.retry();
-    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
-    expect(onDone.mock.calls[1]).toEqual(['enable', jane, null]);
-  });
-
-  it('forgets a dismissed failure', async () => {
-    const { actions } = setup();
-    unlock.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
-
-    actions.run('unlock', jane);
-    await vi.waitFor(() => expect(actions.failure.value).not.toBeNull());
-    actions.dismiss();
-    expect(actions.failure.value).toBeNull();
-    actions.retry();
-    expect(unlock).toHaveBeenCalledOnce();
   });
 });

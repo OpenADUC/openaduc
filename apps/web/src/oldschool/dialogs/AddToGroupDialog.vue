@@ -8,8 +8,11 @@ import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
-import { membershipChanged, membershipFailed } from '../membershipText.js';
 import { MIN_GROUP_QUERY, useAddToGroup } from '../../design/composables/useAddToGroup.js';
+import {
+  membershipChangeText,
+  membershipDoneText,
+} from '../../design/composables/useGroupMembership.js';
 import type { GroupSummary } from '@openaduc/shared';
 
 const props = defineProps<{ windowId: number; userId: string; userLabel: string }>();
@@ -33,14 +36,20 @@ const {
   add,
 } = useAddToGroup({
   // Runs for an Undo too, after this dialog has closed.
-  onChanged: (change, m, undo) => {
+  onChanged: (change, m, offer) => {
     toast.add(
-      undoable({ severity: 'success', summary: membershipChanged(change, m), life: 3000 }, undo),
+      undoable(
+        { severity: 'success', summary: `${membershipDoneText(change, m)}.`, life: 3000 },
+        offer,
+      ),
     );
     store.bumpData();
     if (change === 'add') emit('close');
   },
-  onFailed: (change, m, message) => store.reportError(membershipFailed(change, m, message)),
+  onFailed: ({ op: { change, membership }, message }) =>
+    store.reportError(
+      `Windows cannot ${membershipChangeText(change, membership)} because:\n${message}`,
+    ),
 });
 
 onMounted(() => load(props.userId));

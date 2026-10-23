@@ -74,11 +74,9 @@ describe('useUserMove', () => {
     mover.submit();
     await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
     expect(move).toHaveBeenCalledWith('u1', { targetOuDn: STAFF });
-    expect(onMoved).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'u1' }),
-      STAFF,
-      expect.any(Function),
-    );
+    expect(onMoved).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), STAFF, {
+      undo: expect.any(Function),
+    });
   });
 
   it('stays submitting until the refresh is done', async () => {
@@ -107,7 +105,7 @@ describe('useUserMove', () => {
     expect(mover.destination.value).toBe(STAFF);
   });
 
-  it('undoes a move by moving the account back to where it was', async () => {
+  it('undoes a move by moving the account back to the OU it was in', async () => {
     const { mover, onMoved } = await setup();
     mover.destination.value = STAFF;
     mover.submit();
@@ -115,11 +113,51 @@ describe('useUserMove', () => {
     // The dialog may be reopened for someone else before Undo is clicked.
     get.mockResolvedValueOnce({ user: aUserDetail({ id: 'u2' }) });
     await mover.load('u2');
+    get.mockResolvedValueOnce({ user: aUserDetail({ distinguishedName: `CN=Jane,${STAFF}` }) });
 
-    (onMoved.mock.calls[0]![2] as () => void)();
+    (onMoved.mock.calls[0]![2] as { undo: () => void }).undo();
     await vi.waitFor(() => expect(onMoved).toHaveBeenCalledTimes(2));
-    expect(move).toHaveBeenLastCalledWith('u1', { targetOuDn: 'ou=sales,DC=corp,DC=example' });
+    expect(get).toHaveBeenLastCalledWith('u1');
+    expect(move).toHaveBeenLastCalledWith('u1', { targetOuDn: SALES });
     expect(onMoved.mock.calls[1]![2]).toBeNull();
+  });
+
+  it('won’t move the account back once it has been moved again', async () => {
+    const { mover, onMoved } = await setup();
+    mover.destination.value = STAFF;
+    mover.submit();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
+    get.mockResolvedValueOnce({
+      user: aUserDetail({ distinguishedName: 'CN=Jane,OU=Elsewhere,DC=corp,DC=example' }),
+    });
+
+    (onMoved.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() => expect(mover.failure.value).not.toBeNull());
+    expect(mover.failure.value).toMatchObject({
+      undo: true,
+      message: 'Jane Doe has been moved again since, so it wasn’t moved back.',
+    });
+    expect(move).toHaveBeenCalledOnce();
+  });
+
+  it('can’t undo a move out of something that isn’t an OU', async () => {
+    get.mockResolvedValue({
+      user: aUserDetail({ distinguishedName: 'CN=Jane,CN=Users,DC=corp,DC=example' }),
+    });
+    const { mover, onMoved } = await setup();
+    mover.destination.value = STAFF;
+    mover.submit();
+    await vi.waitFor(() => expect(onMoved).toHaveBeenCalledOnce());
+    expect(onMoved.mock.calls[0]![2]).toEqual({
+      cannotUndo:
+        'It came from CN=Users,DC=corp,DC=example, which isn’t an OU, so it can’t be moved back from here.',
+    });
+  });
+
+  it('names an OU by its name', async () => {
+    const { mover } = await setup();
+    expect(mover.ouName(STAFF.toLowerCase())).toBe('Staff');
+    expect(mover.ouName('CN=Users,DC=corp,DC=example')).toBe('CN=Users,DC=corp,DC=example');
   });
 
   it('keeps a failed move until it’s retried', async () => {

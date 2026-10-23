@@ -3,51 +3,75 @@ import { computed, ref } from 'vue';
 import type { DirectoryOu, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
-import { useAuthStore } from '../../stores/auth.js';
 import { latestRequest } from '../lib/latestRequest.js';
+import { useUndoableWrite, type UndoOffer, type WriteFailure } from '../lib/undoableWrite.js';
 
 export type MoveSubject = Pick<
   UserDetail,
   'id' | 'samAccountName' | 'displayName' | 'distinguishedName'
 >;
 
-export interface MoveFailure {
+export interface MoveRun {
   user: MoveSubject;
   destinationDn: string;
-  message: string;
+  /** For an Undo: the OU the move put the user in, where they must still be. */
+  whileIn?: string | undefined;
 }
 
+export type MoveFailure = WriteFailure<MoveRun>;
+
 /**
- * Pick an OU and move a user there. `onMoved` gets `undo`, which moves the
- * user back to the OU they were in the same way; it's null for an undo.
- * `error` says why the account or the OUs couldn't be read; a failed move
- * stays in `failure` until it's retried, dismissed or the next load.
+ * Pick an OU and move a user there. `onMoved` gets the offer of Undo, which
+ * moves the user back the same way, unless they came from somewhere that
+ * isn't one of the OUs (a container such as CN=Users). An Undo first checks
+ * the user is still where the move put them. `error` says why the account
+ * or the OUs couldn't be read; a failed move stays in `failure` until it's
+ * retried, dismissed or the next load.
  */
 export function useUserMove(options: {
-  onMoved: (
-    user: MoveSubject,
-    destinationDn: string,
-    undo: (() => void) | null,
-  ) => void | Promise<void>;
-  onFailed?: (user: MoveSubject, destinationDn: string, message: string) => void | Promise<void>;
+  onMoved: (user: MoveSubject, destinationDn: string, offer: UndoOffer) => void | Promise<void>;
+  onFailed?: (failure: MoveFailure) => void | Promise<void>;
 }) {
-  const auth = useAuthStore();
   const user = ref<MoveSubject | null>(null);
   const ous = ref<DirectoryOu[]>([]);
   const loading = ref(false);
   const destination = ref<string | null>(null);
-  const submitting = ref(false);
   const error = ref<string | null>(null);
-  const failure = ref<MoveFailure | null>(null);
-  let retryFailed: (() => void) | null = null;
   const loads = latestRequest();
+
+  const writes = useUndoableWrite<MoveRun>({
+    write: async ({ user: u, destinationDn, whileIn }) => {
+      if (whileIn) {
+        const now = (await api.users.get(u.id)).user;
+        if (!sameDn(parentOf(now.distinguishedName) ?? '', whileIn)) {
+          throw new Error(
+            `${u.displayName ?? u.samAccountName} has been moved again since, so it wasn’t moved back.`,
+          );
+        }
+      }
+      await api.users.move(u.id, { targetOuDn: destinationDn });
+    },
+    inverse: ({ user: u, destinationDn }) => {
+      const from = parentOf(u.distinguishedName);
+      const ou = from ? ous.value.find((o) => sameDn(o.distinguishedName, from)) : undefined;
+      if (!ou) {
+        return {
+          cannotUndo: `It came from ${from ?? 'the domain root'}, which isn’t an OU, so it can’t be moved back from here.`,
+        };
+      }
+      return { user: u, destinationDn: ou.distinguishedName, whileIn: destinationDn };
+    },
+    onDone: ({ user: u, destinationDn }, offer) => options.onMoved(u, destinationDn, offer),
+    onFailed: options.onFailed,
+  });
+  const submitting = computed(() => writes.runningOn() !== null);
 
   const currentOuDn = computed(() => (user.value ? parentOf(user.value.distinguishedName) : null));
   const atCurrent = computed(
     () =>
       destination.value !== null &&
       currentOuDn.value !== null &&
-      destination.value.toLowerCase() === currentOuDn.value.toLowerCase(),
+      sameDn(destination.value, currentOuDn.value),
   );
   const ready = computed(
     () => !!user.value && destination.value !== null && !atCurrent.value && !submitting.value,
@@ -61,7 +85,7 @@ export function useUserMove(options: {
     ous.value = [];
     destination.value = null;
     error.value = null;
-    dismiss();
+    writes.dismiss();
     loading.value = true;
     try {
       const [u, list] = await Promise.all([api.users.get(id), api.ous.list()]);
@@ -81,44 +105,12 @@ export function useUserMove(options: {
 
   function submit(): void {
     if (!ready.value) return;
-    start(user.value!, destination.value!, false);
+    writes.run({ user: user.value!, destinationDn: destination.value! });
   }
 
-  function start(u: MoveSubject, to: string, undoing: boolean): void {
-    if (submitting.value) return;
-    auth.requireStepUp(() => commit(u, to, undoing));
-  }
-
-  async function commit(u: MoveSubject, to: string, undoing: boolean): Promise<void> {
-    if (submitting.value) return;
-    submitting.value = true;
-    dismiss();
-    try {
-      try {
-        await api.users.move(u.id, { targetOuDn: to });
-      } catch (err) {
-        if (auth.retryAfterStepUp(err, () => commit(u, to, undoing))) return;
-        const message = err instanceof ApiError ? err.message : String(err);
-        failure.value = { user: u, destinationDn: to, message };
-        retryFailed = () => start(u, to, undoing);
-        await options.onFailed?.(u, to, message);
-        return;
-      }
-      const from = parentOf(u.distinguishedName);
-      const undo = undoing || !from ? null : () => start(u, from, true);
-      await options.onMoved(u, to, undo);
-    } finally {
-      submitting.value = false;
-    }
-  }
-
-  function retry(): void {
-    retryFailed?.();
-  }
-
-  function dismiss(): void {
-    failure.value = null;
-    retryFailed = null;
+  /** The OU's name, for saying where a user went. */
+  function ouName(dn: string): string {
+    return ous.value.find((o) => sameDn(o.distinguishedName, dn))?.name ?? dn;
   }
 
   return {
@@ -131,11 +123,12 @@ export function useUserMove(options: {
     ready,
     submitting,
     error,
-    failure,
+    failure: writes.failure,
     load,
     submit,
-    retry,
-    dismiss,
+    ouName,
+    retry: writes.retry,
+    dismiss: writes.dismiss,
   };
 }
 
@@ -146,4 +139,8 @@ function parentOf(dn: string): string | null {
     else if (dn[i] === ',') return dn.slice(i + 1).trim() || null;
   }
   return null;
+}
+
+function sameDn(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }

@@ -139,7 +139,7 @@ describe('useAddToGroup', () => {
         groupId: 'g9',
         groupLabel: 'CN=g9,DC=corp,DC=example',
       },
-      expect.any(Function),
+      { undo: expect.any(Function) },
     );
     expect(picker.adding.value).toBe('g9');
 
@@ -165,11 +165,11 @@ describe('useAddToGroup', () => {
 
     picker.add(OPS);
     await vi.waitFor(() =>
-      expect(onFailed).toHaveBeenCalledWith(
-        'add',
-        expect.objectContaining({ groupId: 'g3' }),
-        'directory rejected the change',
-      ),
+      expect(onFailed).toHaveBeenCalledWith({
+        op: { change: 'add', membership: expect.objectContaining({ groupId: 'g3' }) },
+        message: 'directory rejected the change',
+        undo: false,
+      }),
     );
     expect(onChanged).not.toHaveBeenCalled();
     expect(picker.failure.value?.message).toBe('directory rejected the change');
@@ -193,7 +193,7 @@ describe('useAddToGroup', () => {
 
     picker.add(OPS);
     await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
-    (onChanged.mock.calls[0]![2] as () => void)();
+    (onChanged.mock.calls[0]![2] as { undo: () => void }).undo();
     await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
     expect(removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g3' });
     expect(onChanged.mock.calls[1]![0]).toBe('remove');
