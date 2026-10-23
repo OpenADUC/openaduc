@@ -158,3 +158,43 @@ describe('a dialog write without an elevated session', () => {
     expect(page.find('#reset-new-password').exists()).toBe(false);
   });
 });
+
+describe('resetting a locked-out user’s password', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user });
+  });
+
+  it('unlocks the account in the same request, unless the operator unticks it', async () => {
+    api.users.get.mockResolvedValue({ user: aUserDetail({ locked: true }) });
+    const { page } = await openTab(
+      'account',
+      ['read:user', 'write:user.resetPassword', 'write:user.unlock'],
+      true,
+    );
+
+    await click(page, 'Reset password');
+    const unlock = page
+      .findAll('label')
+      .find((l) => l.text() === 'Also unlock the account')!
+      .get('input');
+    expect((unlock.element as HTMLInputElement).checked).toBe(true);
+    await page.get('#reset-new-password').setValue('N3w-passw0rd!');
+    await click(page, 'Reset');
+
+    expect(api.users.resetPassword).toHaveBeenCalledOnce();
+    expect(api.users.resetPassword).toHaveBeenCalledWith('u1', {
+      newPassword: 'N3w-passw0rd!',
+      forceChangeAtNextLogin: true,
+      unlock: true,
+    });
+  });
+
+  it('doesn’t offer to unlock an account that isn’t locked', async () => {
+    const { page } = await openTab('account', ['read:user', 'write:user.resetPassword'], true);
+
+    await click(page, 'Reset password');
+    expect(page.text()).toContain('Force change at next sign-in');
+    expect(page.text()).not.toContain('Also unlock the account');
+  });
+});
