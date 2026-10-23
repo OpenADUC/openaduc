@@ -28,6 +28,7 @@ const {
   setName,
   setSamAccountName,
   problems,
+  samLegacyWarning,
   taken,
   canSubmit,
   submitting,
@@ -110,6 +111,7 @@ const problem = computed(
         </fieldset>
       </div>
       <div v-if="problem" class="os-error" style="margin-top: 8px">{{ problem }}</div>
+      <div v-else-if="samLegacyWarning" style="margin-top: 8px">{{ samLegacyWarning }}</div>
     </div>
   </WinDialog>
 </template>

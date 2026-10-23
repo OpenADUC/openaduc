@@ -364,6 +364,8 @@ export type UserUpdateRequest = z.infer<typeof userUpdateRequestSchema>;
 // trailing dot. A user's logon name is at most 20 characters; a group's
 // may be longer.
 const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
+// eslint-disable-next-line no-control-regex -- matching them is the point
+export const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 export function samAccountNameSchemaOf(maxLength: number) {
   return z
     .string()
@@ -373,6 +375,7 @@ export function samAccountNameSchemaOf(maxLength: number) {
     .refine((v) => !SAM_FORBIDDEN.test(v), {
       message: 'cannot contain " / \\ [ ] : ; | = , + * ? < > @',
     })
+    .refine((v) => !CONTROL_CHARS.test(v), { message: 'cannot contain control characters' })
     .refine((v) => !/^[. ]+$/.test(v), { message: 'cannot be only dots and spaces' })
     .refine((v) => !v.endsWith('.'), { message: 'cannot end with a dot' });
 }

@@ -34,6 +34,7 @@ const {
   setName,
   setSamAccountName,
   problems,
+  samLegacyWarning,
   checking,
   checkError,
   taken,
@@ -132,6 +133,7 @@ function close(): void {
       <span v-else-if="taken.samAccountName" class="ng-note ng-note-bad">
         {{ taken.samAccountName }}
       </span>
+      <span v-else-if="samLegacyWarning" class="ng-note ng-note-warn">{{ samLegacyWarning }}</span>
       <span v-else class="ng-note">Must be unique across the domain, users included.</span>
     </div>
 
@@ -213,6 +215,10 @@ function close(): void {
 
 .ng-note-bad {
   color: var(--red);
+}
+
+.ng-note-warn {
+  color: var(--amber);
 }
 
 .ng-checking {
