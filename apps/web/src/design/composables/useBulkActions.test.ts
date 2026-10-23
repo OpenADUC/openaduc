@@ -34,6 +34,24 @@ describe('bulk actions', () => {
     },
   );
 
+  it('say how many accounts they change, and what that means', () => {
+    const { bulk, selectedIds } = setup();
+
+    bulk.requestBulk('disable');
+    expect(bulk.confirmation.value).toEqual({
+      title: 'Disable 3 accounts?',
+      confirmLabel: 'Disable 3 accounts',
+      consequence: "They won't be able to sign in until an operator enables them again.",
+    });
+    selectedIds.value = new Set(['a']);
+    bulk.requestBulk('unlock');
+    expect(bulk.confirmation.value).toEqual({
+      title: 'Unlock 1 account?',
+      confirmLabel: 'Unlock account',
+      consequence: 'Locked accounts can sign in again straight away.',
+    });
+  });
+
   it('do nothing when the operator cancels', () => {
     const { bulk, run } = setup();
 
