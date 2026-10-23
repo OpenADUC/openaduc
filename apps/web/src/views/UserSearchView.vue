@@ -59,21 +59,25 @@ const total = ref(0);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const drawerOpen = ref(false);
 const {
   skeleton,
   table: listTable,
   title: pageTitle,
   status: listStatus,
-} = useListLoading({
+  searchField,
+} = useListLoading<UserSummary>({
   rows,
   loading,
   error,
   total: () => total.value,
   title: 'Users',
   noun: ['user', 'users'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
 });
-const drawerOpen = ref(false);
-const searchInput = ref<HTMLInputElement | null>(null);
 
 const filters = ref<{
   _searchBlob: FilterEntry<string>;
@@ -506,7 +510,7 @@ onMounted(() => {
   suppressSync = false;
   void load();
   if (!isActive(filters.value._searchBlob.value)) {
-    searchInput.value?.focus();
+    (searchField.value?.$el as HTMLElement | undefined)?.focus();
   }
 });
 </script>
@@ -810,7 +814,7 @@ onMounted(() => {
         <div class="filter-field">
           <label class="filter-label">Search</label>
           <InputText
-            ref="searchInput"
+            ref="searchField"
             v-model="filters._searchBlob.value"
             placeholder="Name, username, UPN, email…"
             class="filter-input"

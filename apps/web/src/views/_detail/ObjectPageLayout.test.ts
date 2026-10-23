@@ -6,7 +6,7 @@ import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { defineComponent, h, ref, type Component } from 'vue';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectAction, ObjectPageSkeleton, ObjectPageTab } from './objectPage.js';
 import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
@@ -15,6 +15,7 @@ vi.mock('../../api/index.js', () => ({ api: {} }));
 // Generic components don't fit h()'s overloads.
 const ObjectPageLayout = (await import('./ObjectPageLayout.vue')).default as Component;
 const { useAuthStore } = await import('../../stores/auth.js');
+const { onShortcutKey, shortcuts } = await import('../../design/composables/useShortcuts.js');
 
 enableAutoUnmount(afterEach);
 
@@ -177,7 +178,7 @@ describe('the actions menu', () => {
   it('leaves out actions that do not apply to this object', async () => {
     const { page } = await open('/groups/g1', {
       capabilities: ['write:group.membership', 'write:user.rename'],
-      actions: [{ ...remove, available: false }, rename],
+      actions: [{ ...remove, unavailable: 'not for this group' }, rename],
     });
     const items = await openActionsMenu(page);
     expect(items.map((i) => i.text())).toEqual(['Rename…']);
@@ -209,6 +210,114 @@ describe('the actions menu', () => {
     expect(item!.attributes('aria-disabled')).toBe('true');
     await item!.find('a').trigger('click');
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('object page shortcuts', () => {
+  const unlock = vi.fn();
+  const enable = vi.fn();
+  const disable = vi.fn();
+  const actions: ObjectAction[] = [
+    {
+      label: 'Unlock account',
+      icon: 'pi-unlock',
+      capability: 'write:user.unlock',
+      shortcut: 'u',
+      unavailable: 'account isn’t locked',
+      run: unlock,
+    },
+    {
+      label: 'Enable account',
+      icon: 'pi-check',
+      capability: 'write:user.enableDisable',
+      shortcut: 'e',
+      unavailable: 'account is already enabled',
+      run: enable,
+    },
+    {
+      label: 'Disable account',
+      icon: 'pi-ban',
+      capability: 'write:user.enableDisable',
+      shortcut: 'e',
+      run: disable,
+    },
+    { label: 'Rename…', icon: 'pi-id-card', capability: 'write:user.rename', run: vi.fn() },
+  ];
+  const everything = ['write:user.unlock', 'write:user.enableDisable', 'write:user.rename'];
+
+  beforeAll(() => window.addEventListener('keydown', onShortcutKey));
+  afterAll(() => window.removeEventListener('keydown', onShortcutKey));
+  beforeEach(() => vi.clearAllMocks());
+
+  const press = async (key: string) => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, cancelable: true }));
+    await flushPromises();
+  };
+  const listed = () =>
+    shortcuts.value.map((s) => [s.section, s.key, s.label, s.unavailable ?? null]);
+
+  it('switches to the nth visible tab on its number', async () => {
+    const { page, router } = await open('/groups/g1');
+    await press('2');
+    expect(page.find('.body').text()).toContain('showing members');
+    expect(router.currentRoute.value.query['tab']).toBe('members');
+    await press('3');
+    expect(page.find('.body').text()).toContain('showing members');
+    await press('1');
+    expect(page.find('.body').text()).toContain('showing overview');
+  });
+
+  it('runs an action on its key, as the Actions menu would', async () => {
+    await open('/groups/g1', { capabilities: everything, actions });
+    await press('e');
+    expect(disable).toHaveBeenCalledOnce();
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it('lists the actions and tabs, saying why an action can’t run', async () => {
+    await open('/groups/g1', { capabilities: everything, actions });
+    expect(listed()).toEqual([
+      ['Actions', 'u', 'Unlock account', 'account isn’t locked'],
+      ['Actions', 'e', 'Disable account', null],
+      ['Tabs', '1', 'Overview', null],
+      ['Tabs', '2', 'Members', null],
+    ]);
+    await press('u');
+    expect(unlock).not.toHaveBeenCalled();
+  });
+
+  it('offers no shortcut for an action the operator lacks the capability for', async () => {
+    await open('/groups/g1', { capabilities: ['write:user.unlock'], actions });
+    expect(listed().filter(([section]) => section === 'Actions')).toEqual([
+      ['Actions', 'u', 'Unlock account', 'account isn’t locked'],
+    ]);
+    await press('e');
+    expect(disable).not.toHaveBeenCalled();
+  });
+
+  it('holds an action’s shortcut while another action runs', async () => {
+    const busy = actions.map((a) => ({ ...a, disabled: true }));
+    await open('/groups/g1', { capabilities: everything, actions: busy });
+    await press('e');
+    expect(disable).not.toHaveBeenCalled();
+    expect(listed()).toContainEqual([
+      'Actions',
+      'e',
+      'Disable account',
+      'another action is running',
+    ]);
+  });
+
+  it('holds an action’s shortcut while the record loads', async () => {
+    await open('/groups/g1', { capabilities: everything, actions, loading: true });
+    await press('e');
+    expect(disable).not.toHaveBeenCalled();
+    expect(listed()).toContainEqual([
+      'Actions',
+      'e',
+      'Disable account',
+      'the group is still loading',
+    ]);
   });
 });
 
@@ -327,7 +436,7 @@ describe('while the record loads', () => {
       label: 'Remove…',
       icon: 'pi-trash',
       capability: 'write:group.membership',
-      available: false,
+      unavailable: 'the group isn’t loaded',
       run: vi.fn(),
     };
     const { page } = await open('/groups/g1', {

@@ -11,6 +11,8 @@ import Card from '../../design/primitives/Card.vue';
 import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { useShortcuts, type Shortcut } from '../../design/composables/useShortcuts.js';
+import { SHORTCUT_KEYS } from '../../design/lib/shortcutKeys.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
@@ -130,7 +132,7 @@ const menuId = computed(() => `${props.kind}-actions-menu`);
 
 const menuItems = computed<MenuItem[]>(() =>
   props.actions
-    .filter((a) => a.available !== false && auth.hasCapability(a.capability))
+    .filter((a) => !a.unavailable && auth.hasCapability(a.capability))
     .map((a) => ({
       label: a.label,
       icon: `pi ${a.icon}`,
@@ -151,6 +153,37 @@ const offersActions = computed(() =>
 function toggleActionsMenu(event: Event): void {
   actionsMenu.value?.toggle(event);
 }
+
+// ---- Shortcuts ------------------------------------------------------------
+
+// An action's shortcut is there whenever its menu item could be; when it
+// can't run now, the cheat sheet says why. Of two actions on one key, such
+// as Enable and Disable, the one that fits the object speaks for it.
+function actionShortcuts(): Shortcut[] {
+  const offered = props.actions.filter((a) => a.shortcut && auth.hasCapability(a.capability));
+  const fits = (a: ObjectAction) => !a.unavailable;
+  return offered
+    .filter((a) => fits(a) || !offered.some((b) => b.shortcut === a.shortcut && fits(b)))
+    .map((a) => ({
+      key: a.shortcut!,
+      label: a.label,
+      section: 'Actions',
+      unavailable: props.loading
+        ? `the ${props.kind} is still loading`
+        : (a.unavailable ?? (a.disabled || props.actionsBusy ? 'another action is running' : null)),
+      run: a.run,
+    }));
+}
+
+useShortcuts(() => [
+  ...actionShortcuts(),
+  ...visibleTabs.value.slice(0, SHORTCUT_KEYS.tabs.length).map((t, i): Shortcut => ({
+    key: SHORTCUT_KEYS.tabs[i]!,
+    label: t.label,
+    section: 'Tabs',
+    run: () => select(t.id),
+  })),
+]);
 
 const freshnessText = computed(() => {
   const cached = `Cache written ${fmtRelative(props.cachedAt)}`;

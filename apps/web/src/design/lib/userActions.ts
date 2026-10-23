@@ -2,6 +2,7 @@
 // The actions on a user's account wherever they're offered, the user's page
 // and quick search, so they're named and gated the same way.
 import type { Capability } from '@openaduc/shared';
+import { SHORTCUT_KEYS } from './shortcutKeys.js';
 
 export type UserAction = 'unlock' | 'reset-password' | 'enable' | 'disable';
 
@@ -12,6 +13,8 @@ export interface UserActionInfo {
   icon: string;
   capability: Capability;
   danger?: boolean;
+  /** Its key on the user's page; Enable and Disable share one. */
+  shortcut: string;
 }
 
 export const USER_ACTIONS: Record<UserAction, UserActionInfo> = {
@@ -20,18 +23,21 @@ export const USER_ACTIONS: Record<UserAction, UserActionInfo> = {
     running: 'Unlocking…',
     icon: 'pi-unlock',
     capability: 'write:user.unlock',
+    shortcut: SHORTCUT_KEYS.user.unlock,
   },
   'reset-password': {
     label: 'Reset password…',
     icon: 'pi-key',
     capability: 'write:user.resetPassword',
     danger: true,
+    shortcut: SHORTCUT_KEYS.user.resetPassword,
   },
   enable: {
     label: 'Enable account',
     running: 'Enabling…',
     icon: 'pi-check',
     capability: 'write:user.enableDisable',
+    shortcut: SHORTCUT_KEYS.user.enableDisable,
   },
   disable: {
     label: 'Disable account',
@@ -39,6 +45,7 @@ export const USER_ACTIONS: Record<UserAction, UserActionInfo> = {
     icon: 'pi-ban',
     capability: 'write:user.enableDisable',
     danger: true,
+    shortcut: SHORTCUT_KEYS.user.enableDisable,
   },
 };
 
@@ -49,18 +56,25 @@ export const USER_ACTION_ORDER: readonly UserAction[] = [
   'disable',
 ];
 
-/** Whether the account's state fits the action, e.g. Unlock only a locked account. */
-export function fitsUser(action: UserAction, u: { enabled: boolean; locked: boolean }): boolean {
+type AccountState = { enabled: boolean; locked: boolean };
+
+/** Why the account's state doesn't fit the action, e.g. Unlock an account that isn't locked. */
+export function userActionUnavailable(action: UserAction, u: AccountState): string | null {
   switch (action) {
     case 'unlock':
-      return u.locked;
+      return u.locked ? null : 'account isn’t locked';
     case 'reset-password':
-      return true;
+      return null;
     case 'enable':
-      return !u.enabled;
+      return u.enabled ? 'account is already enabled' : null;
     case 'disable':
-      return u.enabled;
+      return u.enabled ? null : 'account is already disabled';
   }
+}
+
+/** Whether the account's state fits the action, e.g. Unlock only a locked account. */
+export function fitsUser(action: UserAction, u: AccountState): boolean {
+  return userActionUnavailable(action, u) === null;
 }
 
 /** The label, or what it says while `running` is this action. */
