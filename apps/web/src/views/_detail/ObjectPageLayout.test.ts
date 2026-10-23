@@ -279,6 +279,14 @@ describe('while the record loads', () => {
     expect(page.find('.freshness-foot').exists()).toBe(false);
   });
 
+  it('keeps the lines it held when the record has nothing for them', async () => {
+    const { page } = await open('/groups/g1', { loading: true, skeleton: { subtitle: true } });
+    loading.value = false;
+    await flushPromises();
+    expect(page.get('.detail-hero-title').text()).toBe('');
+    expect(page.get('.detail-hero-upn').text()).toBe('');
+  });
+
   it('fills the same header and tab bar once the record is there', async () => {
     const { page } = await open('/groups/g1', { loading: true });
     const hero = page.get('.detail-hero').element;
