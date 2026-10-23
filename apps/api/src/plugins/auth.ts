@@ -104,7 +104,7 @@ export default fp(async (app) => {
           req.log.warn({ err }, 'recording elevated-session activity failed');
           return before;
         });
-        app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
+        if (elevated) app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
       }
       if (elevated) reply.header(ELEVATED_IDLE_HEADER, elevated.idleExpiresAt.toISOString());
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
