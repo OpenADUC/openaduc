@@ -7,11 +7,13 @@ import {
   groupSearchQuerySchema,
   groupSearchResponseSchema,
   type GroupDetail,
+  type GroupMember,
   type GroupSearchResponse,
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { changeMembership } from './groupMembership.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -24,8 +26,9 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       const provider = await app.services.providers.buildForRequest(req);
       const offset = (q.page - 1) * q.pageSize;
 
-      // Each group's member count comes from `user_group_memberships`.
-      // We pre-aggregate it as a subquery on the same query so paging and
+      // Each group's member count is its users in `user_group_memberships`
+      // plus its nested groups in `group_group_memberships`. We
+      // pre-aggregate both as subqueries on the same query so paging and
       // filtering stay consistent.
       let baseQuery = app.db
         .selectFrom('group_cache_records as g')
@@ -45,22 +48,13 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       if (q.type) baseQuery = baseQuery.where('g.group_type', '=', q.type);
       if (q.scope) baseQuery = baseQuery.where('g.group_scope', '=', q.scope);
 
-      // hasMembers narrows by the aggregated count from user_group_memberships.
-      // We use EXISTS rather than joining (which would double-count) — the
-      // count subquery is reattached below for the page rows.
-      if (q.hasMembers === 'yes') {
-        baseQuery = baseQuery.where((eb) =>
-          eb.exists(
-            eb
-              .selectFrom('user_group_memberships as mh')
-              .select(eb.lit(1).as('one'))
-              .whereRef('mh.provider_id', '=', 'g.provider_id')
-              .whereRef('mh.group_object_guid', '=', 'g.object_guid'),
-          ),
-        );
-      } else if (q.hasMembers === 'no') {
-        baseQuery = baseQuery.where((eb) =>
-          eb.not(
+      // hasMembers narrows by whether either membership table has a row for
+      // the group. We use EXISTS rather than joining (which would
+      // double-count) — the count subquery is reattached below for the page
+      // rows.
+      if (q.hasMembers) {
+        baseQuery = baseQuery.where((eb) => {
+          const hasMembers = eb.or([
             eb.exists(
               eb
                 .selectFrom('user_group_memberships as mh')
@@ -68,14 +62,22 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
                 .whereRef('mh.provider_id', '=', 'g.provider_id')
                 .whereRef('mh.group_object_guid', '=', 'g.object_guid'),
             ),
-          ),
-        );
+            eb.exists(
+              eb
+                .selectFrom('group_group_memberships as gh')
+                .select(eb.lit(1).as('one'))
+                .whereRef('gh.provider_id', '=', 'g.provider_id')
+                .whereRef('gh.group_object_guid', '=', 'g.object_guid'),
+            ),
+          ]);
+          return q.hasMembers === 'yes' ? hasMembers : eb.not(hasMembers);
+        });
       }
 
       const SORT_MAP: Record<string, string> = {
         name: 'g.name',
         samAccountName: 'g.sam_account_name',
-        memberCount: 'member_count',
+        memberCount: 'memberCount',
         groupType: 'g.group_type',
         groupScope: 'g.group_scope',
       };
@@ -101,6 +103,23 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
                 .onRef('m.provider_id', '=', 'g.provider_id')
                 .onRef('m.group_object_guid', '=', 'g.object_guid'),
           )
+          .leftJoin(
+            (eb) =>
+              eb
+                .selectFrom('group_group_memberships')
+                .select([
+                  'provider_id',
+                  'group_object_guid',
+                  eb.fn.countAll<string>().as('member_count'),
+                ])
+                .where('provider_id', '=', provider.id)
+                .groupBy(['provider_id', 'group_object_guid'])
+                .as('n'),
+            (join) =>
+              join
+                .onRef('n.provider_id', '=', 'g.provider_id')
+                .onRef('n.group_object_guid', '=', 'g.object_guid'),
+          )
           .select([
             'g.object_guid as id',
             'g.name as name',
@@ -109,7 +128,9 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
             'g.description as description',
             'g.group_type as groupType',
             'g.group_scope as groupScope',
-            sql<string>`coalesce(m.member_count, '0')`.as('memberCount'),
+            sql<string>`coalesce(m.member_count, 0) + coalesce(n.member_count, 0)`.as(
+              'memberCount',
+            ),
           ])
           .orderBy(sql.ref(orderColumn), orderDir)
           .orderBy('g.id', 'asc')
@@ -140,8 +161,9 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- GET /api/groups/:id ---------------------------------------------
-  // Live-refresh the group from AD, then attach the cached member list (which
-  // the sync rebuilds from each user's `memberOf`). For very large groups
+  // Live-refresh the group from AD, then attach the cached member list: users
+  // (which the sync rebuilds from each user's `memberOf`) and nested groups
+  // (from each group's `member`). For very large groups
   // (thousands of members) we defer paging to a follow-up; for now the cap
   // is the sync's pageSize.
   app.get('/api/groups/:id', {
@@ -154,9 +176,9 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       if (!live) throw NotFound('group not found');
       const liveRefreshedAt = new Date();
 
-      // Members from cache via the memberships table — same join the sync
-      // rebuilds nightly. Sort by displayName/sam for predictable scrolling.
-      const members = await app.db
+      // Members from cache via the memberships tables — same joins the sync
+      // rebuilds nightly. Sort by name for predictable scrolling.
+      const users = await app.db
         .selectFrom('user_group_memberships as m')
         .innerJoin('user_cache_records as u', (join) =>
           join
@@ -176,8 +198,45 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
           'u.locked as locked',
           'u.password_never_expires as passwordNeverExpires',
         ])
-        .orderBy(sql<string>`coalesce(u.display_name, u.sam_account_name)`, 'asc')
         .execute();
+      const nested = await app.db
+        .selectFrom('group_group_memberships as m')
+        .innerJoin('group_cache_records as n', (join) =>
+          join
+            .onRef('n.provider_id', '=', 'm.provider_id')
+            .onRef('n.object_guid', '=', 'm.member_group_object_guid'),
+        )
+        .where('m.provider_id', '=', provider.id)
+        .where('m.group_object_guid', '=', id)
+        .where('n.deleted_at', 'is', null)
+        .select([
+          'n.object_guid as id',
+          'n.name as name',
+          'n.sam_account_name as samAccountName',
+          'n.distinguished_name as distinguishedName',
+          'n.description as description',
+          'n.group_type as groupType',
+          'n.group_scope as groupScope',
+        ])
+        .execute();
+      const members: GroupMember[] = [
+        ...users.map((m) => ({
+          kind: 'user' as const,
+          id: m.id,
+          samAccountName: m.samAccountName ?? '',
+          userPrincipalName: m.userPrincipalName,
+          displayName: m.displayName,
+          email: m.email,
+          enabled: m.enabled,
+          locked: m.locked,
+          passwordNeverExpires: m.passwordNeverExpires,
+        })),
+        ...nested.map((g) => ({ kind: 'group' as const, ...g })),
+      ];
+      const label = (m: GroupMember) =>
+        (m.kind === 'user' ? m.displayName || m.samAccountName : m.name || m.samAccountName) ??
+        m.id;
+      members.sort((a, b) => label(a).localeCompare(label(b)));
 
       const cacheRow = await app.db
         .selectFrom('group_cache_records')
@@ -196,16 +255,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         groupScope: live.groupScope,
         email: live.email,
         memberCount: members.length,
-        members: members.map((m) => ({
-          id: m.id,
-          samAccountName: m.samAccountName ?? '',
-          userPrincipalName: m.userPrincipalName,
-          displayName: m.displayName,
-          email: m.email,
-          enabled: m.enabled,
-          locked: m.locked,
-          passwordNeverExpires: m.passwordNeverExpires,
-        })),
+        members,
         freshness: {
           cachedAt: cacheRow?.synced_at ? new Date(cacheRow.synced_at).toISOString() : null,
           liveRefreshedAt: liveRefreshedAt.toISOString(),
@@ -235,5 +285,18 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
 
       return { group: groupDetailSchema.parse(detail) };
     },
+  });
+
+  // ---- POST /api/groups/:id/groups (nest) + DELETE (take out) ----------
+  // Body: { groupId }, the group that :id joins or leaves. The same change
+  // as /api/users/:id/groups, for a group.
+  app.post('/api/groups/:id/groups', {
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
+    handler: async (req) => changeMembership(app, req, 'group', 'add'),
+  });
+
+  app.delete('/api/groups/:id/groups', {
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
+    handler: async (req) => changeMembership(app, req, 'group', 'remove'),
   });
 }
