@@ -139,6 +139,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 | **Group Policy**    | List GPOs, inspect linked OUs, view enabled CSE extensions                                                                                                                                                    |
 | **Password policy** | View domain default and fine-grained policies                                                                                                                                                                 |
 | **Quick search**    | Ctrl+K finds users, groups, computers and OUs; start with unlock, reset, enable or disable (`unlock jdoe`) to act on a user without opening their page                                                        |
+| **Keyboard**        | `/` searches a list, `j`/`k` and Enter open its rows; on user and computer pages `u` `r` `e` `m` unlock, reset, enable/disable, move; `?` lists the page's keys                                               |
 | **Audit**           | Every write is logged with actor, target, before/after, and step-up status                                                                                                                                    |
 | **Setup wizard**    | First-run flow: directory connection, service account, policy, initial sync                                                                                                                                   |
 

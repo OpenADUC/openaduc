@@ -5,8 +5,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import type { Component } from 'vue';
-import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RouterView, createMemoryHistory, createRouter, type Router } from 'vue-router';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const freshness = { lastSyncedAt: null, stale: false };
 const jane = {
@@ -76,15 +76,18 @@ const lists: [string, Component, Search, string][] = [
 ];
 const { useAuthStore } = await import('../stores/auth.js');
 const { useThemeStore } = await import('../design/stores/useTheme.js');
+const { onShortcutKey, shortcuts } = await import('../design/composables/useShortcuts.js');
 
 enableAutoUnmount(afterEach);
+
+let router: Router;
 
 async function openList(view: Component, density: 'compact' | 'balanced' | 'comfy' = 'balanced') {
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().actor = { capabilities: ['read:user', 'read:group', 'read:computer'] } as never;
   useThemeStore().setDensity(density);
-  const router = createRouter({
+  router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/list', component: view },
@@ -169,5 +172,105 @@ describe.each(lists)('the %s list while it loads', (name, view, search, one) => 
       await flushPromises();
       page.unmount();
     }
+  });
+});
+
+// Two of each, listed out of the order the table sorts them in.
+const second = {
+  users: { ...jane, id: 'u0', samAccountName: 'aadams', displayName: 'Abe Adams' },
+  groups: { ...finance, id: 'g0', name: 'Accounting', samAccountName: 'accounting' },
+  computers: { ...ws01, id: 'c0', name: 'AP01', samAccountName: 'AP01$' },
+};
+const first = { users: jane, groups: finance, computers: ws01 };
+
+describe.each(lists)('shortcuts on the %s list', (name, view, search, one) => {
+  type Rows = { mockResolvedValueOnce(v: unknown): unknown };
+  const key = name as keyof typeof second;
+
+  // The virtual scroller renders rows only into a viewport with a height,
+  // and needs its content's padding to work out how many fit.
+  const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+  const padding = document.createElement('style');
+  padding.textContent = '.p-virtualscroller-content { padding: 0 }';
+  beforeAll(() => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => 600,
+    });
+    document.head.append(padding);
+    window.addEventListener('keydown', onShortcutKey);
+  });
+  afterAll(() => {
+    if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height);
+    padding.remove();
+    window.removeEventListener('keydown', onShortcutKey);
+  });
+
+  async function openTwo() {
+    (search as unknown as Rows).mockResolvedValueOnce({
+      rows: [first[key], second[key]],
+      total: 2,
+      freshness,
+    });
+    const page = await openList(view);
+    await flushPromises();
+    return page;
+  }
+
+  async function press(key: string, target: EventTarget = document.body) {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    await flushPromises();
+  }
+  const highlighted = (page: Page) => page.findAll('tbody tr[aria-current="true"]');
+
+  it('moves a highlight through the rows as sorted with j and k, and opens it on Enter', async () => {
+    const page = await openTwo();
+    expect(page.findAll('tbody tr[data-p-index]')).toHaveLength(2);
+    expect(highlighted(page)).toHaveLength(0);
+
+    await press('j');
+    expect(highlighted(page)).toHaveLength(1);
+    expect(highlighted(page)[0]!.attributes('data-p-index')).toBe('0');
+    expect(highlighted(page)[0]!.classes()).toContain('is-highlighted');
+    expect(document.activeElement).toBe(highlighted(page)[0]!.element);
+
+    await press('j');
+    await press('j');
+    expect(highlighted(page)[0]!.attributes('data-p-index')).toBe('1');
+    await press('k');
+    expect(highlighted(page)[0]!.attributes('data-p-index')).toBe('0');
+
+    await press('Enter');
+    await flushPromises();
+    expect(router.currentRoute.value.params['id']).toBe(second[key].id);
+  });
+
+  it('opens the Filters with the cursor in the search field on /', async () => {
+    const page = await openTwo();
+    await press('/');
+    const field = document.activeElement as HTMLInputElement;
+    expect(field.tagName).toBe('INPUT');
+    expect(field.closest('[role="dialog"]')?.textContent).toContain('Filters');
+
+    await press('j', field);
+    expect(highlighted(page)).toHaveLength(0);
+  });
+
+  it('lists the list’s shortcuts', async () => {
+    await openTwo();
+    const listed = () =>
+      shortcuts.value
+        .filter((s) => s.section === 'List')
+        .map((s) =>
+          s.unavailable ? `${s.key} ${s.label} (${s.unavailable})` : `${s.key} ${s.label}`,
+        );
+    expect(listed()).toEqual([
+      `/ Search ${name}`,
+      'j Next row',
+      'k Previous row',
+      `Enter Open the highlighted ${one} (no row highlighted)`,
+    ]);
+    await press('j');
+    expect(listed()[3]).toBe(`Enter Open the highlighted ${one}`);
   });
 });

@@ -4,7 +4,7 @@ import { useBulkActions, type BulkAction } from '../design/composables/useBulkAc
 import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
@@ -27,6 +27,7 @@ import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
+import { useListShortcuts } from '../design/composables/useListShortcuts.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
@@ -73,7 +74,15 @@ const {
   noun: ['user', 'users'],
 });
 const drawerOpen = ref(false);
-const searchInput = ref<HTMLInputElement | null>(null);
+const searchInput = ref<ComponentPublicInstance | null>(null);
+const { setTable: setListTable, pt: listPt } = useListShortcuts<UserSummary>({
+  noun: ['user', 'users'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
+  searchField: searchInput,
+});
 
 const filters = ref<{
   _searchBlob: FilterEntry<string>;
@@ -506,7 +515,7 @@ onMounted(() => {
   suppressSync = false;
   void load();
   if (!isActive(filters.value._searchBlob.value)) {
-    searchInput.value?.focus();
+    (searchInput.value?.$el as HTMLElement | undefined)?.focus();
   }
 });
 </script>
@@ -578,6 +587,8 @@ onMounted(() => {
       scrollable
       scroll-height="flex"
       v-bind="listTable"
+      :ref="setListTable"
+      :pt="listPt"
       class="users-table"
       @value-change="(v: UserRow[]) => (filteredRows = v)"
       @row-click="(ev) => openDetail(ev.data as UserSummary)"
