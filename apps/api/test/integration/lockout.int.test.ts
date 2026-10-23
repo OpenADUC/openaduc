@@ -55,6 +55,17 @@ describe('locked status', () => {
     expect(user.lockedAt).toEqual(expect.any(String));
   });
 
+  it('sorts by status the way the user page ranks: disabled, locked, must change', async () => {
+    const res = await admin.get('/api/users?sort=status&pageSize=500');
+    const names = res
+      .json<{ rows: { samAccountName: string }[] }>()
+      .rows.map((r) => r.samAccountName);
+    const at = (sam: string) => names.indexOf(sam);
+    expect(at('carol.chen')).toBeGreaterThanOrEqual(0);
+    expect(at('carol.chen')).toBeLessThan(at('dave.diaz'));
+    expect(at('dave.diaz')).toBeLessThan(at('erin.evans'));
+  });
+
   it('clears once the lockout duration has passed, though lockoutTime is still set', async () => {
     // 1 minute is the shortest duration AD allows; wait until AD itself
     // says Dave's lockout has lapsed (lockoutTime stays non-zero).

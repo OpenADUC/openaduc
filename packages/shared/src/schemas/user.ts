@@ -255,9 +255,10 @@ export const userSearchQuerySchema = z.object({
       'passwordExpiresAt',
       'accountExpiresAt',
       'modifiedAtSource',
-      // `status` orders by a derived priority: locked → disabled → expired
-      // → pwd-expired → pwd-expiring → active. The route translates it into
-      // a CASE expression; ASC = most-attention-needed first.
+      // `status` orders by a derived priority: disabled → locked →
+      // pwd-expired → account expired → must change → pwd-expiring →
+      // active, as the SPA ranks them. The route translates it into a CASE
+      // expression; ASC = most-attention-needed first.
       'status',
     ])
     .default('displayName'),

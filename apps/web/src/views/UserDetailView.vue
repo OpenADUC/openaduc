@@ -28,19 +28,13 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { lastDayOf } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
-import {
-  describeBlocker,
-  lockoutEnd,
-  signInBlockers,
-  signInFix,
-  type SignInFix,
-} from '../design/lib/signIn.js';
+import { lockoutEnd, signInBlockers, signInFix, type SignInFix } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
-import { fmtAbsolute, userStatus, type UserStatusKind } from '../design/lib/format.js';
+import { fmtAbsolute } from '../design/lib/format.js';
 import type { UserDetail } from '@openaduc/shared';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type {
@@ -613,13 +607,6 @@ function runFix(fix: SignInFix): void {
   }
 }
 
-// The badge names the same condition the status line leads with.
-const badgeKind = computed<UserStatusKind>(() => {
-  const top = blockers.value[0];
-  if (top) return describeBlocker(top).badge;
-  return user.value ? userStatus(user.value) : 'active';
-});
-
 const lockoutEndText = computed(() => {
   const locked = blockers.value.find((b) => b.kind === 'locked');
   return locked ? lockoutEnd(locked) : null;
@@ -1025,7 +1012,7 @@ watch(user, (u) => {
       @refresh="refreshFromAd"
     >
       <template #badges>
-        <StatusBadge :kind="badgeKind" size="lg" />
+        <StatusBadge :user="user" size="lg" />
         <span
           v-if="user.isPrivileged"
           class="badge badge-amber badge-lg"
@@ -1113,7 +1100,7 @@ watch(user, (u) => {
           <Card title="Account">
             <dl class="kv-grid">
               <dt class="fld-label">Status</dt>
-              <dd><StatusBadge :kind="badgeKind" /></dd>
+              <dd><StatusBadge :user="user" /></dd>
               <dt class="fld-label">Last logon</dt>
               <dd class="mono">{{ fmtAbsolute(user.lastLogonAt) }}</dd>
               <template v-if="user.entra">
@@ -1590,7 +1577,7 @@ watch(user, (u) => {
           <Card title="Sign-in & Identity">
             <dl class="kv-grid">
               <dt class="fld-label">Status</dt>
-              <dd><StatusBadge :kind="badgeKind" /></dd>
+              <dd><StatusBadge :user="user" /></dd>
               <dt class="fld-label">Locked</dt>
               <dd>{{ user.locked ? 'Yes' : 'No' }}</dd>
               <template v-if="user.lockedAt">

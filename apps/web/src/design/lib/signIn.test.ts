@@ -6,6 +6,7 @@ import {
   lockoutEnd,
   signInBlockers,
   signInFix,
+  userStatus,
   type SignInBlocker,
 } from './signIn.js';
 
@@ -145,7 +146,6 @@ describe('describeBlocker', () => {
   it('names each condition with its timing', () => {
     expect(describeBlocker({ kind: 'disabled', changedAt: HOUR_AGO }, NOW)).toMatchObject({
       title: 'Disabled',
-      badge: 'disabled',
       details: [`Account last changed ${at(HOUR_AGO)} (1h ago)`],
     });
     expect(
@@ -180,5 +180,31 @@ describe('describeBlocker', () => {
       describeBlocker({ kind: 'locked', since: null, badPasswords: 1, ends: 'unknown' }, NOW)
         .details,
     ).toEqual(['1 bad password']);
+  });
+});
+
+describe('userStatus', () => {
+  const days = (n: number) => new Date(NOW.getTime() + n * 86_400_000).toISOString();
+
+  it('names the most severe condition, as the user’s page leads with it', () => {
+    expect(userStatus({ enabled: false, locked: true }, NOW)).toBe('disabled');
+    expect(userStatus({ enabled: true, locked: true, passwordMustChange: true }, NOW)).toBe(
+      'locked',
+    );
+    expect(
+      userStatus({ enabled: true, passwordExpiresAt: days(-1), accountExpiresAt: days(-1) }, NOW),
+    ).toBe('pwd-expired');
+    expect(
+      userStatus({ enabled: true, accountExpiresAt: days(-1), passwordMustChange: true }, NOW),
+    ).toBe('expired');
+    expect(userStatus({ enabled: true, passwordMustChange: true }, NOW)).toBe('pwd-must-change');
+  });
+
+  it('falls back to a password expiring within two weeks', () => {
+    expect(userStatus({ enabled: true, passwordExpiresAt: days(5) }, NOW)).toBe('pwd-expiring');
+    expect(userStatus({ enabled: true, passwordExpiresAt: days(30) }, NOW)).toBe('active');
+    expect(
+      userStatus({ enabled: true, passwordExpiresAt: days(5), passwordNeverExpires: true }, NOW),
+    ).toBe('active');
   });
 });
