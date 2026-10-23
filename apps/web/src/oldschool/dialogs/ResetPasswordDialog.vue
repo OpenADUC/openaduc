@@ -1,7 +1,4 @@
-<!-- SPDX-License-Identifier: BUSL-1.1
-     Classic "Reset Password" dialog. Same workflow as the modern dialog
-     (usePasswordReset): policy check, generator, and an unlock that goes
-     in the same request as the password. -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import WinDialog from './WinDialog.vue';
