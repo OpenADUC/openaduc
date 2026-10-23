@@ -131,8 +131,8 @@ describe('the Old School user properties', () => {
 
     expect(dialog.get('#displayName').attributes('disabled')).toBeDefined();
     await openTab(dialog, 'Account');
-    expect(dialog.get('input[type="checkbox"]').attributes('disabled')).toBeDefined();
+    expect(dialog.text()).not.toContain('Unlock account');
     await openTab(dialog, 'Member Of');
-    expect(button(dialog, 'Add…').attributes('disabled')).toBeDefined();
+    expect(dialog.findAll('button').some((b) => b.text() === 'Add…')).toBe(false);
   });
 });

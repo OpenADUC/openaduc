@@ -498,8 +498,8 @@ const upnLogonName = computed(() => {
           <button class="os-btn" disabled>Log On To…</button>
         </div>
         <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
-        <label class="os-check" :class="{ disabled: !user.locked || !canUnlock }">
-          <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked || !canUnlock" />
+        <label v-if="canUnlock" class="os-check" :class="{ disabled: !user.locked }">
+          <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked" />
           Unlock account. This account is currently
           {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
           Controller.
@@ -691,14 +691,12 @@ const upnLogonName = computed(() => {
             <span style="color: var(--os-window-text-muted)" v-if="!g.direct">(via nested)</span>
           </div>
         </div>
-        <div style="display: flex; gap: 6px; margin-top: 8px">
-          <button class="os-btn" type="button" :disabled="!canManageGroups" @click="openAddGroup">
-            Add…
-          </button>
+        <div v-if="canManageGroups" style="display: flex; gap: 6px; margin-top: 8px">
+          <button class="os-btn" type="button" @click="openAddGroup">Add…</button>
           <button
             class="os-btn"
             type="button"
-            :disabled="!memberOfPending || !canManageGroups"
+            :disabled="!memberOfPending"
             @click="
               () => {
                 const g = user!.groupMemberships.find((x) => x.id === memberOfPending);
