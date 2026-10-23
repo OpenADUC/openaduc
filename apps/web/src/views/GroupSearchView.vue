@@ -18,6 +18,7 @@ import { api } from '../api/index.js';
 import type { GroupCreateResponse, GroupSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useThemeStore } from '../design/stores/useTheme.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
@@ -57,6 +58,8 @@ const rows = ref<GroupSummary[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+// The first load (or a reload of an empty list): the table shows skeleton rows.
+const skeleton = computed(() => loading.value && rows.value.length === 0);
 const drawerOpen = ref(false);
 
 const filters = ref<{
@@ -187,7 +190,7 @@ onMounted(load);
 <template>
   <AppToast />
   <div class="page-inner page-fill groups-page">
-    <PageHeader :title="`Groups (${total.toLocaleString()})`">
+    <PageHeader :title="skeleton ? 'Groups' : `Groups (${total.toLocaleString()})`">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button v-if="canCreate" label="New group" icon="pi pi-plus" @click="newGroupOpen = true" />
@@ -228,7 +231,7 @@ onMounted(load);
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading"
+      :loading="loading && !skeleton"
       data-key="id"
       removable-sort
       sort-field="name"
@@ -240,7 +243,13 @@ onMounted(load);
       class="groups-table ds-list-table"
     >
       <template #empty>
+        <ListSkeleton
+          v-if="skeleton"
+          :columns="['avatar-rounded', 'badge', 'badge', 'text']"
+          label="Loading groups…"
+        />
         <EmptyState
+          v-else
           icon="pi pi-users"
           :title="activeCount > 0 ? 'No groups match these filters' : 'No groups yet'"
           :message="
