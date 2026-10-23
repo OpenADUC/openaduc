@@ -26,13 +26,12 @@ import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
-import { useThemeStore } from '../design/stores/useTheme.js';
+import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
 const router = useRouter();
-const theme = useThemeStore();
 const auth = useAuthStore();
 const toast = useToast();
 
@@ -60,8 +59,19 @@ const total = ref(0);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
-// The first load (or a reload of an empty list): the table shows skeleton rows.
-const skeleton = computed(() => loading.value && rows.value.length === 0);
+const {
+  skeleton,
+  table: listTable,
+  title: pageTitle,
+  status: listStatus,
+} = useListLoading({
+  rows,
+  loading,
+  error,
+  total: () => total.value,
+  title: 'Users',
+  noun: ['user', 'users'],
+});
 const drawerOpen = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
 
@@ -504,7 +514,8 @@ onMounted(() => {
 <template>
   <Toast />
   <div class="page-inner page-fill users-page">
-    <PageHeader :title="skeleton ? 'Users' : `Users (${total.toLocaleString()})`">
+    <span class="sr-only" role="status">{{ listStatus }}</span>
+    <PageHeader :title="pageTitle">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
@@ -560,15 +571,14 @@ onMounted(() => {
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading && !skeleton"
       data-key="id"
       removable-sort
       sort-field="displayName"
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: theme.listRowHeight }"
-      class="users-table ds-list-table"
+      v-bind="listTable"
+      class="users-table"
       @value-change="(v: UserRow[]) => (filteredRows = v)"
       @row-click="(ev) => openDetail(ev.data as UserSummary)"
     >
@@ -576,7 +586,6 @@ onMounted(() => {
         <ListSkeleton
           v-if="skeleton"
           :columns="['check', 'avatar', 'badge', 'badge', 'text', 'text', 'text', 'text']"
-          label="Loading users…"
         />
         <EmptyState
           v-else
