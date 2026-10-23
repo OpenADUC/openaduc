@@ -15,7 +15,7 @@ import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import type { UserAttribute } from '../../design/composables/useUserAttributeEdit.js';
 import { useUserChangesApply } from '../../design/composables/useUserChangesApply.js';
-import { useGroupMembership } from '../../design/composables/useGroupMembership.js';
+import { membershipOf, useGroupMembership } from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
 import type { UserDetail } from '@openaduc/shared';
 
@@ -190,12 +190,7 @@ function confirmRemoveMembership(): void {
   const u = user.value;
   const g = selectedMembership.value;
   if (!u || !g) return;
-  const membership = {
-    userId: u.id,
-    userLabel: u.displayName ?? u.samAccountName,
-    groupId: g.id,
-    groupLabel: g.name || g.distinguishedName,
-  };
+  const membership = membershipOf(u, g);
   store.openDialog({
     kind: 'confirm',
     title: 'Active Directory Domain Services',
