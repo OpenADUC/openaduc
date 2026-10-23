@@ -7,6 +7,7 @@ import Password from 'primevue/password';
 import Message from 'primevue/message';
 import { useAuthStore } from '../../stores/auth.js';
 import { ApiError } from '../../api/client.js';
+import { ELEVATED_SESSION_LIMITS } from '@openaduc/shared';
 
 const props = defineProps<{
   visible: boolean;
@@ -21,6 +22,10 @@ const emit = defineEmits<{
 }>();
 
 const auth = useAuthStore();
+const defaultIdle = ELEVATED_SESSION_LIMITS.idleTimeout.default;
+const lifetimeMinutes = ELEVATED_SESSION_LIMITS.absoluteLifetime.default;
+const defaultLifetime =
+  lifetimeMinutes % 60 === 0 ? `${lifetimeMinutes / 60} hours` : `${lifetimeMinutes} minutes`;
 const password = ref('');
 const submitting = ref(false);
 const error = ref<string | null>(null);
@@ -73,7 +78,8 @@ function onCancel(): void {
     </Message>
     <p class="dialog-prose">
       Re-enter your AD password to unlock writes. The server uses it to bind as you when applying
-      changes, and forgets it when you've been idle a while or lock writes.
+      changes. Writes stay unlocked until you've been idle a while or reach a time limit (by default
+      {{ defaultIdle }} minutes idle, {{ defaultLifetime }} at most).
     </p>
     <!-- PrimeVue Dialog's onAfterEnter calls focus() which only finds
          elements with the [autofocus] attribute. Without one, it falls

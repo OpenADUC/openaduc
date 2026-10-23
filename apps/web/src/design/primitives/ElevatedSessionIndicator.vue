@@ -1,64 +1,52 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { useToast } from 'primevue/usetoast';
-import { useAuthStore } from '../../stores/auth.js';
-import { ApiError } from '../../api/client.js';
+import { ref } from 'vue';
+import Popover from 'primevue/popover';
+import { useElevatedSession } from '../composables/useElevatedSession.js';
 
-// Sits by the operator's name while an elevated session lives. Deliberately
-// quiet: a clock time rather than a ticking countdown, since activity keeps
-// moving the idle end and the next write simply prompts step-up again.
+// Compact (collapsed sidebar, and so phones) opens a popover rather than
+// ending the session on one tap.
 defineProps<{ compact?: boolean }>();
 
-const auth = useAuthStore();
-const toast = useToast();
-const ending = ref(false);
-
-// The server caps the idle end at the absolute end; once they meet, activity
-// no longer moves it, so "if idle" would mislead.
-const until = computed(() => {
-  const iso = auth.elevatedIdleEndsAt;
-  if (!iso) return null;
-  const time = new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return iso === auth.actor?.elevated.absoluteExpiresAt ? `until ${time}` : `until ${time} if idle`;
-});
-const summary = computed(() =>
-  until.value ? `Writes unlocked ${until.value}` : 'Writes unlocked',
-);
-
-async function end(): Promise<void> {
-  ending.value = true;
-  try {
-    await auth.revokeStepUp();
-  } catch (err) {
-    toast.add({
-      severity: 'error',
-      summary: "Couldn't end the elevated session",
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    ending.value = false;
-  }
-}
+const { active, until, summary, ending, end } = useElevatedSession();
+const popover = ref<InstanceType<typeof Popover> | null>(null);
 </script>
 
 <template>
-  <div v-if="auth.elevated" class="elevated-indicator" :class="{ compact }" role="status">
-    <button
-      v-if="compact"
-      v-tooltip.right="`${summary}. Click to lock writes now.`"
-      type="button"
-      class="ei-icon-btn"
-      aria-label="End elevated session"
-      :disabled="ending"
-      @click="end"
-    >
-      <i class="pi pi-lock-open" aria-hidden="true" />
-    </button>
+  <div v-if="active" class="elevated-indicator" :class="{ compact }">
+    <template v-if="compact">
+      <span role="status" class="ei-hidden">{{ summary }}</span>
+      <button
+        v-tooltip.right="summary"
+        type="button"
+        class="ei-icon-btn"
+        aria-label="Writes unlocked"
+        aria-haspopup="dialog"
+        @click="popover?.toggle($event)"
+      >
+        <i class="pi pi-lock-open" aria-hidden="true" />
+      </button>
+      <Popover ref="popover">
+        <div class="elevated-indicator">
+          <span class="ei-text">
+            <span class="ei-label">Writes unlocked</span>
+            <span v-if="until" class="ei-sub">{{ until }}</span>
+          </span>
+          <button
+            type="button"
+            class="ei-end"
+            aria-label="End elevated session"
+            :disabled="ending"
+            @click="end"
+          >
+            End now
+          </button>
+        </div>
+      </Popover>
+    </template>
     <template v-else>
       <i class="pi pi-lock-open ei-icon" aria-hidden="true" />
-      <span class="ei-text">
+      <span class="ei-text" role="status">
         <span class="ei-label">Writes unlocked</span>
         <span v-if="until" class="ei-sub">{{ until }}</span>
       </span>
@@ -66,11 +54,10 @@ async function end(): Promise<void> {
         type="button"
         class="ei-end"
         aria-label="End elevated session"
-        :title="`${summary}. Lock writes now.`"
         :disabled="ending"
         @click="end"
       >
-        Lock
+        End now
       </button>
     </template>
   </div>
@@ -85,6 +72,15 @@ async function end(): Promise<void> {
   color: var(--text-2);
   font-size: 12px;
   min-width: 0;
+}
+
+.ei-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .elevated-indicator.compact {
