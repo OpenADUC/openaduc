@@ -30,8 +30,7 @@ const today = new Date(new Date().setHours(0, 0, 0, 0));
 const current = computed(() => {
   const at = account.value?.accountExpiresAt ?? null;
   if (at && Date.parse(at) <= Date.now()) return `Expired ${fmtRelative(at)}`;
-  const text = expiryText(at);
-  return text[0]!.toUpperCase() + text.slice(1);
+  return expiryText(at, true);
 });
 
 function pick(day: Date | Date[] | (Date | null)[] | null | undefined): void {

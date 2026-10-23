@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AuditEventRow } from '../../api/index.js';
-import { lastDayOf } from '../lib/accountExpiry.js';
+import { expiryText } from '../lib/accountExpiry.js';
 import { fmtAbsolute, fmtRelative } from '../lib/format.js';
 import EmptyState from './EmptyState.vue';
 
@@ -96,9 +96,7 @@ function detailFor(e: AuditEventRow): string {
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
   if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
-    return md.expiresAt
-      ? `Expires at the end of ${lastDayOf(String(md.expiresAt)).toLocaleDateString()}`
-      : 'Never expires';
+    return expiryText(md.expiresAt ? String(md.expiresAt) : null, true);
   }
   return '';
 }

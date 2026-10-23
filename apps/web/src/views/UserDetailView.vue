@@ -26,7 +26,7 @@ import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
-import { lastDayOf } from '../design/lib/accountExpiry.js';
+import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
 import { lockoutEnd, signInBlockers, signInFix, type SignInFix } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
@@ -1636,11 +1636,7 @@ watch(user, (u) => {
             <dl class="kv-grid">
               <dt class="fld-label">Account expires</dt>
               <dd class="mono">
-                {{
-                  user.accountExpiresAt
-                    ? `End of ${lastDayOf(user.accountExpiresAt).toLocaleDateString()}`
-                    : 'never'
-                }}
+                {{ user.accountExpiresAt ? `At ${expiryMoment(user.accountExpiresAt)}` : 'never' }}
               </dd>
               <dt class="fld-label">Last modified</dt>
               <dd class="mono">{{ fmtAbsolute(user.modifiedAtSource) }}</dd>

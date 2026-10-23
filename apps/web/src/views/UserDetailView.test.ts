@@ -520,4 +520,13 @@ describe('why the user can’t sign in', () => {
     expect(card.text()).toContain('Stays locked until someone unlocks it');
     expect(card.text()).not.toContain('Auto-unlocks');
   });
+
+  it('says on the Account tab which day the account works through', async () => {
+    api.users.get.mockResolvedValue({
+      user: aUserDetail({ accountExpiresAt: new Date(2031, 2, 2).toISOString() }),
+    });
+    const { page } = await openTab('account', ['read:user'], false);
+
+    expect(page.text()).toContain(`At the end of ${new Date(2031, 2, 1).toLocaleDateString()}`);
+  });
 });
