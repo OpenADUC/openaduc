@@ -23,16 +23,21 @@ describe('elevated sessions end when idle', () => {
   });
   afterEach(async () => {
     vi.useRealTimers();
-    await api.app.db
-      .updateTable('app_settings')
-      .set({ value_json: JSON.stringify(240) })
-      .where('key', '=', 'stepup.absolute_lifetime_minutes')
-      .execute();
-    api.app.services.settings.invalidate();
+    await setSetting('stepup.absolute_lifetime_minutes', 240);
+    await setSetting('session.idle_timeout_minutes', 60);
   });
   afterAll(async () => {
     await api?.close();
   });
+
+  async function setSetting(key: string, value: number) {
+    await api.app.db
+      .updateTable('app_settings')
+      .set({ value_json: JSON.stringify(value) })
+      .where('key', '=', key)
+      .execute();
+    api.app.services.settings.invalidate();
+  }
 
   const at = (minutes: number) => vi.setSystemTime(start + minutes * MINUTE);
   const iso = (minutes: number) => new Date(start + minutes * MINUTE).toISOString();
@@ -154,6 +159,19 @@ describe('elevated sessions end when idle', () => {
     at(30);
     expect((await write(admin)).json()).toMatchObject({ error: { code: 'step_up_required' } });
     expect((await elevation(admin)).active).toBe(false);
+  });
+
+  it('ends no later than the sign-in session idles out, password included', async () => {
+    await setSetting('session.idle_timeout_minutes', 10);
+    const admin = await steppedUpAdmin();
+    expect((await elevation(admin)).idleExpiresAt).toBe(iso(10));
+
+    at(10.1);
+    await vi.waitFor(() => expect(api.app.services.credentialCache.size()).toBe(0), {
+      timeout: 8000,
+      interval: 200,
+    });
+    expect((await admin.get('/api/auth/me')).statusCode).toBe(401);
   });
 
   it('makes the limits policy settings that need step-up to change and are audited', async () => {
