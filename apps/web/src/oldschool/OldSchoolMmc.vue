@@ -16,7 +16,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import Toast from 'primevue/toast';
 import { useThemeStore } from '../design/stores/useTheme.js';
 import { useOldSchool } from './stores/useOldSchool.js';
 import OuTreePane from './panes/OuTreePane.vue';
@@ -31,7 +30,8 @@ import MoveDialog from './dialogs/MoveDialog.vue';
 import RenameUserDialog from './dialogs/RenameUserDialog.vue';
 import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
 import AddToGroupDialog from './dialogs/AddToGroupDialog.vue';
-import ConfirmDialog from './dialogs/ConfirmDialog.vue';
+import MessageBoxDialog from './dialogs/MessageBoxDialog.vue';
+import AppToast from '../design/feedback/AppToast.vue';
 import AboutDialog from './dialogs/AboutDialog.vue';
 import FindDialog from './dialogs/FindDialog.vue';
 
@@ -329,7 +329,7 @@ function exitOldSchool(): void {
     </div>
 
     <!-- Dialogs (mounted in the same root so Toast renders on top) -->
-    <Toast position="top-right" />
+    <AppToast position="top-right" />
 
     <!-- Every open dialog is a free-floating window in the windows[]
          list. Each iteration renders its own component; the v-for
@@ -388,14 +388,11 @@ function exitOldSchool(): void {
         :user-label="w.dialog.userLabel"
         @close="store.closeWindow(w.id)"
       />
-      <ConfirmDialog
-        v-else-if="w.dialog.kind === 'confirm'"
+      <MessageBoxDialog
+        v-else-if="w.dialog.kind === 'message'"
         :window-id="w.id"
         :title="w.dialog.title"
         :message="w.dialog.message"
-        :ok-label="w.dialog.okLabel"
-        :destructive="w.dialog.destructive"
-        :on-ok="w.dialog.onOk"
         @close="store.closeWindow(w.id)"
       />
       <FindDialog

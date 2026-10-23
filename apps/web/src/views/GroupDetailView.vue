@@ -10,7 +10,6 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Dialog from 'primevue/dialog';
 import Message from 'primevue/message';
-import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { api } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -19,6 +18,9 @@ import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import AppToast from '../design/feedback/AppToast.vue';
+import InlineFailure from '../design/feedback/InlineFailure.vue';
+import { undoable } from '../design/feedback/undoToast.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
@@ -42,25 +44,45 @@ const {
   pending,
   add: addMembership,
   remove: removeMembership,
+  failure,
+  retry,
+  dismiss,
 } = useGroupMembership({
-  onChanged: async (change, m) => {
+  onChanged: async (change, m, undo) => {
     if (change === 'add') closeAdd();
-    toast.add({
-      severity: 'success',
-      summary: change === 'add' ? 'Added to group' : 'Removed from group',
-      detail:
-        change === 'add' ? `${m.userLabel} → ${m.groupLabel}` : `${m.userLabel} ← ${m.groupLabel}`,
-      life: 3000,
-    });
+    toast.add(
+      undoable(
+        {
+          severity: 'success',
+          summary: change === 'add' ? 'Added to group' : 'Removed from group',
+          detail:
+            change === 'add'
+              ? `${m.userLabel} → ${m.groupLabel}`
+              : `${m.userLabel} ← ${m.groupLabel}`,
+          life: 3000,
+        },
+        undo,
+      ),
+    );
     await load();
   },
-  onFailed: (change, _m, message) =>
-    toast.add({
-      severity: 'error',
-      summary: change === 'add' ? 'Add failed' : 'Remove failed',
-      detail: message,
-      life: 6000,
-    }),
+});
+
+// A failed add shows in the add dialog while it's open; any other failed
+// change (a remove, an Undo) shows on the Members tab.
+const addFailure = computed(() =>
+  addOpen.value && failure.value?.change === 'add' ? failure.value : null,
+);
+const membersFailure = computed(() => {
+  const f = failure.value;
+  if (!f || addFailure.value) return null;
+  return {
+    summary:
+      f.change === 'add'
+        ? `Couldn’t add ${f.membership.userLabel}`
+        : `Couldn’t remove ${f.membership.userLabel}`,
+    message: f.message,
+  };
 });
 const adding = computed(() => pending.value?.change === 'add');
 const removingMemberId = computed(() =>
@@ -96,6 +118,8 @@ onMounted(load);
 // ---- Add member -----------------------------------------------------------
 
 function openAdd(): void {
+  // The dialog shows a failed add, so one it didn't make would read as its own.
+  if (failure.value?.change === 'add') dismiss();
   addOpen.value = true;
   addQuery.value = '';
   addResults.value = [];
@@ -135,6 +159,7 @@ function confirmAdd(): void {
 }
 
 function closeAdd(): void {
+  if (addFailure.value) dismiss();
   addOpen.value = false;
   addSelected.value = null;
   addQuery.value = '';
@@ -197,7 +222,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
 </script>
 
 <template>
-  <Toast />
+  <AppToast />
   <div class="page-inner group-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
@@ -307,6 +332,15 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
           <template v-if="canManage" #actions>
             <Button label="Add member" icon="pi pi-user-plus" size="small" @click="openAdd" />
           </template>
+          <InlineFailure
+            v-if="membersFailure"
+            class="members-failure"
+            :summary="membersFailure.summary"
+            :message="membersFailure.message"
+            :busy="pending !== null"
+            @retry="retry"
+            @dismiss="dismiss"
+          />
           <EmptyState
             v-if="memberCount === 0"
             icon="pi pi-users"
@@ -385,7 +419,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
       header="Add member to group"
       :style="{ width: '32rem' }"
       :closable="!adding"
-      @update:visible="(v) => !v && (addOpen = false)"
+      @update:visible="(v) => !v && closeAdd()"
     >
       <div class="add-form">
         <p class="dialog-prose">Search the directory to pick a user to add.</p>
@@ -415,15 +449,12 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
         </ul>
         <p v-else-if="addQuery.trim() && !addLoading" class="hint">No users matched.</p>
         <p v-if="addLoading" class="hint">Searching…</p>
+        <Message v-if="addFailure" severity="error" closable @close="dismiss">
+          Couldn’t add {{ addFailure.membership.userLabel }}: {{ addFailure.message }}
+        </Message>
       </div>
       <template #footer>
-        <Button
-          label="Cancel"
-          text
-          severity="secondary"
-          :disabled="adding"
-          @click="addOpen = false"
-        />
+        <Button label="Cancel" text severity="secondary" :disabled="adding" @click="closeAdd" />
         <Button
           label="Add"
           :disabled="!addSelected || adding"
@@ -436,6 +467,10 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
 </template>
 
 <style scoped>
+.members-failure {
+  margin: 12px 16px;
+}
+
 .group-detail-page {
   display: flex;
   flex-direction: column;

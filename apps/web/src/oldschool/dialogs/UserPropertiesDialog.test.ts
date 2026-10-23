@@ -15,6 +15,7 @@ const api = {
     update: vi.fn(async () => ({})),
     unlock: vi.fn(async () => ({})),
     removeGroup: vi.fn(async () => ({ ok: true })),
+    addGroup: vi.fn(async () => ({ ok: true })),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -156,8 +157,9 @@ describe('the Old School user properties', () => {
     expect(toast.add).toHaveBeenCalledWith(expect.objectContaining({ severity: 'success' }));
   });
 
-  it('say when the account could not be unlocked', async () => {
+  it('say in a message box when the account could not be unlocked', async () => {
     const { dialog } = await openProperties(['read:user', 'write:user.unlock'], ELEVATED);
+    const oldSchool = useOldSchool();
     api.users.unlock.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
 
     await openTab(dialog, 'Account');
@@ -165,12 +167,13 @@ describe('the Old School user properties', () => {
     await button(dialog, 'Apply').trigger('click');
     await flushPromises();
     expect(api.users.unlock).toHaveBeenCalledOnce();
-    expect(toast.add).toHaveBeenCalledWith(
-      expect.objectContaining({ severity: 'error', detail: 'DC unreachable' }),
-    );
+    expect(oldSchool.windows.at(-1)!.dialog).toMatchObject({
+      kind: 'message',
+      message: 'Unlock failed\nDC unreachable',
+    });
   });
 
-  it('remove a direct membership once confirmed, but not one from a nested group', async () => {
+  it('remove a direct membership without asking, and offer Undo, but not one from a nested group', async () => {
     api.users.get.mockResolvedValueOnce({
       user: aUserDetail({
         groupMemberships: [
@@ -189,15 +192,45 @@ describe('the Old School user properties', () => {
     expect(button(dialog, 'Remove').attributes('disabled')).toBeDefined();
 
     await row('Sales').trigger('click');
-    await button(dialog, 'Remove').trigger('click');
-    const confirm = oldSchool.windows.at(-1)!.dialog;
-    expect(confirm).toMatchObject({ kind: 'confirm', message: 'Remove Jane Doe from "Sales"?' });
     const version = oldSchool.dataVersion;
-
-    await (confirm as Extract<typeof confirm, { kind: 'confirm' }>).onOk();
+    await button(dialog, 'Remove').trigger('click');
     await flushPromises();
+    expect(oldSchool.windows).toHaveLength(1);
     expect(api.users.removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
     expect(oldSchool.dataVersion).toBe(version + 1);
+
+    const removed = toast.add.mock.calls.at(-1)![0] as { summary: string; undo: () => void };
+    expect(removed.summary).toBe('Jane Doe removed from Sales.');
+    removed.undo();
+    await flushPromises();
+    expect(api.users.addGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
+    expect(oldSchool.dataVersion).toBe(version + 2);
+  });
+
+  it('say in a message box when a membership can’t be removed', async () => {
+    api.users.get.mockResolvedValueOnce({
+      user: aUserDetail({
+        groupMemberships: [
+          { id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales', direct: true },
+        ] as never,
+      }),
+    });
+    api.users.removeGroup.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const { dialog } = await openProperties(['read:user', 'write:group.membership'], ELEVATED);
+    const oldSchool = useOldSchool();
+    await openTab(dialog, 'Member Of');
+
+    await dialog
+      .findAll('.os-listbox-row')
+      .find((r) => r.text().includes('Sales'))!
+      .trigger('click');
+    await button(dialog, 'Remove').trigger('click');
+    await flushPromises();
+    expect(oldSchool.windows.at(-1)!.dialog).toEqual({
+      kind: 'message',
+      title: 'Active Directory Domain Services',
+      message: 'Windows cannot remove Jane Doe from Sales because:\nDC unreachable',
+    });
   });
 
   it('show a read-only operator nothing they can change', async () => {
