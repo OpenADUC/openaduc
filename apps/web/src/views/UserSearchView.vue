@@ -25,11 +25,13 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import { useThemeStore } from '../design/stores/useTheme.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
 const router = useRouter();
+const theme = useThemeStore();
 const auth = useAuthStore();
 const toast = useToast();
 
@@ -561,8 +563,8 @@ onMounted(() => {
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
-      class="users-table"
+      :virtual-scroller-options="{ itemSize: theme.listRowHeight }"
+      class="users-table ds-list-table"
       @value-change="(v: UserRow[]) => (filteredRows = v)"
       @row-click="(ev) => openDetail(ev.data as UserSummary)"
     >
