@@ -98,4 +98,66 @@ describe('an operator signed into one directory', () => {
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: { code: 'step_up_required' } });
   });
+
+  it("sees only its own directory's audit rows, plus installation-wide ones", async () => {
+    const auditorA = api.client();
+    await auditorA.signInTo(dirA, 'oa.auditor');
+    const auditorB = api.client();
+    await auditorB.signInTo(dirB, 'oa.auditor');
+    // Denied in B: the authz.deny row must be B's.
+    expect((await auditorB.post(`/api/users/${userB}/unlock`)).statusCode).toBe(403);
+    // A denial recorded before rows named their directory: only its session
+    // says it was B's.
+    const sessionB = await api.app.db
+      .selectFrom('admin_sessions')
+      .select('id')
+      .where('directory_id', '=', dirB)
+      .executeTakeFirstOrThrow();
+    await api.app.services.audit.recordEvent({
+      action: 'authz.deny',
+      result: 'denied',
+      sessionId: sessionB.id,
+      targetType: 'system',
+      metadata: { legacy: true },
+    });
+    // Installation-wide: one set of settings for every directory.
+    const patch = await admin.patch('/api/settings', { 'view.stale_logon_days': 91 });
+    expect(patch.statusCode).toBe(200);
+
+    const list = async (client: TestClient) => {
+      const res = await client.get('/api/audit-events?pageSize=200');
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ rows: AuditRow[]; total: number }>();
+      expect(body.total).toBe(body.rows.length);
+      return body.rows;
+    };
+    const rowsA = await list(auditorA);
+    const rowsB = await list(auditorB);
+
+    expect(rowsA.filter((r) => Number(r.providerId) === dirB)).toEqual([]);
+    expect(rowsA.filter((r) => r.action === 'authz.deny')).toEqual([]);
+    expect(rowsA.some((r) => r.action === 'auth.login' && Number(r.providerId) === dirA)).toBe(
+      true,
+    );
+
+    expect(rowsB.filter((r) => Number(r.providerId) === dirA)).toEqual([]);
+    const denials = rowsB.filter((r) => r.action === 'authz.deny');
+    expect(denials).toHaveLength(2);
+    expect(denials.some((r) => Number(r.providerId) === dirB)).toBe(true);
+    expect(denials.some((r) => r.metadata.legacy === true)).toBe(true);
+
+    for (const rows of [rowsA, rowsB]) {
+      expect(rows.find((r) => r.action === 'settings.update')).toMatchObject({
+        providerId: null,
+        targetId: 'view.stale_logon_days',
+      });
+    }
+  });
 });
+
+interface AuditRow {
+  action: string;
+  providerId: number | string | null;
+  targetId: string | null;
+  metadata: Record<string, unknown>;
+}

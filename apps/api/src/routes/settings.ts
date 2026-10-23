@@ -157,6 +157,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
             action: 'settings.update',
             result: 'success',
             actorAuthMethod: 'ad-password',
+            // One set of settings for every directory.
+            providerId: null,
             targetType: 'config',
             targetId: u.key,
             metadata: { key: u.key },
