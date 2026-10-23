@@ -26,6 +26,8 @@ export type DialogSpec =
   | { kind: 'reset-password'; id: string; samAccountName: string }
   | { kind: 'rename-user'; id: string }
   | { kind: 'delete-user'; id: string; label: string }
+  | { kind: 'new-group'; parentDn: string }
+  | { kind: 'delete-group'; id: string; label: string }
   | { kind: 'move'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | { kind: 'message'; title: string; message: string }
@@ -69,7 +71,10 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
     case 'rename-user':
       return { width: 460, height: 400 };
     case 'delete-user':
+    case 'delete-group':
       return { width: 460, height: 270 };
+    case 'new-group':
+      return { width: 440, height: 400 };
     case 'move':
       return { width: 460, height: 500 };
     case 'add-to-group':

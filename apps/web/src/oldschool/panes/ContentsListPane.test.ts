@@ -36,11 +36,11 @@ const { useOldSchool } = await import('../stores/useOldSchool.js');
 
 enableAutoUnmount(afterEach);
 
-async function openStaff() {
+async function openStaff(capabilities = ['read:user', 'write:user.enableDisable']) {
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().actor = {
-    capabilities: ['read:user', 'write:user.enableDisable'],
+    capabilities,
     elevated: {
       active: true,
       idleExpiresAt: '2999-01-01T00:15:00.000Z',
@@ -93,5 +93,45 @@ describe('the Old School contents list', () => {
       title: 'Active Directory Domain Services',
       message: 'Windows cannot disable object Jane Doe because:\nDC unreachable',
     });
+  });
+});
+
+describe('a group in the Old School contents list', () => {
+  const engineering = {
+    id: 'g1',
+    name: 'Engineering',
+    samAccountName: 'engineering',
+    description: null,
+    groupType: 'security',
+    groupScope: 'global',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.ous.contents.mockResolvedValueOnce({
+      users: [],
+      groups: [engineering],
+      computers: [],
+    } as never);
+  });
+
+  it('opens the delete prompt for operators who may delete groups', async () => {
+    const { pane, oldSchool } = await openStaff(['read:group', 'write:group.delete']);
+
+    await choose(pane, 'Delete');
+
+    expect(oldSchool.windows.at(-1)!.dialog).toEqual({
+      kind: 'delete-group',
+      id: 'g1',
+      label: 'Engineering',
+    });
+  });
+
+  it('keeps Delete disabled for everyone else', async () => {
+    const { pane, oldSchool } = await openStaff(['read:group']);
+
+    await choose(pane, 'Delete');
+
+    expect(oldSchool.windows).toEqual([]);
   });
 });

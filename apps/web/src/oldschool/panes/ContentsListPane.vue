@@ -281,7 +281,12 @@ function groupItems(r: Row): CtxItem[] {
     { label: 'Move…', disabled: true },
     { label: 'Send Mail', disabled: true },
     { kind: 'separator' },
-    { label: 'Delete', disabled: true },
+    can('write:group.delete')
+      ? {
+          label: 'Delete',
+          onSelect: () => store.openDialog({ kind: 'delete-group', id: r.id, label: r.name }),
+        }
+      : { label: 'Delete', disabled: true },
     { label: 'Rename', disabled: true },
     { kind: 'separator' },
     {
