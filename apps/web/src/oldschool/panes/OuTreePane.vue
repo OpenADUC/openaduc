@@ -18,8 +18,7 @@
 -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
+import { useOuTree } from '../../design/composables/useOuTree.js';
 import { useOldSchool, type SelectedNode } from '../stores/useOldSchool.js';
 import WinIcon from '../primitives/WinIcon.vue';
 import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
@@ -27,22 +26,7 @@ import type { DirectoryOu } from '@openaduc/shared';
 
 const store = useOldSchool();
 
-const ous = ref<DirectoryOu[]>([]);
-const loading = ref(false);
-const errorMsg = ref<string | null>(null);
-
-async function loadTree(): Promise<void> {
-  loading.value = true;
-  errorMsg.value = null;
-  try {
-    const resp = await api.ous.list();
-    ous.value = resp.ous;
-  } catch (err) {
-    errorMsg.value = err instanceof ApiError ? err.message : 'failed to load OUs';
-  } finally {
-    loading.value = false;
-  }
-}
+const { ous, loading, error: errorMsg, load: loadTree } = useOuTree();
 
 // --- Domain DN resolution ----------------------------------------------
 //
