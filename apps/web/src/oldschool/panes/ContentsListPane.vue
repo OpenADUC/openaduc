@@ -201,6 +201,10 @@ function buildItems(r: Row): CtxItem[] {
   return [];
 }
 
+const can = (capability: string): boolean => auth.hasCapability(capability);
+
+// Writes the operator's capabilities don't allow stay listed but greyed
+// out, the way ADUC shows them.
 function userItems(r: Row): CtxItem[] {
   return [
     {
@@ -208,43 +212,50 @@ function userItems(r: Row): CtxItem[] {
       disabled: true,
       onSelect: () => undefined,
     },
-    {
-      label: 'Add to a group…',
-      onSelect: () => store.openDialog({ kind: 'add-to-group', userId: r.id, userLabel: r.name }),
-    },
-    r.disabled
+    can('write:group.membership')
       ? {
-          label: 'Enable Account',
+          label: 'Add to a group…',
           onSelect: () =>
-            auth.requireStepUp(async () => {
-              try {
-                await api.users.enable(r.id);
-                showToastSuccess(`Object "${r.name}" has been enabled.`);
-                store.bumpData();
-              } catch (err) {
-                showToastError(err);
-              }
-            }, 'Enabling a user account requires step-up authentication.'),
+            store.openDialog({ kind: 'add-to-group', userId: r.id, userLabel: r.name }),
         }
-      : {
-          label: 'Disable Account',
+      : { label: 'Add to a group…', disabled: true },
+    !can('write:user.enableDisable')
+      ? { label: r.disabled ? 'Enable Account' : 'Disable Account', disabled: true }
+      : r.disabled
+        ? {
+            label: 'Enable Account',
+            onSelect: () =>
+              auth.requireStepUp(async () => {
+                try {
+                  await api.users.enable(r.id);
+                  showToastSuccess(`Object "${r.name}" has been enabled.`);
+                  store.bumpData();
+                } catch (err) {
+                  showToastError(err);
+                }
+              }, 'Enabling a user account requires step-up authentication.'),
+          }
+        : {
+            label: 'Disable Account',
+            onSelect: () =>
+              auth.requireStepUp(async () => {
+                try {
+                  await api.users.disable(r.id);
+                  showToastSuccess(`Object "${r.name}" has been disabled.`);
+                  store.bumpData();
+                } catch (err) {
+                  showToastError(err);
+                }
+              }, 'Disabling a user account requires step-up authentication.'),
+          },
+    can('write:user.resetPassword')
+      ? {
+          label: 'Reset Password…',
           onSelect: () =>
-            auth.requireStepUp(async () => {
-              try {
-                await api.users.disable(r.id);
-                showToastSuccess(`Object "${r.name}" has been disabled.`);
-                store.bumpData();
-              } catch (err) {
-                showToastError(err);
-              }
-            }, 'Disabling a user account requires step-up authentication.'),
-        },
-    {
-      label: 'Reset Password…',
-      onSelect: () =>
-        store.openDialog({ kind: 'reset-password', id: r.id, samAccountName: r.name }),
-    },
-    r.locked
+            store.openDialog({ kind: 'reset-password', id: r.id, samAccountName: r.name }),
+        }
+      : { label: 'Reset Password…', disabled: true },
+    r.locked && can('write:user.unlock')
       ? {
           label: 'Unlock Account',
           onSelect: () =>
@@ -259,15 +270,17 @@ function userItems(r: Row): CtxItem[] {
             }, 'Unlocking a user account requires step-up authentication.'),
         }
       : { label: 'Unlock Account', disabled: true },
-    {
-      label: 'Move…',
-      onSelect: () =>
-        store.openDialog({ kind: 'move', objectKind: 'user', id: r.id, label: r.name }),
-    },
+    can('write:user.move')
+      ? {
+          label: 'Move…',
+          onSelect: () =>
+            store.openDialog({ kind: 'move', objectKind: 'user', id: r.id, label: r.name }),
+        }
+      : { label: 'Move…', disabled: true },
     { kind: 'separator' },
     // Delete is only offered for disabled accounts, which is also what the
     // server enforces.
-    auth.hasCapability('write:user.delete') && r.disabled
+    can('write:user.delete') && r.disabled
       ? {
           label: 'Delete',
           onSelect: () =>
@@ -277,7 +290,7 @@ function userItems(r: Row): CtxItem[] {
             ),
         }
       : { label: 'Delete', disabled: true },
-    auth.hasCapability('write:user.rename')
+    can('write:user.rename')
       ? {
           label: 'Rename',
           onSelect: () => store.openDialog({ kind: 'rename-user', id: r.id }),
