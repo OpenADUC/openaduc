@@ -161,14 +161,14 @@ const freshnessText = computed(() => {
 </script>
 
 <template>
+  <!-- Always mounted, and outside the busy region, so the change is read out. -->
+  <span class="sr-only" role="status">{{ loading ? `Loading ${kind}…` : '' }}</span>
   <div
     class="detail-stack"
     :class="{ 'skeleton-delayed': loading }"
     :style="{ '--detail-sticky-offset': `${heroHeight}px` }"
     :aria-busy="loading || undefined"
   >
-    <span v-if="loading" class="sr-only" role="status">Loading {{ kind }}…</span>
-
     <!-- Identity on the left, primary actions on the right; everything else
          the operator can do sits in the tab bar's Actions menu. -->
     <section

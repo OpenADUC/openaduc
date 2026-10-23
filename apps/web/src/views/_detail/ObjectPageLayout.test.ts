@@ -279,6 +279,19 @@ describe('while the record loads', () => {
     expect(page.find('.freshness-foot').exists()).toBe(false);
   });
 
+  it('says it is loading outside the busy region, then stops saying so', async () => {
+    const { page } = await open('/groups/g1', { loading: true });
+    const status = page.get('[role="status"]');
+    expect(status.element.closest('[aria-busy]')).toBeNull();
+    expect(page.get('.detail-stack').attributes('aria-busy')).toBe('true');
+
+    loading.value = false;
+    await flushPromises();
+    expect(page.get('[role="status"]').element).toBe(status.element);
+    expect(status.text()).toBe('');
+    expect(page.get('.detail-stack').attributes('aria-busy')).toBeUndefined();
+  });
+
   it('keeps the lines it held when the record has nothing for them', async () => {
     const { page } = await open('/groups/g1', { loading: true, skeleton: { subtitle: true } });
     loading.value = false;
