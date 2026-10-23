@@ -16,6 +16,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import { fmtRelative } from '../design/lib/format.js';
 import { useStickyHeader } from './_detail/useStickyHeader';
+import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -34,6 +35,10 @@ const {
   notFoundMessage: 'Computer not found',
   failedMessage: 'Failed to load computer',
 });
+useRecordCrumb(
+  () => props.id,
+  () => computer.value?.name ?? computer.value?.distinguishedName,
+);
 
 function refreshFromAd(): Promise<void> {
   // GET live-refreshes against AD, so a reload is a sync of this one object.

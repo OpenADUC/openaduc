@@ -36,6 +36,8 @@ import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 import type { GroupSummary, UserDetail, UserUpdateRequest } from '@openaduc/shared';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useCompactTabs } from './_detail/useCompactTabs';
+import { useRouteTab } from './_detail/useRouteTab';
+import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
 
 // 'location' / 'security' tabs map to 'organization' / 'contact' / 'account'.
@@ -321,9 +323,12 @@ const {
   },
   onLoaded: () => resetForm(),
 });
+useRecordCrumb(
+  () => props.id,
+  () => user.value?.displayName ?? user.value?.samAccountName,
+);
 
 const saving = ref(false);
-const activeTab = ref<TabId>('overview');
 const rawFilter = ref('');
 
 // Drives the compact-on-scroll hero. `setHero` is bound to the hero
@@ -1214,11 +1219,12 @@ const tabs = computed<TabSpec[]>(() => {
   return list;
 });
 
-// If the active tab gets hidden (e.g. capability changes), fall back to overview
-watch(tabs, (list) => {
-  if (!list.find((t) => t.id === activeTab.value && t.visible)) {
-    activeTab.value = 'overview';
-  }
+// The tab lives in the URL; a hidden or unknown one falls back to Overview
+// once the user has loaded (Sign-ins and Debug depend on the record).
+const activeTab = useRouteTab<TabId>({
+  tabs: () => tabs.value,
+  fallback: 'overview',
+  ready: () => !!user.value,
 });
 
 // First N groups for the Overview summary

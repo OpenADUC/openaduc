@@ -27,3 +27,10 @@ compares `scrollWidth` to `clientWidth` (with hysteresis) and flips the
 ref when content would overflow. CSS hides `.ds-tab-label` while the
 class is set; each tab's `title` attribute carries the full label so the
 native browser tooltip identifies icons.
+
+`useRouteTab` keeps a tabbed detail page's active tab in the `tab` query
+parameter, so reload, Back and shared links reopen the same tab. Switching
+replaces the history entry instead of pushing one. Pass it the tab list
+with visibility, a fallback, and a `ready` flag for when visibility is final
+(tabs that depend on the loaded record); unknown or hidden tabs fall back
+and are dropped from the URL.

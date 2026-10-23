@@ -14,6 +14,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import { fmtRelative } from '../design/lib/format.js';
 import { CSE_NAMES } from '../design/lib/gpoCseNames.js';
 import { useStickyHeader } from './_detail/useStickyHeader';
+import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -42,6 +43,11 @@ async function load(): Promise<void> {
 
 watch(() => props.id, load);
 onMounted(load);
+// `policy` lingers while the next one loads; only name the one on screen.
+useRecordCrumb(
+  () => props.id,
+  () => (policy.value?.id === props.id ? (policy.value.displayName ?? policy.value.gpoGuid) : null),
+);
 
 const { setHero, compact } = useStickyHeader();
 
