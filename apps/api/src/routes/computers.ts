@@ -270,7 +270,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
     },
     handler: async (req) =>
-      writeComputer(app, req, {
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
         action: 'computer.disable',
         verb: 'disable',
         write: (provider, id, c) => provider.disableComputer(id, c),
@@ -282,7 +282,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
     },
     handler: async (req) =>
-      writeComputer(app, req, {
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
         action: 'computer.enable',
         verb: 'enable',
         write: (provider, id, c) => provider.enableComputer(id, c),
@@ -297,7 +297,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       policy: { capability: 'write:computer.resetAccount', stepUp: true, directory: 'caller' },
     },
     handler: async (req) =>
-      writeComputer(app, req, {
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
         action: 'computer.reset',
         verb: 'reset the account',
         forbidden: 'directory refused the reset — you may lack the Reset Password right',
@@ -314,7 +314,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       const provider = await app.services.providers.buildForRequest(req);
       const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
       if (!targetOu) throw app.httpErrors.badRequest('target OU not found in directory cache');
-      return writeComputer(app, req, {
+      return writeComputer(app, req, provider, {
         action: 'computer.move',
         verb: 'move',
         metadata: { targetOuDn: targetOu.distinguished_name, targetOuName: targetOu.name },
@@ -339,6 +339,7 @@ async function refreshComputer(
 async function writeComputer(
   app: FastifyInstance,
   req: FastifyRequest,
+  provider: DirectoryProvider,
   spec: {
     action: string;
     /** What was refused, as in "cannot disable". */
@@ -355,7 +356,6 @@ async function writeComputer(
   const { id } = idParamSchema.parse(req.params);
   const actor = req.actor!;
   if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
-  const provider = await app.services.providers.buildForRequest(req);
 
   const before = await refreshComputer(app, provider, id);
   if (!before) throw NotFound('computer not found');
