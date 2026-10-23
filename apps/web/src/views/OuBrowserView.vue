@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import Tree from 'primevue/tree';
 import Button from 'primevue/button';
 import ContextMenu from 'primevue/contextmenu';
@@ -193,6 +193,56 @@ watch(selectedDn, (dn) => {
   if (dn) loadContents(dn);
   else contents.value = { ...emptyContents };
 });
+
+// ---- Selected OU in the URL ----------------------------------------------
+//
+// The selection lives in the `ou` query parameter too, so quick search and
+// shared links can open the browser at an OU and reload keeps it. Written
+// with replace: clicking through the tree doesn't stack history entries.
+
+const route = useRoute();
+const router = useRouter();
+// The route is global and moves on before this page unmounts; only touch
+// the query while it's still ours.
+const ownRoute = route.name;
+const routeOu = computed(() =>
+  route.name === ownRoute && typeof route.query.ou === 'string' ? route.query.ou : null,
+);
+const sameDn = (a: string | null, b: string | null) => a?.toLowerCase() === b?.toLowerCase();
+
+function setRouteOu(dn: string | null): void {
+  if (route.name !== ownRoute || sameDn(dn, routeOu.value)) return;
+  const query = { ...route.query };
+  if (dn) query.ou = dn;
+  else delete query.ou;
+  void router.replace({ query });
+}
+
+function expandAncestors(ou: DirectoryOu): void {
+  const next = { ...expandedKeys.value };
+  for (let dn = ou.parentDn; dn;) {
+    next[dn] = true;
+    dn = ous.value.find((o) => sameDn(o.distinguishedName, dn))?.parentDn ?? null;
+  }
+  expandedKeys.value = next;
+}
+
+watch(
+  [routeOu, ous],
+  ([dn]) => {
+    if (dn === null || ous.value.length === 0 || sameDn(dn, selectedDn.value)) return;
+    const ou = ous.value.find((o) => sameDn(o.distinguishedName, dn));
+    if (!ou) {
+      setRouteOu(null);
+      return;
+    }
+    selectionKeys.value = { [ou.distinguishedName]: true };
+    expandAncestors(ou);
+  },
+  { immediate: true },
+);
+
+watch(selectedDn, (dn) => setRouteOu(dn));
 
 onMounted(loadTree);
 
