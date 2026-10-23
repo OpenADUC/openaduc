@@ -174,7 +174,7 @@ describe('unsaved edits when the elevated session ends', () => {
 describe('a dialog write without an elevated session', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('opens without step-up, then completes after the step-up its submit prompts', async () => {
+  it('opens without step-up, prompts it on submit, then completes', async () => {
     const { page, auth } = await openTab(
       'account',
       ['read:user', 'write:user.resetPassword'],
@@ -184,16 +184,14 @@ describe('a dialog write without an elevated session', () => {
     await click(page, 'Reset password');
     expect(auth.stepUpRequested).toBe(false);
     await page.get('#reset-new-password').setValue('N3w-passw0rd!');
-    api.users.resetPassword.mockRejectedValueOnce(
-      new ApiError(403, 'step_up_required', 'step-up required'),
-    );
     await click(page, 'Reset');
-    expect(page.text()).not.toContain('step-up required');
+    expect(auth.stepUpRequested).toBe(true);
+    expect(api.users.resetPassword).not.toHaveBeenCalled();
 
     await auth.stepUp('pw');
     await flushPromises();
-    expect(api.users.resetPassword).toHaveBeenCalledTimes(2);
-    expect(api.users.resetPassword).toHaveBeenLastCalledWith('u1', {
+    expect(api.users.resetPassword).toHaveBeenCalledOnce();
+    expect(api.users.resetPassword).toHaveBeenCalledWith('u1', {
       newPassword: 'N3w-passw0rd!',
       forceChangeAtNextLogin: true,
       unlock: false,

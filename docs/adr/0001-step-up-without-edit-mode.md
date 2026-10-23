@@ -12,3 +12,5 @@ Write-capable operators always see editable fields and actions. The first write 
 ## Consequences
 
 The operator's AD password stays cached in memory for as long as the elevated session lives. The idle timeout limits how long an unattended browser keeps write access; the absolute cap limits how long the password can stay cached however busy the operator is. Requests the SPA makes by itself, such as polling a running sync task, don't count as activity: otherwise an unattended browser left on a polling page would stay elevated until the absolute cap.
+
+Every write prompts step-up before its first request when the operator isn't elevated (`requireStepUp`), and retries after a step-up when the server answers `step_up_required` because the elevated session ended meanwhile (`retryAfterStepUp`); a write never sends a request just to learn that it needs step-up.
