@@ -612,7 +612,7 @@ onMounted(() => {
         </template>
       </Column>
 
-      <Column header="User" field="displayName" sortable :style="{ minWidth: '260px' }">
+      <Column header="User" field="displayName" sortable>
         <template #body="{ data }">
           <div class="user-cell">
             <Avatar
@@ -632,12 +632,12 @@ onMounted(() => {
           </div>
         </template>
       </Column>
-      <Column header="Status" field="_acctStatus" sortable :style="{ width: '140px' }">
+      <Column header="Status" field="_acctStatus" sortable :style="{ width: '200px' }">
         <template #body="{ data }">
           <StatusBadge :user="data" />
         </template>
       </Column>
-      <Column header="Pwd expires" field="passwordExpiresAt" sortable :style="{ width: '160px' }">
+      <Column header="Pwd expires" field="passwordExpiresAt" sortable :style="{ width: '130px' }">
         <template #body="{ data }">
           <span
             class="badge"
@@ -649,24 +649,26 @@ onMounted(() => {
           </span>
         </template>
       </Column>
-      <Column field="department" header="Department" sortable :style="{ width: '180px' }">
+      <Column field="department" header="Department" sortable :style="{ width: '13%' }">
         <template #body="{ data }">
-          <span class="cell-muted">{{ data.department ?? '—' }}</span>
+          <span class="cell-muted" :title="data.department ?? undefined">{{
+            data.department ?? '—'
+          }}</span>
         </template>
       </Column>
-      <Column field="title" header="Title" sortable :style="{ width: '180px' }">
+      <Column field="title" header="Title" sortable :style="{ width: '13%' }">
         <template #body="{ data }">
-          <span class="cell-muted">{{ data.title ?? '—' }}</span>
+          <span class="cell-muted" :title="data.title ?? undefined">{{ data.title ?? '—' }}</span>
         </template>
       </Column>
-      <Column header="Last logon" field="lastLogonAt" sortable :style="{ width: '140px' }">
+      <Column header="Last logon" field="lastLogonAt" sortable :style="{ width: '120px' }">
         <template #body="{ data }">
           <span class="cell-mono">{{
             data.lastLogonAt ? fmtRelative(data.lastLogonAt) : '—'
           }}</span>
         </template>
       </Column>
-      <Column header="Modified" field="modifiedAtSource" sortable :style="{ width: '140px' }">
+      <Column header="Modified" field="modifiedAtSource" sortable :style="{ width: '120px' }">
         <template #body="{ data }">
           <span class="cell-mono">{{
             data.modifiedAtSource ? fmtRelative(data.modifiedAtSource) : '—'
@@ -987,6 +989,26 @@ onMounted(() => {
 
 :deep(.users-table) {
   border: 1px solid var(--border);
+}
+
+/* Fixed column widths, so columns don't resize to fit whichever rows have
+   arrived or are scrolled into view. Narrower than this, the table scrolls
+   sideways rather than squeezing the User column away. */
+:deep(.users-table .p-datatable-table) {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 1100px;
+}
+
+:deep(.users-table td) {
+  overflow: hidden;
+}
+
+:deep(.users-table td > .cell-muted) {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Bulk action bar */
