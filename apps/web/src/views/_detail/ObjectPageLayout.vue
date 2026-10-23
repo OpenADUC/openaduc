@@ -37,8 +37,9 @@ const props = withDefaults(
     /** An action is running: the Actions button shows it. */
     actionsBusy?: boolean;
     refreshing?: boolean;
-    /** `liveRefreshedAt` is left out for records that are only read from the cache. */
-    freshness: { liveRefreshedAt?: string | null; cachedAt: string | null };
+    cachedAt: string | null;
+    /** When the record was last read live from the directory, if it ever was. */
+    liveRefreshedAt?: string | null;
   }>(),
   {
     subtitle: null,
@@ -47,6 +48,7 @@ const props = withDefaults(
     actions: () => [],
     actionsBusy: false,
     refreshing: false,
+    liveRefreshedAt: null,
   },
 );
 
@@ -115,7 +117,7 @@ const menuItems = computed<MenuItem[]>(() =>
     .filter((a) => a.available !== false && auth.hasCapability(a.capability))
     .map((a) => ({
       label: a.label,
-      icon: a.icon,
+      icon: `pi ${a.icon}`,
       disabled: a.disabled,
       class: a.danger ? 'menu-item-danger' : undefined,
       command: a.run,
@@ -127,10 +129,9 @@ function toggleActionsMenu(event: Event): void {
 }
 
 const freshnessText = computed(() => {
-  const f = props.freshness;
-  const cached = `Cache written ${fmtRelative(f.cachedAt)}`;
-  return 'liveRefreshedAt' in f
-    ? `Live refreshed ${fmtRelative(f.liveRefreshedAt)} · ${cached}`
+  const cached = `Cache written ${fmtRelative(props.cachedAt)}`;
+  return props.liveRefreshedAt
+    ? `Live refreshed ${fmtRelative(props.liveRefreshedAt)} · ${cached}`
     : cached;
 });
 </script>

@@ -23,6 +23,7 @@ const refreshing = ref(false);
 const onRefresh = vi.fn();
 let tabs: ObjectPageTab<TabId>[] = [];
 let actions: ObjectAction[] = [];
+let freshness: { cachedAt: string | null; liveRefreshedAt?: string | null } = { cachedAt: null };
 
 // A group page reduced to the layout: each tab's body names the tab.
 const GroupPage = defineComponent({
@@ -35,7 +36,7 @@ const GroupPage = defineComponent({
           name: 'Finance',
           avatar: { name: 'Finance', seed: 'finance', shape: 'rounded' },
           dn: 'CN=Finance,OU=Groups,DC=corp,DC=example',
-          freshness: { cachedAt: null },
+          ...freshness,
           tabs,
           fallbackTab: 'overview',
           actions,
@@ -55,7 +56,12 @@ const GroupPage = defineComponent({
 
 async function open(
   path: string,
-  opts: { capabilities?: string[]; tabs?: ObjectPageTab<TabId>[]; actions?: ObjectAction[] } = {},
+  opts: {
+    capabilities?: string[];
+    tabs?: ObjectPageTab<TabId>[];
+    actions?: ObjectAction[];
+    freshness?: typeof freshness;
+  } = {},
 ) {
   tabs = opts.tabs ?? [
     { id: 'overview', label: 'Overview', icon: 'pi-th-large', visible: true },
@@ -63,6 +69,7 @@ async function open(
     { id: 'raw', label: 'Debug', icon: 'pi-code', visible: false },
   ];
   actions = opts.actions ?? [];
+  freshness = opts.freshness ?? { cachedAt: null };
   refreshing.value = false;
   onRefresh.mockClear();
   const pinia = createPinia();
@@ -134,14 +141,14 @@ describe('the actions menu', () => {
   const run = vi.fn();
   const remove: ObjectAction = {
     label: 'Remove…',
-    icon: 'pi pi-trash',
+    icon: 'pi-trash',
     capability: 'write:group.membership',
     danger: true,
     run,
   };
   const rename: ObjectAction = {
     label: 'Rename…',
-    icon: 'pi pi-id-card',
+    icon: 'pi-id-card',
     capability: 'write:user.rename',
     run,
   };
@@ -206,5 +213,23 @@ describe('refreshing', () => {
     await flushPromises();
     const button = page.find('button[title="Refresh from directory"]');
     expect(button.attributes('disabled')).toBeDefined();
+  });
+});
+
+describe('the freshness line', () => {
+  const hourAgo = () => new Date(Date.now() - 60 * 60_000).toISOString();
+
+  it('says when the record was last read live and cached', async () => {
+    const { page } = await open('/groups/g1', {
+      freshness: { cachedAt: hourAgo(), liveRefreshedAt: new Date().toISOString() },
+    });
+    expect(page.find('.freshness-foot').text()).toBe(
+      'Live refreshed just now · Cache written 1h ago',
+    );
+  });
+
+  it('only says when it was cached for a record never read live', async () => {
+    const { page } = await open('/groups/g1', { freshness: { cachedAt: hourAgo() } });
+    expect(page.find('.freshness-foot').text()).toBe('Cache written 1h ago');
   });
 });

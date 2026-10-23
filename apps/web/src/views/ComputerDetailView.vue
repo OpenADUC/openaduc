@@ -87,7 +87,7 @@ function openManagedBy(): void {
       :tabs="tabs"
       fallback-tab="overview"
       :refreshing="refreshing"
-      :freshness="{ cachedAt: computer.freshness.cachedAt }"
+      :cached-at="computer.freshness.cachedAt"
       @refresh="refreshFromAd"
     >
       <template #badges>
