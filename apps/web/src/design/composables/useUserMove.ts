@@ -4,6 +4,7 @@ import type { DirectoryOu, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { latestRequest } from '../lib/latestRequest.js';
 
 export type MoveSubject = Pick<
   UserDetail,
@@ -20,6 +21,7 @@ export function useUserMove(options: {
   const destination = ref<string | null>(null);
   const submitting = ref(false);
   const error = ref<string | null>(null);
+  const loads = latestRequest();
 
   const currentOuDn = computed(() => (user.value ? parentOf(user.value.distinguishedName) : null));
   const atCurrent = computed(
@@ -36,6 +38,7 @@ export function useUserMove(options: {
   // where it is now rather than where it was when the caller read it.
   // Starts at the current OU, so the operator sees where the account is.
   async function load(id: string): Promise<void> {
+    const isCurrent = loads.begin();
     user.value = null;
     ous.value = [];
     destination.value = null;
@@ -43,6 +46,7 @@ export function useUserMove(options: {
     loading.value = true;
     try {
       const [u, list] = await Promise.all([api.users.get(id), api.ous.list()]);
+      if (!isCurrent()) return;
       user.value = u.user;
       ous.value = list.ous;
       const current = currentOuDn.value?.toLowerCase();
@@ -50,9 +54,9 @@ export function useUserMove(options: {
         list.ous.find((o) => o.distinguishedName.toLowerCase() === current)?.distinguishedName ??
         currentOuDn.value;
     } catch (err) {
-      error.value = err instanceof ApiError ? err.message : String(err);
+      if (isCurrent()) error.value = err instanceof ApiError ? err.message : String(err);
     } finally {
-      loading.value = false;
+      if (isCurrent()) loading.value = false;
     }
   }
 

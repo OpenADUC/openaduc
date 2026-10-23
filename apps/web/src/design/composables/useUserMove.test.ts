@@ -110,6 +110,20 @@ describe('useUserMove', () => {
     expect(mover.ready.value).toBe(false);
   });
 
+  it('keeps the account it was opened for last, not a slower earlier one', async () => {
+    const { mover } = await setup();
+    let slow!: (v: unknown) => void;
+    get.mockImplementationOnce(() => new Promise((r) => (slow = r)));
+    get.mockResolvedValueOnce({ user: aUserDetail({ id: 'u2' }) });
+
+    const first = mover.load('u1');
+    await mover.load('u2');
+    slow({ user: aUserDetail({ id: 'u1' }) });
+    await first;
+    expect(mover.user.value?.id).toBe('u2');
+    expect(mover.loading.value).toBe(false);
+  });
+
   it('prompts step-up first, then moves', async () => {
     const { mover, auth, onMoved } = await setup(NOT_ELEVATED);
     mover.destination.value = STAFF;
