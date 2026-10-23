@@ -176,11 +176,15 @@ export function parseUserAccountControl(
   };
 }
 
+const AD_DURATION_NEVER = -(2n ** 63n);
+
 /**
  * Parse an AD policy duration attribute (lockoutDuration, lockoutObservationWindow,
  * maxPwdAge) into milliseconds. AD stores these as 100-nanosecond intervals
  * with a negative value (because Microsoft chose to encode "back from now" for
  * relative durations). 0 = "duration disabled / manual only / never expire".
+ * AD writes "never" as the minimum 64-bit integer, which read as a duration
+ * would be some 29,000 years, so it reads as 0 too.
  *
  * Returns:
  *   - null when the value is missing or unparseable
@@ -195,7 +199,7 @@ export function adDurationToMs(value: string | number | null | undefined): numbe
   } catch {
     return null;
   }
-  if (big === 0n) return 0;
+  if (big === 0n || big === AD_DURATION_NEVER) return 0;
   // AD durations are negative (sign-extended 64-bit). Take the absolute value.
   const abs = big < 0n ? -big : big;
   // 10_000 100-ns ticks per millisecond.
