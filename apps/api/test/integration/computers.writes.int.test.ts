@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { Client as LdapClient } from 'ldapts';
+import { Attribute, Change, Client as LdapClient } from 'ldapts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DC,
@@ -124,6 +125,22 @@ describe('computer account writes', () => {
       (await operator.post(`/api/computers/${ws01}/enable`)).statusCode,
       'WS01 enabled again so it can sign in',
     ).toBe(200);
+    // Give it a password other than the default, as a joined computer has.
+    // Twice, since Samba also accepts a machine account's previous password.
+    for (let i = 0; i < 2; i++) {
+      await asAdministrator((client) =>
+        client.modify(
+          WS01,
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'unicodePwd',
+              values: [Buffer.from(`"${randomUUID()}"`, 'utf16le')],
+            }),
+          }),
+        ),
+      );
+    }
     const before = (await readDirectoryUser('WS01$', ['pwdLastSet']))?.pwdLastSet;
     expect(await machineCanSignIn('ws01')).toBe(false);
 
