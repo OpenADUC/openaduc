@@ -3,7 +3,15 @@
 // j and k move a highlight through the rows as the table shows them, and
 // Enter opens the highlighted row.
 
-import { computed, nextTick, ref, shallowRef, type ComponentPublicInstance, type Ref } from 'vue';
+import {
+  computed,
+  nextTick,
+  ref,
+  shallowRef,
+  watch,
+  type ComponentPublicInstance,
+  type Ref,
+} from 'vue';
 import { useShortcuts } from './useShortcuts.js';
 
 // What the lists' PrimeVue DataTable offers beyond its typings: the rows as
@@ -33,6 +41,20 @@ export function useListShortcuts<T extends { id: string }>(opts: ListShortcutOpt
   const shown = computed(() => (table.value?.processedData ?? []) as readonly T[]);
   const index = computed(() =>
     highlighted.value === null ? -1 : shown.value.findIndex((r) => r.id === highlighted.value),
+  );
+
+  // Focus follows the highlight, so focus leaving the table leaves the
+  // highlight behind: Enter mustn't open a row the operator has moved on from.
+  function onFocusOut(e: FocusEvent): void {
+    const root = table.value?.$el as HTMLElement | undefined;
+    if (!root?.contains(e.relatedTarget as Node | null)) highlighted.value = null;
+  }
+  watch(
+    () => table.value?.$el as HTMLElement | undefined,
+    (root, old) => {
+      old?.removeEventListener('focusout', onFocusOut);
+      root?.addEventListener('focusout', onFocusOut);
+    },
   );
 
   const rowAt = (i: number): HTMLElement | null =>

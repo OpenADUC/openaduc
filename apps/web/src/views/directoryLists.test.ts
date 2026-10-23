@@ -256,6 +256,19 @@ describe.each(lists)('shortcuts on the %s list', (name, view, search, one) => {
     expect(highlighted(page)).toHaveLength(0);
   });
 
+  it('drops the highlight once focus leaves the table, so Enter opens nothing', async () => {
+    const page = await openTwo();
+    await press('j');
+    const refresh = page.findAll('button').find((b) => b.text() === 'Refresh')!;
+    (refresh.element as HTMLButtonElement).focus();
+    await flushPromises();
+    expect(highlighted(page)).toHaveLength(0);
+
+    (refresh.element as HTMLButtonElement).blur();
+    await press('Enter');
+    expect(router.currentRoute.value.path).toBe('/list');
+  });
+
   // Only the user list has row checkboxes.
   it.runIf(name === 'users')('keeps moving after a row’s checkbox is ticked', async () => {
     const page = await openTwo();
