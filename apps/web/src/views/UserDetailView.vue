@@ -4,7 +4,7 @@ import { latestRequest } from '../design/lib/latestRequest.js';
 import { useDetailRecord } from '../design/composables/useDetailRecord.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { onBeforeRouteLeave, useRouter } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Password from 'primevue/password';
 import Dialog from 'primevue/dialog';
@@ -36,6 +36,7 @@ import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 import type { GroupSummary, UserDetail, UserUpdateRequest } from '@openaduc/shared';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useCompactTabs } from './_detail/useCompactTabs';
+import { useConfirm } from '../design/composables/useConfirm.js';
 
 // 'location' / 'security' tabs map to 'organization' / 'contact' / 'account'.
 // 'overview' is new; 'raw' is admin-gated. 'signins' shows Microsoft Entra
@@ -503,16 +504,26 @@ onMounted(load);
 //
 // Stop the operator from navigating away (back button, sidebar click, tab
 // close) when there are unsaved field edits in the buffer. Vue Router's
-// onBeforeRouteLeave handles in-app nav; the matching beforeunload listener
-// covers full page unloads.
+// guards handle in-app nav; the matching beforeunload listener covers full
+// page unloads.
 
-onBeforeRouteLeave((_to, _from) => {
+const { ask: askToLeave, dialog: leaveDialog } = useConfirm();
+
+function confirmDiscard(): boolean | Promise<boolean> {
   if (!isDirty.value) return true;
-  const ok = window.confirm(
-    `You have ${dirtyFields.value.length} unsaved change${dirtyFields.value.length === 1 ? '' : 's'}. Leave anyway?`,
-  );
-  return ok;
-});
+  const n = dirtyFields.value.length;
+  return askToLeave({
+    title: 'Discard unsaved changes?',
+    message: `You have ${n} unsaved change${n === 1 ? '' : 's'} on this user.`,
+    confirmLabel: 'Leave without saving',
+    cancelLabel: 'Keep editing',
+    severity: 'warn',
+  });
+}
+
+onBeforeRouteLeave(confirmDiscard);
+// Another user's page reuses this one; switching tabs only changes the query.
+onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || confirmDiscard());
 
 function onBeforeUnload(ev: BeforeUnloadEvent): void {
   if (!isDirty.value) return;
@@ -2305,6 +2316,8 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       @cancel="cancelRemoveGroup"
       @confirm="confirmRemoveGroup"
     />
+
+    <ConfirmDialog v-bind="leaveDialog" />
 
     <RenameUserDialog v-model:visible="renameDialogOpen" :user="user" @renamed="onRenamed" />
     <DeleteUsersDialog

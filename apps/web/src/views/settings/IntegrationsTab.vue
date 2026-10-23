@@ -20,6 +20,8 @@ import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
 import EmptyState from '../../design/primitives/EmptyState.vue';
 import StepUpDialog from '../../design/feedback/StepUpDialog.vue';
+import ConfirmDialog from '../../design/feedback/ConfirmDialog.vue';
+import { useConfirm } from '../../design/composables/useConfirm.js';
 import { fmtRelative } from '../../design/lib/format.js';
 
 // Settings → Entra ID tab. Configures the Microsoft Entra (Graph)
@@ -74,6 +76,7 @@ const editOpen = ref(false);
 const editStepUpOpen = ref(false);
 // What to run once the operator passes step-up: saving or removing.
 let afterStepUp: () => Promise<void> = submitEdit;
+const { ask: askToRemove, dialog: removeDialog } = useConfirm();
 const editError = ref<string | null>(null);
 const editSubmitting = ref(false);
 const editTarget = ref<DirectoryEntra | null>(null);
@@ -260,13 +263,13 @@ async function runTest(): Promise<void> {
 
 async function disableIntegration(): Promise<void> {
   if (!editTarget.value || !editTarget.value.integration) return;
-  if (
-    !window.confirm(
-      'Remove this Entra integration? Cached photos and sign-in data will be deleted.',
-    )
-  ) {
-    return;
-  }
+  const ok = await askToRemove({
+    title: 'Remove Entra integration?',
+    message: 'Cached photos and sign-in data will be deleted.',
+    confirmLabel: 'Remove',
+    severity: 'danger',
+  });
+  if (!ok) return;
   if (!auth.elevated) {
     afterStepUp = removeIntegration;
     editStepUpOpen.value = true;
@@ -533,6 +536,7 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
     </Dialog>
 
     <StepUpDialog v-model:visible="editStepUpOpen" @ok="afterStepUp()" />
+    <ConfirmDialog v-bind="removeDialog" />
   </div>
 </template>
 

@@ -38,6 +38,9 @@ export default [
       // single-word rule is aimed at library authors worried about HTML
       // element name collisions, not internal app primitives.
       'vue/multi-word-component-names': 'off',
+      // Confirmations and messages go through the app's own dialogs and
+      // toasts, never the browser's.
+      'no-alert': 'error',
     },
   },
   {
