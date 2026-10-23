@@ -112,9 +112,10 @@ const actorName = computed(() => auth.actor?.displayName ?? auth.actor?.username
 const actorRole = computed(() => {
   const caps = auth.actor?.capabilities ?? [];
   if (caps.length === 0) return 'no role';
-  if (caps.some((c) => c.startsWith('write:'))) return 'admin';
+  if (caps.some((c) => c.startsWith('configure:'))) return 'admin';
+  if (caps.some((c) => c.startsWith('write:'))) return 'operator';
   if (caps.includes('view:audit')) return 'auditor';
-  return 'helpdesk';
+  return 'read-only';
 });
 const initials = computed(() => initialsFor(actorName.value));
 const avatarBg = computed(() => avatarGradientFor(actorName.value));

@@ -113,9 +113,6 @@ const popover = ref<InstanceType<typeof Popover> | null>(null);
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ei-end,
