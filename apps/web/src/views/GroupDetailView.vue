@@ -1,7 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { useGroupRecord } from '../design/composables/useDirectoryRecords.js';
-import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import DataTable, { type DataTableRowClickEvent } from 'primevue/datatable';
@@ -234,30 +233,31 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
   <div class="page-inner group-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <DetailLoading v-if="!group && loading">Loading group…</DetailLoading>
     <ObjectPageLayout
-      v-if="group"
+      v-if="group || loading"
       kind="group"
-      :name="group.name ?? group.distinguishedName"
+      :loading="!group"
+      :skeleton="{ subtitle: true }"
+      :name="group?.name ?? group?.distinguishedName ?? ''"
       :avatar="{
-        name: group.name ?? group.samAccountName,
-        seed: group.samAccountName ?? group.distinguishedName,
+        name: group?.name ?? group?.samAccountName ?? null,
+        seed: group?.samAccountName ?? group?.distinguishedName ?? null,
         shape: 'rounded',
       }"
-      :subtitle="group.description !== group.name ? group.description : null"
+      :subtitle="group && group.description !== group.name ? group.description : null"
       :identifier="identifier"
-      :dn="group.distinguishedName"
+      :dn="group?.distinguishedName ?? ''"
       :links="links"
       :tabs="tabs"
       fallback-tab="overview"
       :actions="actions"
       :actions-busy="adding"
       :refreshing="refreshing"
-      :cached-at="group.freshness.cachedAt"
-      :live-refreshed-at="group.freshness.liveRefreshedAt"
+      :cached-at="group?.freshness.cachedAt ?? null"
+      :live-refreshed-at="group?.freshness.liveRefreshedAt ?? null"
       @refresh="refreshFromAd"
     >
-      <template #badges>
+      <template v-if="group" #badges>
         <span v-if="group.groupType === 'security'" class="badge badge-blue badge-lg">
           <i class="pi pi-shield" /> security
         </span>
@@ -269,7 +269,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
         }}</span>
       </template>
 
-      <template #default="{ tab: activeTab, select: selectTab }">
+      <template v-if="group" #default="{ tab: activeTab, select: selectTab }">
         <div v-if="activeTab === 'overview'" class="detail-grid">
           <Card title="Group">
             <dl class="kv-grid">

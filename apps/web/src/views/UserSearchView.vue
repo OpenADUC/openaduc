@@ -25,6 +25,8 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import ListSkeleton from '../design/primitives/ListSkeleton.vue';
+import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
@@ -57,6 +59,19 @@ const total = ref(0);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const {
+  skeleton,
+  table: listTable,
+  title: pageTitle,
+  status: listStatus,
+} = useListLoading({
+  rows,
+  loading,
+  error,
+  total: () => total.value,
+  title: 'Users',
+  noun: ['user', 'users'],
+});
 const drawerOpen = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
 
@@ -474,7 +489,8 @@ function pwdExpiryLabel(u: UserSummary): string {
   if (!u.passwordExpiresAt) return '—';
   const ms = new Date(u.passwordExpiresAt).getTime() - Date.now();
   const days = Math.round(ms / (24 * 60 * 60 * 1000));
-  if (days < 0) return `Exp ${Math.abs(days)}d ago`;
+  // The column says what expired.
+  if (days < 0) return `${Math.abs(days)}d ago`;
   if (days === 0) return 'Today';
   return `${days}d`;
 }
@@ -498,7 +514,8 @@ onMounted(() => {
 <template>
   <Toast />
   <div class="page-inner page-fill users-page">
-    <PageHeader :title="`Users (${total.toLocaleString()})`">
+    <span class="sr-only" role="status">{{ listStatus }}</span>
+    <PageHeader :title="pageTitle">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
@@ -554,20 +571,24 @@ onMounted(() => {
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading"
       data-key="id"
       removable-sort
       sort-field="displayName"
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
+      v-bind="listTable"
       class="users-table"
       @value-change="(v: UserRow[]) => (filteredRows = v)"
       @row-click="(ev) => openDetail(ev.data as UserSummary)"
     >
       <template #empty>
+        <ListSkeleton
+          v-if="skeleton"
+          :columns="['check', 'avatar', 'badge', 'badge', 'text', 'text', 'text', 'text']"
+        />
         <EmptyState
+          v-else
           icon="pi pi-search"
           :title="activeCount > 0 ? 'No users match these filters' : 'No users yet'"
           :message="
@@ -610,7 +631,7 @@ onMounted(() => {
         </template>
       </Column>
 
-      <Column header="User" field="displayName" sortable :style="{ minWidth: '260px' }">
+      <Column header="User" field="displayName" sortable>
         <template #body="{ data }">
           <div class="user-cell">
             <Avatar
@@ -620,51 +641,64 @@ onMounted(() => {
               :photo-url="rowPhotoUrl(data)"
             />
             <div class="user-cell-stack">
-              <div class="user-name">{{ data.displayName ?? data.samAccountName }}</div>
-              <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
-              <div v-if="bulkErrors.has(data.id)" class="user-bulk-error" role="alert">
+              <div class="user-name" :title="data.displayName ?? data.samAccountName">
+                {{ data.displayName ?? data.samAccountName }}
+              </div>
+              <!-- A failed bulk action takes the second line, so the row
+                   keeps the list's row height. -->
+              <div
+                v-if="bulkErrors.has(data.id)"
+                class="user-bulk-error"
+                role="alert"
+                :title="bulkErrors.get(data.id)"
+              >
                 <i class="pi pi-exclamation-circle" aria-hidden="true" />
-                {{ bulkErrors.get(data.id) }}
+                <span>{{ bulkErrors.get(data.id) }}</span>
+              </div>
+              <div v-else class="user-meta" :title="data.userPrincipalName ?? data.samAccountName">
+                {{ data.userPrincipalName ?? data.samAccountName }}
               </div>
             </div>
           </div>
         </template>
       </Column>
-      <Column header="Status" field="_acctStatus" sortable :style="{ width: '140px' }">
+      <Column header="Status" field="_acctStatus" sortable :style="{ width: '200px' }">
         <template #body="{ data }">
           <StatusBadge :user="data" />
         </template>
       </Column>
-      <Column header="Pwd expires" field="passwordExpiresAt" sortable :style="{ width: '160px' }">
+      <Column header="Pwd expires" field="passwordExpiresAt" sortable :style="{ width: '130px' }">
         <template #body="{ data }">
           <span
             class="badge"
             :class="`badge-${pwdExpiryTone(data)}`"
-            :title="data.passwordNeverExpires ? 'DONT_EXPIRE_PASSWORD set' : undefined"
+            :title="data.passwordNeverExpires ? 'DONT_EXPIRE_PASSWORD set' : pwdExpiryLabel(data)"
           >
             <span v-if="pwdHasDot(data)" class="badge-dot" />
-            {{ pwdExpiryLabel(data) }}
+            <span>{{ pwdExpiryLabel(data) }}</span>
           </span>
         </template>
       </Column>
-      <Column field="department" header="Department" sortable :style="{ width: '180px' }">
+      <Column field="department" header="Department" sortable :style="{ width: '13%' }">
         <template #body="{ data }">
-          <span class="cell-muted">{{ data.department ?? '—' }}</span>
+          <span class="cell-muted" :title="data.department ?? undefined">{{
+            data.department ?? '—'
+          }}</span>
         </template>
       </Column>
-      <Column field="title" header="Title" sortable :style="{ width: '180px' }">
+      <Column field="title" header="Title" sortable :style="{ width: '13%' }">
         <template #body="{ data }">
-          <span class="cell-muted">{{ data.title ?? '—' }}</span>
+          <span class="cell-muted" :title="data.title ?? undefined">{{ data.title ?? '—' }}</span>
         </template>
       </Column>
-      <Column header="Last logon" field="lastLogonAt" sortable :style="{ width: '140px' }">
+      <Column header="Last logon" field="lastLogonAt" sortable :style="{ width: '120px' }">
         <template #body="{ data }">
           <span class="cell-mono">{{
             data.lastLogonAt ? fmtRelative(data.lastLogonAt) : '—'
           }}</span>
         </template>
       </Column>
-      <Column header="Modified" field="modifiedAtSource" sortable :style="{ width: '140px' }">
+      <Column header="Modified" field="modifiedAtSource" sortable :style="{ width: '120px' }">
         <template #body="{ data }">
           <span class="cell-mono">{{
             data.modifiedAtSource ? fmtRelative(data.modifiedAtSource) : '—'
@@ -939,9 +973,6 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .user-meta {
@@ -985,6 +1016,39 @@ onMounted(() => {
 
 :deep(.users-table) {
   border: 1px solid var(--border);
+}
+
+/* Fixed column widths, so columns don't resize to fit whichever rows have
+   arrived or are scrolled into view. Narrower than this, the table scrolls
+   sideways rather than squeezing the User column away. */
+:deep(.users-table .p-datatable-table) {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 1100px;
+}
+
+:deep(.users-table td) {
+  overflow: hidden;
+}
+
+:deep(.users-table td > .cell-muted),
+:deep(.users-table td > .cell-mono) {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Badges never cut off: one too long for its column ends in an ellipsis,
+   with the full text in its title. */
+:deep(.users-table td > .badge) {
+  max-width: 100%;
+}
+
+:deep(.users-table td > .badge > span:last-child) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Bulk action bar */
@@ -1081,9 +1145,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 2px;
-  font-size: 12px;
+  margin-top: 1px;
+  font-size: 11px;
   color: var(--red, #dc2626);
+  white-space: nowrap;
+}
+
+.user-bulk-error > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .confirm-text {
   margin: 0 0 8px;

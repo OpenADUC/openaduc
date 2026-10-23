@@ -489,6 +489,32 @@
   }
 }
 
+/* ---------- Loading skeletons ---------- */
+.p-skeleton {
+  background: var(--surface-3) !important;
+}
+
+/* A skeleton takes its room at once but stays invisible for 150 ms, so a
+   fast load goes from nothing straight to content without a flash. */
+.skeleton-delayed {
+  animation: skeleton-reveal 0s 150ms both;
+}
+
+@keyframes skeleton-reveal {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-skeleton::after {
+    animation: none !important;
+  }
+}
+
 .lc-bar {
   display: inline-flex;
   align-items: center;
@@ -904,6 +930,25 @@
   font-size: var(--row-fs) !important;
   border-bottom: 1px solid var(--border) !important;
   color: var(--text);
+}
+
+/* Directory lists (users, groups, computers): every row is exactly the
+   virtual scroller's item size, --list-row-h, so the scroller's sums hold
+   and ListSkeleton's rows match. The gutter is reserved so the scrollbar
+   arriving with the rows doesn't narrow the columns. */
+.ds-list-table .p-datatable-tbody > tr > td {
+  height: var(--list-row-h);
+  box-sizing: border-box;
+}
+
+.ds-list-table .p-virtualscroller {
+  scrollbar-gutter: stable;
+}
+
+.p-datatable .p-datatable-tbody > tr > td:has(> .list-skeleton) {
+  padding: 0 !important;
+  height: auto;
+  border-bottom: 0 !important;
 }
 
 .p-datatable .p-paginator {
