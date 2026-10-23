@@ -44,6 +44,16 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
+/**
+ * Hook called with the elevated session's idle end whenever a response
+ * carries it. The server moves it on each request, so the auth store
+ * listens here to keep its countdown in step.
+ */
+let onElevatedIdleEnd: ((iso: string) => void) | null = null;
+export function setElevatedIdleEndHandler(fn: (iso: string) => void): void {
+  onElevatedIdleEnd = fn;
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`;
   const headers = new Headers(init.headers);
@@ -55,6 +65,8 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     ...init,
     headers,
   });
+  const idleEnd = res.headers.get('x-elevated-idle-expires-at');
+  if (idleEnd) onElevatedIdleEnd?.(idleEnd);
   if (!res.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};
     try {

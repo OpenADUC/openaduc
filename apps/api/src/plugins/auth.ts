@@ -8,6 +8,13 @@ import { Forbidden, NotFound, SessionRequired, StepUpRequired } from './errorHan
 export const SESSION_COOKIE_NAME = 'openaduc_sid';
 
 /**
+ * On every response to an elevated operator: when their elevated session
+ * ends if they do nothing more. Activity moves it, so the client can't
+ * work it out from the step-up response alone.
+ */
+export const ELEVATED_IDLE_HEADER = 'x-elevated-idle-expires-at';
+
+/**
  * Who may call a route. `public` routes run without a session; the others
  * need one, plus `capability` when set (null: any signed-in operator) and a
  * live step-up when `stepUp` is true.
@@ -74,7 +81,7 @@ export default fp(async (app) => {
   // ---- Resolve session on every request (no enforcement here) ------------
   // A request from an elevated operator is activity: it keeps the elevated
   // session from ending idle.
-  app.addHook('onRequest', async (req) => {
+  app.addHook('onRequest', async (req, reply) => {
     req.actor = null;
     req.directoryId = null;
     const cookieToken = req.cookies[SESSION_COOKIE_NAME];
@@ -91,6 +98,7 @@ export default fp(async (app) => {
           return before;
         });
         app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
+        reply.header(ELEVATED_IDLE_HEADER, elevated.idleExpiresAt.toISOString());
       }
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
       req.actor = { session, elevated, elevatedPassword };

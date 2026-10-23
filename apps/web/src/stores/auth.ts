@@ -3,7 +3,7 @@ import { defineStore } from 'pinia';
 import { computed, onScopeDispose, ref } from 'vue';
 import type { ElevatedSessionState, LoginRequest, MeResponse } from '@openaduc/shared';
 import { api } from '../api/index.js';
-import { ApiError, setStepUpRequiredHandler } from '../api/client.js';
+import { ApiError, setElevatedIdleEndHandler, setStepUpRequiredHandler } from '../api/client.js';
 
 const NOT_ELEVATED: ElevatedSessionState = {
   active: false,
@@ -50,7 +50,8 @@ export const useAuthStore = defineStore('auth', () => {
   onScopeDispose(() => window.clearInterval(tickHandle));
 
   const isAuthenticated = computed(() => actor.value !== null);
-  // When the elevated session ends if the operator does nothing more.
+  // When the elevated session ends if the operator does nothing more. Kept
+  // current by the idle end each response carries.
   const elevatedExpiresAt = computed(() => actor.value?.elevated.idleExpiresAt ?? null);
   const elevatedExpiresAtMs = computed(() => {
     const iso = elevatedExpiresAt.value;
@@ -159,6 +160,12 @@ export const useAuthStore = defineStore('auth', () => {
   // a harmless no-op.
   setStepUpRequiredHandler((message) => {
     requestStepUp(message);
+  });
+
+  // Every request while elevated moves the idle end; responses carry it.
+  setElevatedIdleEndHandler((idleExpiresAt) => {
+    if (!actor.value?.elevated.active) return;
+    actor.value = { ...actor.value, elevated: { ...actor.value.elevated, idleExpiresAt } };
   });
 
   async function stepUp(password: string): Promise<void> {
