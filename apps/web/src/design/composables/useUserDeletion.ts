@@ -88,11 +88,16 @@ export function useUserDeletion() {
 
   /**
    * Delete every eligible account; resolves with the ids that are gone, or
-   * null when the elevated session ran out: `retry` then runs after the
-   * operator steps up, skipping accounts already deleted.
+   * null when the operator must step up first or the elevated session ran
+   * out: `retry` then runs after the step-up, skipping accounts already
+   * deleted.
    */
   async function run(retry: () => void | Promise<void>): Promise<string[] | null> {
     if (!confirmed.value || phase.value !== 'review') return [];
+    if (!auth.elevated) {
+      auth.requireStepUp(retry);
+      return null;
+    }
     phase.value = 'running';
     failures.value = [];
     progress.value = deletedIds.value.length;

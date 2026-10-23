@@ -91,7 +91,12 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     }
   }
 
-  async function submit(): Promise<void> {
+  function submit(): void {
+    if (!target.value || !acceptable.value || submitting.value) return;
+    auth.requireStepUp(commit);
+  }
+
+  async function commit(): Promise<void> {
     if (!target.value || !acceptable.value || submitting.value) return;
     submitting.value = true;
     error.value = null;
@@ -107,7 +112,7 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
       });
       options.onReset(outcome);
     } catch (err) {
-      if (auth.retryAfterStepUp(err, submit)) return;
+      if (auth.retryAfterStepUp(err, commit)) return;
       error.value = err instanceof ApiError ? err.message : String(err);
     } finally {
       submitting.value = false;

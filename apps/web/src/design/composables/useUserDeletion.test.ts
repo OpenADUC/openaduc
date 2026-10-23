@@ -32,8 +32,9 @@ const user = (childObjects: number | null) => ({
   blockedReason: null,
 });
 
-async function loaded(childObjects: number | null) {
+async function loaded(childObjects: number | null, elevated = true) {
   setActivePinia(createPinia());
+  useAuthStore().actor = { capabilities: [], elevated: { active: elevated } } as never;
   deletePreflight.mockResolvedValue({
     recycleBin: null,
     users: [user(childObjects)],
@@ -86,6 +87,22 @@ describe('useUserDeletion with child objects', () => {
 describe('useUserDeletion when the elevated session has ended', () => {
   beforeEach(() => {
     remove.mockReset().mockResolvedValue({});
+  });
+
+  it('prompts step-up before the first delete, then deletes', async () => {
+    const d = await loaded(0, false);
+    const retry = vi.fn(async (): Promise<void> => {
+      await d.run(retry);
+    });
+
+    expect(await d.run(retry)).toBeNull();
+    expect(useAuthStore().stepUpRequested).toBe(true);
+    expect(remove).not.toHaveBeenCalled();
+    expect(d.phase.value).toBe('review');
+
+    await useAuthStore().stepUp('pw');
+    await vi.waitFor(() => expect(d.phase.value).toBe('finished'));
+    expect(remove).toHaveBeenCalledOnce();
   });
 
   it('stops, then deletes after step-up', async () => {
