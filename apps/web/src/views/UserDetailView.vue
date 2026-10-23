@@ -21,11 +21,7 @@ import AppToast from '../design/feedback/AppToast.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import { undoable } from '../design/feedback/undoToast.js';
-import {
-  accountActionFailedSummary,
-  accountActionToast,
-  passwordResetToast,
-} from '../design/feedback/userToasts.js';
+import { accountActionToast, passwordResetToast } from '../design/feedback/userToasts.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
@@ -33,26 +29,23 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
-import { fixFor, lockoutEnd, signInBlockers, type SignInFix } from '../design/lib/signIn.js';
+import { lockoutEnd, signInBlockers, type SignInFix } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
-import { fmtAbsolute } from '../design/lib/format.js';
+import { fmtAbsolute, nameOf } from '../design/lib/format.js';
 import type { UserDetail } from '@openaduc/shared';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
-import type {
-  ObjectAction,
-  ObjectActionFailure,
-  ObjectLink,
-  ObjectPageTab,
-} from './_detail/objectPage';
+import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
+import type { ActionFailure } from '../design/lib/actionFailure.js';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useMoveDialog } from './_detail/useMoveDialog';
 import { useExpiryDialog } from './_detail/useExpiryDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
+import { useSignInFixes } from '../design/composables/useSignInFixes.js';
 import {
   membershipChangeText,
   membershipDoneText,
@@ -482,26 +475,19 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
 
 // ---- Hero actions (unlock / enable / disable) ----------------------------
 
-const {
-  runningOn: accountActionOn,
-  run: runAccountAction,
-  failure: accountFailure,
-  retry: retryAccountAction,
-  dismiss: dismissAccountFailure,
-} = useAccountActions<UserDetail>({
+const accountActions = useAccountActions<UserDetail>({
   onDone: async (action, u, offer) => {
     toast.add(accountActionToast(action, u, offer));
     await load();
   },
 });
 
-const nameOf = (u: { displayName: string | null; samAccountName: string }) =>
-  u.displayName ?? u.samAccountName;
-
-const accountActionRunning = computed(() => (user.value ? accountActionOn(user.value.id) : null));
+const accountActionRunning = computed(() =>
+  user.value ? accountActions.runningOn(user.value.id) : null,
+);
 
 function runOnUser(action: AccountAction): void {
-  if (user.value) runAccountAction(action, user.value);
+  if (user.value) accountActions.run(action, user.value);
 }
 
 // ---- Reset password dialog ------------------------------------------------
@@ -542,37 +528,32 @@ const {
 } = useExpiryDialog({ id: () => props.id, onSet: () => load() });
 
 function openExpiryDialog(): void {
-  const u = user.value;
-  if (u) showExpiryDialog({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
+  if (user.value) showExpiryFor(user.value);
+}
+
+function showExpiryFor(u: UserDetail): void {
+  showExpiryDialog({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
 }
 
 // ---- Sign-in status --------------------------------------------------------
 
 const blockers = computed(() => (user.value ? signInBlockers(user.value) : []));
 
-const primaryFix = computed<SignInFix | null>(() =>
-  user.value ? fixFor(user.value, auth.hasCapability) : null,
-);
-
-const primaryFixRunning = computed(() => {
-  const fix = primaryFix.value?.fix;
-  if (fix === 'enable' || fix === 'unlock') return accountActionRunning.value === fix;
-  return fix === 'extend-expiry' && expirySubmitting.value;
+const fixes = useSignInFixes<UserDetail>({
+  actions: accountActions,
+  resetPassword: openResetDialog,
+  extendExpiry: showExpiryFor,
+  extendingExpiry: () => expirySubmitting.value,
 });
 
+const primaryFix = computed<SignInFix | null>(() => (user.value ? fixes.fixOf(user.value) : null));
+
+const primaryFixRunning = computed(
+  () => !!user.value && !!primaryFix.value && fixes.running(primaryFix.value, user.value),
+);
+
 function runFix(fix: SignInFix): void {
-  switch (fix.fix) {
-    case 'enable':
-    case 'unlock':
-      runOnUser(fix.fix);
-      break;
-    case 'reset-password':
-      openResetDialog();
-      break;
-    case 'extend-expiry':
-      openExpiryDialog();
-      break;
-  }
+  if (user.value) fixes.run(fix, user.value);
 }
 
 const lockoutEndText = computed(() => {
@@ -580,25 +561,11 @@ const lockoutEndText = computed(() => {
   return locked ? lockoutEnd(locked) : null;
 });
 
-const { onPage: accountPageFailure } = placeFailure(accountFailure, {
-  belongsHere: (f) => f.op.account.id === props.id,
-});
-
 // A failed account action, or a failed move or expiry change its dialog
 // isn't showing (an Undo), shows under the Actions menu.
-const actionFailure = computed<ObjectActionFailure | null>(() => {
-  const account = accountPageFailure.value;
-  if (account) {
-    const { action, account: u } = account.op;
-    return {
-      summary: accountActionFailedSummary(action, u),
-      message: account.message,
-      retry: retryAccountAction,
-      dismiss: dismissAccountFailure,
-    };
-  }
-  return movePageFailure.value ?? expiryPageFailure.value;
-});
+const actionFailure = computed<ActionFailure | null>(
+  () => fixes.actionFailureOn(props.id) ?? movePageFailure.value ?? expiryPageFailure.value,
+);
 
 // ---- Group membership: remove + add --------------------------------------
 
@@ -685,7 +652,7 @@ const groupFailure = computed(() => {
 watch(
   () => props.id,
   () => {
-    dismissAccountFailure();
+    accountActions.dismiss();
     mover.dismiss();
     expiry.dismiss();
     dismissRemoveFailure();

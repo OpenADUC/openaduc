@@ -34,9 +34,9 @@ import { useAccountExpiry } from '../design/composables/useAccountExpiry.js';
 import { useAttentionQueue } from '../design/composables/useAttentionQueue.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import { placeFailure } from '../design/lib/failurePlacement.js';
-import { fmtRelative } from '../design/lib/format.js';
+import { fmtRelative, nameOf } from '../design/lib/format.js';
 import { fixFor, userStatus, type SignInFix } from '../design/lib/signIn.js';
-import type { ObjectActionFailure } from './_detail/objectPage';
+import type { ActionFailure } from '../design/lib/actionFailure.js';
 import type { UserSummary } from '@openaduc/shared';
 
 const router = useRouter();
@@ -159,8 +159,6 @@ function openUser(u: UserSummary): void {
 // Each row offers the fix its user's page leads with, made through the same
 // workflow, so it prompts step-up and is audited the same way.
 
-const nameOf = (u: UserSummary) => u.displayName ?? u.samAccountName;
-
 const fixOf = (u: UserSummary): SignInFix | null => fixFor(u, auth.hasCapability);
 
 const accountActions = useAccountActions<UserSummary>({
@@ -227,7 +225,7 @@ function fixRunning(u: UserSummary): boolean {
 }
 
 /** The failed write (or read back after one) to show on a row, if any. */
-function failureOn(u: UserSummary): ObjectActionFailure | null {
+function failureOn(u: UserSummary): ActionFailure | null {
   const action = accountActions.failure.value;
   if (action?.op.account.id === u.id) {
     return {

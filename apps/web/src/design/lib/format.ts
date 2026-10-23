@@ -80,6 +80,10 @@ export function truncMid(input: string, head = 24, tail = 18): string {
   return `${input.slice(0, head)}…${input.slice(-tail)}`;
 }
 
+/** What to call a user: their display name, else their logon name. */
+export const nameOf = (u: { displayName: string | null; samAccountName: string }): string =>
+  u.displayName ?? u.samAccountName;
+
 /** What to call a computer: its name, else its pre-Windows 2000 name, else its DN. */
 export function computerName(c: {
   name: string | null;

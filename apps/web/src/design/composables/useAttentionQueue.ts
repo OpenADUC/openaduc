@@ -2,26 +2,7 @@
 import { ref, shallowRef } from 'vue';
 import type { UserSummary } from '@openaduc/shared';
 import { api } from '../../api/index.js';
-import type { SignInInput } from '../lib/signIn.js';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Whether an account belongs on the list, as the API's `issues` filter
- * decides it: enabled, and locked, made to change its password, or with
- * its account or password expiring within `withinDays`.
- */
-export function needsAttention(u: SignInInput, withinDays: number, now = new Date()): boolean {
-  if (u.enabled === false) return false;
-  const horizon = now.getTime() + withinDays * DAY_MS;
-  const by = (iso: string | null | undefined) => !!iso && Date.parse(iso) <= horizon;
-  return (
-    !!u.locked ||
-    !!u.passwordMustChange ||
-    by(u.accountExpiresAt) ||
-    (!u.passwordNeverExpires && by(u.passwordExpiresAt))
-  );
-}
+import { needsAttention } from '../lib/attention.js';
 
 export interface RereadFailure {
   account: UserSummary;

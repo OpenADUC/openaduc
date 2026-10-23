@@ -5,7 +5,7 @@ import type { AccountAction } from '../composables/useAccountActions.js';
 import type { ResetOutcome } from '../composables/usePasswordReset.js';
 import type { UndoOffer } from '../lib/undoableWrite.js';
 import { expiryText } from '../lib/accountExpiry.js';
-import { fmtAbsolute } from '../lib/format.js';
+import { fmtAbsolute, nameOf } from '../lib/format.js';
 import { undoable, type UndoableToastMessage } from './undoToast.js';
 
 /** The account as it was before the action; a list row has no lockout details. */
@@ -21,8 +21,6 @@ const ACCOUNT_ACTION_TEXT: Record<AccountAction, { done: string; verb: string }>
   enable: { done: 'Enabled', verb: 'enable' },
   disable: { done: 'Disabled', verb: 'disable' },
 };
-
-const nameOf = (u: ActedOn) => u.displayName ?? u.samAccountName;
 
 // The account is as it was before the unlock, so this can still say when it
 // was locked even though the reload clears that.
