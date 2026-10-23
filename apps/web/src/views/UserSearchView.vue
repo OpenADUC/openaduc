@@ -394,6 +394,7 @@ const {
   bulkProgress,
   bulkErrors,
   confirming: confirmingBulk,
+  confirmation: bulkConfirm,
   requestBulk,
   cancelBulk,
   startBulk,
@@ -405,37 +406,11 @@ const {
 });
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
 
-const BULK_CONFIRM: Record<BulkAction, { verb: string; icon: string; consequence: string }> = {
-  disable: {
-    verb: 'Disable',
-    icon: 'pi pi-ban',
-    consequence: "They won't be able to sign in until an operator enables them again.",
-  },
-  enable: {
-    verb: 'Enable',
-    icon: 'pi pi-check',
-    consequence: 'They can sign in again straight away.',
-  },
-  unlock: {
-    verb: 'Unlock',
-    icon: 'pi pi-unlock',
-    consequence: 'Locked accounts can sign in again straight away.',
-  },
+const BULK_ICONS: Record<BulkAction, string> = {
+  disable: 'pi pi-ban',
+  enable: 'pi pi-check',
+  unlock: 'pi pi-unlock',
 };
-
-const bulkConfirm = computed(() => {
-  const action = confirmingBulk.value;
-  if (!action) return null;
-  const { verb, icon, consequence } = BULK_CONFIRM[action];
-  const n = selectedIds.value.size;
-  const accounts = n === 1 ? '1 account' : `${n} accounts`;
-  return {
-    header: `${verb} ${accounts}?`,
-    confirmLabel: `${verb} ${n === 1 ? 'account' : accounts}`,
-    icon,
-    consequence,
-  };
-});
 
 function confirmBulk(): void {
   const action = confirmingBulk.value;
@@ -765,7 +740,7 @@ onMounted(() => {
     <Dialog
       :visible="confirmingBulk !== null"
       modal
-      :header="bulkConfirm?.header"
+      :header="bulkConfirm?.title"
       :style="{ width: '28rem' }"
       @update:visible="(v) => !v && cancelBulk()"
     >
@@ -777,7 +752,7 @@ onMounted(() => {
         <Button label="Cancel" severity="secondary" text @click="cancelBulk" />
         <Button
           :label="bulkConfirm?.confirmLabel"
-          :icon="bulkConfirm?.icon"
+          :icon="confirmingBulk ? BULK_ICONS[confirmingBulk] : undefined"
           :severity="confirmingBulk === 'disable' ? 'danger' : undefined"
           @click="confirmBulk"
         />

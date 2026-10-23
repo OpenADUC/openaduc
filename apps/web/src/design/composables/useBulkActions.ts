@@ -2,15 +2,24 @@
 // Bulk unlock / enable / disable over a selection of users.
 //
 // Every bulk action asks first: it changes more than one account, and
-// there's no undo for a whole run. Accounts are done one at a time so a failure doesn't stop the rest; the
-// failed ones stay selected, each with its error, so the operator can see
-// why and retry.
+// there's no undo for a whole run. Accounts are done one at a time so a
+// failure doesn't stop the rest; the failed ones stay selected, each with
+// its error, so the operator can see why and retry.
 
-import { ref, type Ref } from 'vue';
+import { computed, ref, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
 import { runBulk } from '../lib/bulk.js';
 
 export type BulkAction = 'disable' | 'enable' | 'unlock';
+
+const CONFIRM: Record<BulkAction, { verb: string; consequence: string }> = {
+  disable: {
+    verb: 'Disable',
+    consequence: "They won't be able to sign in until an operator enables them again.",
+  },
+  enable: { verb: 'Enable', consequence: 'They can sign in again straight away.' },
+  unlock: { verb: 'Unlock', consequence: 'Locked accounts can sign in again straight away.' },
+};
 
 export function useBulkActions(opts: {
   selectedIds: Ref<Set<string>>;
@@ -28,8 +37,21 @@ export function useBulkActions(opts: {
   }>({ done: 0, total: 0, failures: [] });
   // Errors from the last run, per user, shown until the next run.
   const bulkErrors = ref(new Map<string, string>());
-  // The action waiting for the operator to confirm it.
   const confirming = ref<BulkAction | null>(null);
+
+  // The question for the action waiting to be confirmed.
+  const confirmation = computed(() => {
+    const action = confirming.value;
+    if (!action) return null;
+    const { verb, consequence } = CONFIRM[action];
+    const n = opts.selectedIds.value.size;
+    const accounts = n === 1 ? '1 account' : `${n} accounts`;
+    return {
+      title: `${verb} ${accounts}?`,
+      confirmLabel: `${verb} ${n === 1 ? 'account' : accounts}`,
+      consequence,
+    };
+  });
 
   function requestBulk(action: BulkAction): void {
     if (opts.selectedIds.value.size === 0) return;
@@ -86,6 +108,7 @@ export function useBulkActions(opts: {
     bulkProgress,
     bulkErrors,
     confirming,
+    confirmation,
     requestBulk,
     cancelBulk,
     startBulk,
