@@ -37,6 +37,12 @@ export interface AuditEventInput {
 // accidentally puts them in metadata/before/after.
 const SENSITIVE_KEYS = new Set([
   'password',
+  'newpassword',
+  'adminpassword',
+  'bindpassword',
+  'actorpassword',
+  'elevatedpassword',
+  'clientsecret',
   'pass',
   'pwd',
   'unicodepwd',
