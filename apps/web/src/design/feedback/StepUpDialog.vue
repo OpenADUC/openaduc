@@ -40,7 +40,14 @@ watch(
   },
 );
 
+// A held Enter repeats, and an input method's Enter confirms what it composed.
+function onEnter(e: KeyboardEvent): void {
+  if (e.repeat || e.isComposing || e.keyCode === 229) return;
+  void onConfirm();
+}
+
 async function onConfirm(): Promise<void> {
+  if (submitting.value) return;
   if (!password.value) {
     error.value = 'Password required';
     return;
@@ -96,7 +103,7 @@ function onCancel(): void {
       :disabled="submitting"
       autocomplete="current-password"
       autofocus
-      @keydown.enter="onConfirm"
+      @keydown.enter="onEnter"
     />
     <Message v-if="error" severity="error" :closable="false" class="dialog-error">{{
       error

@@ -10,18 +10,22 @@ vi.mock('../../api/index.js', () => ({ api }));
 
 const { default: StepUpDialog } = await import('./StepUpDialog.vue');
 
+async function prompt() {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  const dialog = mount(StepUpDialog, {
+    props: { visible: true, reason: null },
+    global: { plugins: [pinia, PrimeVue], stubs: { teleport: true } },
+  });
+  await flushPromises();
+  return { dialog, input: dialog.get('input[type="password"]') };
+}
+
 describe('the step-up prompt', () => {
   // A write started with Enter (as in quick search) opens the prompt on that
   // Enter's keydown; its keyup then lands in the password field.
   it('submits on Enter’s keydown, not on the keyup of the Enter that opened it', async () => {
-    const pinia = createPinia();
-    setActivePinia(pinia);
-    const dialog = mount(StepUpDialog, {
-      props: { visible: true, reason: null },
-      global: { plugins: [pinia, PrimeVue], stubs: { teleport: true } },
-    });
-    await flushPromises();
-    const input = dialog.get('input[type="password"]');
+    const { dialog, input } = await prompt();
 
     await input.trigger('keyup', { key: 'Enter' });
     expect(dialog.text()).not.toContain('Password required');
@@ -29,5 +33,15 @@ describe('the step-up prompt', () => {
     await input.trigger('keydown', { key: 'Enter' });
     await flushPromises();
     expect(dialog.text()).toContain('Password required');
+  });
+
+  it('ignores a held Enter and an input method’s Enter', async () => {
+    const { dialog, input } = await prompt();
+
+    await input.trigger('keydown', { key: 'Enter', repeat: true });
+    await input.trigger('keydown', { key: 'Enter', isComposing: true });
+    await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
+    await flushPromises();
+    expect(dialog.text()).not.toContain('Password required');
   });
 });
