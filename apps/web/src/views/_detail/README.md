@@ -6,9 +6,10 @@ launchers and DN copy chip, primary actions), the tab bar with refresh and
 the Actions menu, the page body for the active tab, and the freshness line.
 Pages mount it once their record has loaded and pass:
 
-- header data as props, badges in the `badges` slot, and primary actions in
-  the `primary` slot (it gets `compact` so a button can shrink with the
-  header);
+- header data as props, badges in the `badges` slot, the object's state
+  in the `status` slot (under the name, folded away in the compact header),
+  and primary actions in the `primary` slot (it gets `compact` so a button
+  can shrink with the header);
 - `tabs` (`ObjectPageTab`: label, icon, count, visibility, icon-only) and a
   `fallbackTab`;
 - `actions` (`ObjectAction`): each names the capability it needs, and may be
@@ -54,4 +55,5 @@ dropped from the URL.
 it owns the move workflow and the dialog's open state, toasts a move with
 Undo, and places a failed move in the dialog that made it or, for an
 Undo, as `pageFailure` for `actionFailure`. Render it with
-`MoveToOuDialog`.
+`MoveToOuDialog`. `useExpiryDialog` does the same for a user's account
+expiry, rendered with `AccountExpiryDialog`.

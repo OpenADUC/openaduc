@@ -23,6 +23,7 @@ const api = {
     unlock: vi.fn(async () => ({})),
     disable: vi.fn(async () => ({})),
     enable: vi.fn(async () => ({})),
+    setAccountExpiry: vi.fn(async () => ({})),
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
   },
@@ -402,5 +403,121 @@ describe('a failed change', () => {
     refuse(new ApiError(500, 'ldap_error', 'DC unreachable'));
     await flushPromises();
     expect(page.find('.inline-failure').exists()).toBe(false);
+  });
+});
+
+describe('why the user can’t sign in', () => {
+  const HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
+  const ALL_FIXES = [
+    'read:user',
+    'write:user.enableDisable',
+    'write:user.unlock',
+    'write:user.resetPassword',
+  ];
+
+  beforeEach(() => vi.clearAllMocks());
+
+  async function openWith(u: Parameters<typeof aUserDetail>[0], caps = ALL_FIXES, elevated = true) {
+    api.users.get.mockResolvedValue({ user: aUserDetail(u) });
+    return openTab('overview', caps, elevated);
+  }
+  const status = (page: Page) => page.get('.sign-in-status');
+  const conditions = (page: Page) => page.findAll('.sign-in-condition-title').map((t) => t.text());
+  const primary = (page: Page) => page.findAll('.detail-hero-primary button');
+
+  it('says a user who can sign in can, and when they last did', async () => {
+    const { page } = await openWith({ lastLogonAt: HOUR_AGO });
+
+    expect(status(page).text()).toContain('Can sign in');
+    expect(status(page).text()).toContain(`Last signed in ${new Date(HOUR_AGO).toLocaleString()}`);
+    expect(primary(page)).toHaveLength(0);
+  });
+
+  it('says how a lockout came about and that it lasts until someone unlocks it', async () => {
+    const { page } = await openWith({
+      locked: true,
+      lockedAt: HOUR_AGO,
+      lockedUntilUnlocked: true,
+      badPasswordCount: 5,
+    });
+
+    expect(conditions(page)).toEqual(['Locked']);
+    expect(status(page).text()).toContain(`Since ${new Date(HOUR_AGO).toLocaleString()}`);
+    expect(status(page).text()).toContain('5 bad passwords');
+    expect(status(page).text()).toContain('Stays locked until someone unlocks it');
+    expect(primary(page).map((b) => b.text())).toEqual(['Unlock']);
+  });
+
+  it('names the most severe condition first, and fixes that one', async () => {
+    const { page } = await openWith({
+      enabled: false,
+      locked: true,
+      passwordExpiresAt: HOUR_AGO,
+      accountExpiresAt: HOUR_AGO,
+    });
+
+    expect(conditions(page)).toEqual(['Disabled', 'Locked', 'Password expired', 'Account expired']);
+    expect(page.find('.detail-hero').find('.badge').text()).toBe('Disabled');
+    await click(page, 'Enable');
+    expect(api.users.enable).toHaveBeenCalledWith('u1');
+    expect(api.users.unlock).not.toHaveBeenCalled();
+  });
+
+  it('unlocks after the step-up its click prompts', async () => {
+    const { page, auth } = await openWith({ locked: true }, ALL_FIXES, false);
+
+    await click(page, 'Unlock');
+    expect(auth.stepUpRequested).toBe(true);
+    expect(api.users.unlock).not.toHaveBeenCalled();
+    await auth.stepUp('pw');
+    await flushPromises();
+    expect(api.users.unlock).toHaveBeenCalledWith('u1');
+  });
+
+  it.each([
+    ['an expired password', { passwordExpiresAt: HOUR_AGO }, 'Password expired'],
+    [
+      'a password that must change',
+      { passwordMustChange: true },
+      'Must change password at next sign-in',
+    ],
+  ])('offers a password reset for %s', async (_, u, condition) => {
+    const { page } = await openWith(u);
+
+    expect(conditions(page)).toEqual([condition]);
+    await click(page, 'Reset password');
+    expect(page.find('#reset-new-password').exists()).toBe(true);
+  });
+
+  it('extends an expired account', async () => {
+    const { page } = await openWith({ accountExpiresAt: HOUR_AGO });
+
+    expect(conditions(page)).toEqual(['Account expired']);
+    await click(page, 'Extend expiry');
+    const never = page.findAll('label').find((l) => l.text() === 'Never expires')!;
+    await never.get('input').setValue(true);
+    await click(page, 'Save');
+    expect(api.users.setAccountExpiry).toHaveBeenCalledWith('u1', { expiresAt: null });
+  });
+
+  it('offers no fix the operator can’t make', async () => {
+    const { page } = await openWith({ enabled: false, locked: true }, [
+      'read:user',
+      'write:user.unlock',
+    ]);
+
+    expect(conditions(page)).toEqual(['Disabled', 'Locked']);
+    expect(primary(page)).toHaveLength(0);
+  });
+
+  it('says on the Account tab that a lockout with no duration lasts until someone unlocks it', async () => {
+    api.users.get.mockResolvedValue({
+      user: aUserDetail({ locked: true, lockedAt: HOUR_AGO, lockedUntilUnlocked: true }),
+    });
+    const { page } = await openTab('account', ['read:user'], false);
+
+    const card = page.findAll('.kv-grid')[0]!;
+    expect(card.text()).toContain('Stays locked until someone unlocks it');
+    expect(card.text()).not.toContain('Auto-unlocks');
   });
 });
