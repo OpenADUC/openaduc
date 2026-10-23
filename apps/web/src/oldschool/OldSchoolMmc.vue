@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useThemeStore } from '../design/stores/useTheme.js';
 import { useOldSchool } from './stores/useOldSchool.js';
+import { useAuthStore } from '../stores/auth.js';
 import OuTreePane from './panes/OuTreePane.vue';
 import ContentsListPane from './panes/ContentsListPane.vue';
 import WinIcon from './primitives/WinIcon.vue';
@@ -29,6 +30,8 @@ import ResetPasswordDialog from './dialogs/ResetPasswordDialog.vue';
 import MoveDialog from './dialogs/MoveDialog.vue';
 import RenameUserDialog from './dialogs/RenameUserDialog.vue';
 import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
+import NewGroupDialog from './dialogs/NewGroupDialog.vue';
+import DeleteGroupDialog from './dialogs/DeleteGroupDialog.vue';
 import AddToGroupDialog from './dialogs/AddToGroupDialog.vue';
 import MessageBoxDialog from './dialogs/MessageBoxDialog.vue';
 import AppToast from '../design/feedback/AppToast.vue';
@@ -38,6 +41,14 @@ import FindDialog from './dialogs/FindDialog.vue';
 const theme = useThemeStore();
 const store = useOldSchool();
 const router = useRouter();
+const auth = useAuthStore();
+
+// New Group creates in the selected OU, as ADUC's toolbar button does.
+const newGroupParentDn = computed(() =>
+  store.selectedNode.kind === 'ou' && auth.hasCapability('write:group.create')
+    ? store.selectedNode.dn
+    : null,
+);
 
 // --- Menu state -------------------------------------------------------
 type MenuId = 'file' | 'action' | 'view' | 'help' | null;
@@ -305,7 +316,15 @@ function exitOldSchool(): void {
         <button class="os-tool-btn" type="button" title="New User" disabled>
           <WinIcon name="newuser" :size="14" />
         </button>
-        <button class="os-tool-btn" type="button" title="New Group" disabled>
+        <button
+          class="os-tool-btn"
+          type="button"
+          title="New Group"
+          :disabled="!newGroupParentDn"
+          @click="
+            newGroupParentDn && store.openDialog({ kind: 'new-group', parentDn: newGroupParentDn })
+          "
+        >
           <WinIcon name="newgroup" :size="14" />
         </button>
         <button class="os-tool-btn" type="button" title="New Computer" disabled>
@@ -369,6 +388,19 @@ function exitOldSchool(): void {
       />
       <DeleteUserDialog
         v-else-if="w.dialog.kind === 'delete-user'"
+        :window-id="w.id"
+        :id="w.dialog.id"
+        :label="w.dialog.label"
+        @close="store.closeWindow(w.id)"
+      />
+      <NewGroupDialog
+        v-else-if="w.dialog.kind === 'new-group'"
+        :window-id="w.id"
+        :parent-dn="w.dialog.parentDn"
+        @close="store.closeWindow(w.id)"
+      />
+      <DeleteGroupDialog
+        v-else-if="w.dialog.kind === 'delete-group'"
         :window-id="w.id"
         :id="w.dialog.id"
         :label="w.dialog.label"

@@ -23,8 +23,10 @@ import { useOldSchool, type SelectedNode } from '../stores/useOldSchool.js';
 import WinIcon from '../primitives/WinIcon.vue';
 import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
 import type { DirectoryOu } from '@openaduc/shared';
+import { useAuthStore } from '../../stores/auth.js';
 
 const store = useOldSchool();
+const auth = useAuthStore();
 
 const { ous, loading, error: errorMsg, load: loadTree } = useOuTree();
 
@@ -298,7 +300,13 @@ function onContext(row: VisibleRow, e: MouseEvent): void {
         label: 'New',
       },
       { label: 'User…', icon: 'newuser', disabled: true },
-      { label: 'Group…', icon: 'newgroup', disabled: true },
+      row.kind === 'ou' && auth.hasCapability('write:group.create')
+        ? {
+            label: 'Group…',
+            icon: 'newgroup',
+            onSelect: () => store.openDialog({ kind: 'new-group', parentDn: row.dn! }),
+          }
+        : { label: 'Group…', icon: 'newgroup', disabled: true },
       { label: 'Computer…', icon: 'newcomputer', disabled: true },
       { label: 'Organizational Unit…', icon: 'newou', disabled: true },
       { kind: 'separator' },
