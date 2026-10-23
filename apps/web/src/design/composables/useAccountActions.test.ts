@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ElevatedSessionState } from '@openaduc/shared';
 import { ApiError } from '../../api/client.js';
 
@@ -77,7 +77,8 @@ describe('useAccountActions', () => {
       useAuthStore().actor = { capabilities: [], elevated: ELEVATED } as never;
       const onDone = vi.fn();
       const ws01 = { id: 'c1', name: 'WS01' };
-      const actions = useAccountActions<typeof ws01>({ kind: 'computer', onDone });
+      const actions = useAccountActions<typeof ws01, 'computer'>({ kind: 'computer', onDone });
+      expectTypeOf(actions.run).parameter(0).toEqualTypeOf<'disable' | 'enable'>();
 
       actions.run(action, ws01);
       await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());

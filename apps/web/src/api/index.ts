@@ -584,7 +584,7 @@ export const api = {
         body: JSON.stringify({}),
       });
     },
-    resetAccount(id: string): Promise<{ ok: boolean }> {
+    resetAccount(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/computers/${encodeURIComponent(id)}/reset-account`, {
         method: 'POST',
         body: JSON.stringify({}),

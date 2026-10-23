@@ -75,7 +75,7 @@ const {
   failure: accountFailure,
   retry: retryAccountAction,
   dismiss: dismissAccountFailure,
-} = useAccountActions<ComputerDetail>({
+} = useAccountActions<ComputerDetail, 'computer'>({
   kind: 'computer',
   onDone: async (action, c, offer) => {
     const done = action === 'disable' ? 'Disabled' : 'Enabled';
