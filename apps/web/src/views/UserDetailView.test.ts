@@ -190,6 +190,20 @@ describe('resetting a locked-out user’s password', () => {
     });
   });
 
+  it('offers to unlock an account locked since the page loaded', async () => {
+    api.users.get
+      .mockResolvedValueOnce({ user })
+      .mockResolvedValue({ user: aUserDetail({ locked: true }) });
+    const { page } = await openTab(
+      'account',
+      ['read:user', 'write:user.resetPassword', 'write:user.unlock'],
+      true,
+    );
+
+    await click(page, 'Reset password');
+    expect(page.text()).toContain('Also unlock the account');
+  });
+
   it('doesn’t offer to unlock an account that isn’t locked', async () => {
     const { page } = await openTab('account', ['read:user', 'write:user.resetPassword'], true);
 

@@ -26,6 +26,7 @@ const emit = defineEmits<{
 }>();
 
 const {
+  loading,
   password,
   shown,
   forceChangeAtNextLogin,
@@ -54,7 +55,7 @@ watch(
   (open) => {
     if (!open || !props.user) return;
     copied.value = null;
-    void load(props.user);
+    void load(props.user.id);
   },
   { immediate: true },
 );
@@ -146,7 +147,12 @@ function close(): void {
 
     <template #footer>
       <Button label="Cancel" text severity="secondary" :disabled="submitting" @click="close" />
-      <Button label="Reset" :loading="submitting" :disabled="!acceptable" @click="submit" />
+      <Button
+        label="Reset"
+        :loading="submitting"
+        :disabled="loading || !acceptable"
+        @click="submit"
+      />
     </template>
   </Dialog>
 </template>
