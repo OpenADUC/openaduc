@@ -3,7 +3,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
-import Toast from 'primevue/toast';
+import { useToast } from 'primevue/usetoast';
 import {
   api,
   type AuditEventRow,
@@ -17,20 +17,40 @@ import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
+import AppToast from '../design/feedback/AppToast.vue';
+import InlineFailure from '../design/feedback/InlineFailure.vue';
+import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
+import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
+import { undoable } from '../design/feedback/undoToast.js';
+import {
+  accountActionFailedSummary,
+  accountActionToast,
+  expiryFailedSummary,
+  expirySetSummary,
+  passwordResetToast,
+} from '../design/feedback/userToasts.js';
+import { useAccountActions } from '../design/composables/useAccountActions.js';
+import { useAccountExpiry } from '../design/composables/useAccountExpiry.js';
+import { useAttentionQueue } from '../design/composables/useAttentionQueue.js';
+import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
+import { placeFailure } from '../design/lib/failurePlacement.js';
 import { fmtRelative } from '../design/lib/format.js';
-import { userStatus } from '../design/lib/signIn.js';
+import { fixFor, userStatus, type SignInFix } from '../design/lib/signIn.js';
+import type { ObjectActionFailure } from './_detail/objectPage';
 import type { UserSummary } from '@openaduc/shared';
 
 const router = useRouter();
 const auth = useAuthStore();
+const toast = useToast();
 
 // "Issues" window — only the most urgent accounts: locked, account/password
 // already expired, or password expiring within the next 24h. The broader
 // "expiring this fortnight" view lives on /users via the saved view.
 const ISSUES_DAYS = 1;
 
-const issueUsers = ref<UserSummary[]>([]);
-const issueTotal = ref(0);
+const queue = useAttentionQueue({ withinDays: ISSUES_DAYS, pageSize: 10 });
+// Set when the issues list couldn't load: show that, never "Nothing on fire".
+const { error: issuesError, load: loadIssues } = queue;
 const recentEvents = ref<AuditEventRow[]>([]);
 const loading = ref(true);
 const directory = ref<DirectorySummary | null>(null);
@@ -87,30 +107,6 @@ const syncStatusLabel = computed(() => {
   return 'All tasks healthy';
 });
 
-// Set when the issues list couldn't load: show that, never "Nothing on fire".
-const issuesError = ref<string | null>(null);
-
-async function loadIssues(): Promise<void> {
-  issuesError.value = null;
-  try {
-    const issues = await api.users.search({
-      page: 1,
-      pageSize: 10,
-      issues: true,
-      issuesWithinDays: ISSUES_DAYS,
-      // Sort by status priority so the worst-off accounts come first.
-      sort: 'status',
-      sortDir: 'asc',
-    });
-    issueUsers.value = issues.rows;
-    issueTotal.value = issues.total;
-  } catch (err) {
-    issueUsers.value = [];
-    issueTotal.value = 0;
-    issuesError.value = err instanceof Error ? err.message : 'Failed to load';
-  }
-}
-
 // Set when a panel couldn't load: show that and a retry, never an empty
 // state that reads as "nothing happened" or "all fine".
 const activityError = ref<string | null>(null);
@@ -158,6 +154,118 @@ async function load(): Promise<void> {
 function openUser(u: UserSummary): void {
   void router.push({ name: 'user-detail', params: { id: u.id } });
 }
+
+// ---- Fixing a row in place --------------------------------------------------
+// Each row offers the fix its user's page leads with, made through the same
+// workflow, so it prompts step-up and is audited the same way.
+
+const nameOf = (u: UserSummary) => u.displayName ?? u.samAccountName;
+
+const fixOf = (u: UserSummary): SignInFix | null => fixFor(u, auth.hasCapability);
+
+const accountActions = useAccountActions<UserSummary>({
+  onDone: async (action, u, offer) => {
+    toast.add(accountActionToast(action, u, offer));
+    await queue.reread(u);
+  },
+});
+
+const resetTarget = ref<UserSummary | null>(null);
+const resetOpen = ref(false);
+
+async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
+  toast.add(passwordResetToast(outcome));
+  if (resetTarget.value) await queue.reread(resetTarget.value);
+}
+
+const expiryOpen = ref(false);
+const expiry = useAccountExpiry({
+  onSet: async (account, expiresAt, offer) => {
+    toast.add(
+      undoable(
+        { severity: 'success', summary: expirySetSummary(account.name, expiresAt), life: 4000 },
+        offer,
+      ),
+    );
+    expiryOpen.value = false;
+    const row = queue.rows.value.find((u) => u.id === account.id);
+    if (row) await queue.reread(row);
+  },
+});
+// A failed expiry change shows in the dialog that made it while that's
+// open, else (an Undo's failure) on its row.
+const { inDialog: expiryDialogFailure, onPage: expiryRowFailure } = placeFailure(expiry.failure, {
+  belongsHere: () => true,
+  dialog: { open: () => expiryOpen.value, made: (f) => !f.undo },
+});
+
+function closeExpiry(): void {
+  expiryOpen.value = false;
+  if (expiryDialogFailure.value) expiry.dismiss();
+}
+
+function runFix(fix: SignInFix, u: UserSummary): void {
+  switch (fix.fix) {
+    case 'enable':
+    case 'unlock':
+      accountActions.run(fix.fix, u);
+      break;
+    case 'reset-password':
+      resetTarget.value = u;
+      resetOpen.value = true;
+      break;
+    case 'extend-expiry':
+      expiry.load({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
+      expiryOpen.value = true;
+      break;
+  }
+}
+
+function fixRunning(u: UserSummary): boolean {
+  if (accountActions.runningOn(u.id) !== null) return true;
+  return expiry.submitting.value && expiry.account.value?.id === u.id;
+}
+
+/** The failed write (or read back after one) to show on a row, if any. */
+function failureOn(u: UserSummary): ObjectActionFailure | null {
+  const action = accountActions.failure.value;
+  if (action?.op.account.id === u.id) {
+    return {
+      summary: accountActionFailedSummary(action.op.action, action.op.account),
+      message: action.message,
+      retry: accountActions.retry,
+      dismiss: accountActions.dismiss,
+    };
+  }
+  const exp = expiryRowFailure.value;
+  if (exp?.op.account.id === u.id) {
+    return {
+      summary: expiryFailedSummary(exp.op.account.name),
+      message: exp.message,
+      retry: expiry.retry,
+      dismiss: expiry.dismiss,
+    };
+  }
+  const reread = queue.rereadFailure.value;
+  if (reread?.account.id === u.id) {
+    return {
+      summary: `Couldn’t read ${nameOf(u)} back`,
+      message: reread.message,
+      retry: () => void queue.reread(reread.account),
+      dismiss: queue.dismissRereadFailure,
+    };
+  }
+  return null;
+}
+
+// A fixed row leaves, unless something about it failed since: an Undo that
+// didn't land stays where the operator can see it.
+const issueRows = computed(() =>
+  queue.rows.value.filter((u) => !queue.fixed.value.has(u.id) || failureOn(u) !== null),
+);
+const issueTotal = computed(
+  () => queue.total.value - (queue.rows.value.length - issueRows.value.length),
+);
 
 function openEventDetail(ev: AuditEventRow): void {
   detailEvent.value = ev;
@@ -207,7 +315,7 @@ onMounted(load);
 </script>
 
 <template>
-  <Toast />
+  <AppToast />
   <div class="page-inner dashboard">
     <PageHeader title="Dashboard">
       <template #actions>
@@ -266,19 +374,41 @@ onMounted(load);
         </template>
       </EmptyState>
       <EmptyState
-        v-else-if="!loading && issueUsers.length === 0"
+        v-else-if="!loading && issueRows.length === 0"
         icon="pi pi-check-circle"
         title="Nothing on fire"
         message="No active accounts are locked, expired, or expiring in the next 24 hours."
       />
       <ul v-else class="user-list">
-        <li v-for="u in issueUsers" :key="u.id" class="user-list-row" @click="openUser(u)">
-          <Avatar :name="u.displayName ?? u.samAccountName" :seed="u.samAccountName" />
-          <div class="user-list-meta">
-            <div class="user-list-name">{{ u.displayName ?? u.samAccountName }}</div>
-            <div class="user-list-sub mono">{{ issueReason(u) }}</div>
+        <li v-for="u in issueRows" :key="u.id" class="user-list-item">
+          <div class="user-list-row" @click="openUser(u)">
+            <Avatar :name="nameOf(u)" :seed="u.samAccountName" />
+            <div class="user-list-meta">
+              <div class="user-list-name">{{ nameOf(u) }}</div>
+              <div class="user-list-sub mono">{{ issueReason(u) }}</div>
+            </div>
+            <StatusBadge :user="u" />
+            <Button
+              v-if="fixOf(u)"
+              class="user-list-fix"
+              :label="fixOf(u)!.label"
+              :icon="`pi ${fixOf(u)!.icon}`"
+              size="small"
+              severity="secondary"
+              outlined
+              :loading="fixRunning(u)"
+              @click.stop="runFix(fixOf(u)!, u)"
+            />
           </div>
-          <StatusBadge :user="u" />
+          <InlineFailure
+            v-if="failureOn(u)"
+            class="user-list-failure"
+            :summary="failureOn(u)!.summary"
+            :message="failureOn(u)!.message"
+            :busy="fixRunning(u)"
+            @retry="failureOn(u)!.retry"
+            @dismiss="failureOn(u)!.dismiss"
+          />
         </li>
       </ul>
     </Card>
@@ -340,6 +470,13 @@ onMounted(load);
     </Card>
 
     <AuditEventDialog v-model:visible="detailOpen" :event="detailEvent" />
+    <ResetPasswordDialog v-model:visible="resetOpen" :user="resetTarget" @reset="onPasswordReset" />
+    <AccountExpiryDialog
+      :visible="expiryOpen"
+      :expiry="expiry"
+      :failure="expiryDialogFailure"
+      @close="closeExpiry"
+    />
   </div>
 </template>
 
@@ -407,17 +544,20 @@ onMounted(load);
   flex-direction: column;
 }
 
+.user-list-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.user-list-item:last-child {
+  border-bottom: 0;
+}
+
 .user-list-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border);
   cursor: pointer;
-}
-
-.user-list-row:last-child {
-  border-bottom: 0;
 }
 
 .user-list-row:hover {
@@ -436,6 +576,10 @@ onMounted(load);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.user-list-failure {
+  margin: 0 0 10px;
 }
 
 .user-list-sub {
