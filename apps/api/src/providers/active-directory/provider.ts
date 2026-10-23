@@ -705,7 +705,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           after: {
             passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null,
             forceChangeAtNextLogin: input.forceChangeAtNextLogin,
-            ...(input.unlock ? { locked: after?.locked ?? false } : {}),
+            // Unknown when the re-read failed; don't claim it's unlocked.
+            ...(input.unlock ? { locked: after ? after.locked : null } : {}),
           },
         };
       } catch (err) {
