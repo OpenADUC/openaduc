@@ -31,6 +31,11 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
     iconClass: 'pi pi-key',
     tone: 'tone-amber',
   },
+  'user.accountExpiry.set': {
+    title: 'Account expiry changed',
+    iconClass: 'pi pi-calendar',
+    tone: 'tone-blue',
+  },
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },
   'user.move': { title: 'Moved to OU', iconClass: 'pi pi-folder', tone: 'tone-blue' },
@@ -89,6 +94,9 @@ function detailFor(e: AuditEventRow): string {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
+  if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
+    return md.expiresAt ? `Expires ${fmtAbsolute(String(md.expiresAt))}` : 'Never expires';
+  }
   return '';
 }
 </script>
