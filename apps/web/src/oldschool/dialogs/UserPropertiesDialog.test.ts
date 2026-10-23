@@ -112,6 +112,23 @@ describe('the Old School user properties', () => {
     expect(api.users.update).toHaveBeenCalledTimes(2);
   });
 
+  it('apply Street to the work address, and are clean once applied', async () => {
+    const { dialog } = await openProperties(['read:user', 'write:user.attributes'], ELEVATED);
+    await openTab(dialog, 'Address');
+    await dialog.get('#street').setValue('1 Main Street');
+    expect(button(dialog, 'Apply').attributes('disabled')).toBeUndefined();
+
+    const applied = { user: aUserDetail({ streetAddress: '1 Main Street' }) };
+    api.users.get.mockResolvedValueOnce(applied).mockResolvedValueOnce(applied);
+    await button(dialog, 'Apply').trigger('click');
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledWith('u1', {
+      patch: { streetAddress: '1 Main Street' },
+    });
+    expect((dialog.get('#street').element as HTMLTextAreaElement).value).toBe('1 Main Street');
+    expect(button(dialog, 'Apply').attributes('disabled')).toBeDefined();
+  });
+
   it('say why a value can’t be applied, and won’t apply it', async () => {
     const { dialog } = await openProperties(['read:user', 'write:user.attributes'], ELEVATED);
 

@@ -102,6 +102,7 @@ const HANDLED_ATTRS = new Set<string>([
   'ipPhone',
   'homePhone',
   'homePostalAddress',
+  'streetAddress',
   'description',
   'company',
   'c',
@@ -236,6 +237,13 @@ const SCALAR_FIELDS: ScalarField[] = [
     section: 'phones',
   },
   // Contact → Address -------------------------------------------------
+  {
+    key: 'streetAddress',
+    label: 'Street',
+    multiline: true,
+    view: 'contact',
+    section: 'address',
+  },
   { key: 'l', label: 'City', view: 'contact', section: 'address' },
   { key: 'st', label: 'State / Province', view: 'contact', section: 'address' },
   { key: 'postalCode', label: 'Postal code', view: 'contact', section: 'address' },

@@ -84,6 +84,7 @@ describe('useUserAttributeEdit', () => {
     edit.draft.department = '';
     edit.draft.otherHomePhone = '';
     edit.draft.otherMobile = ' 555 0100 \n\n555 0101';
+    edit.draft.streetAddress = '1 Main Street\nSuite 200';
 
     edit.save();
     await vi.waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
@@ -92,10 +93,11 @@ describe('useUserAttributeEdit', () => {
         title: 'Lead Analyst',
         department: null,
         otherHomePhone: null,
+        streetAddress: '1 Main Street\nSuite 200',
         otherMobile: ['555 0100', '555 0101'],
       },
     });
-    expect(onSaved).toHaveBeenCalledWith(4);
+    expect(onSaved).toHaveBeenCalledWith(5);
   });
 
   it('refuses what the directory would refuse, without prompting step-up', async () => {
