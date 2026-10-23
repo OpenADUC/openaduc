@@ -57,15 +57,11 @@ watch(
 // refused a write (e.g. cached step-up password expired); it's null when
 // a write prompted step-up up front.
 function onDialogVisibility(open: boolean): void {
-  auth.stepUpRequested = open;
-  if (!open) {
-    auth.stepUpReason = null;
-    // Clear any retry callback queued by the action that opened this dialog.
-    // The success path already cleared it inside `auth.stepUp(...)`; this
-    // covers the cancel/X-close case so a stale callback doesn't fire on
-    // an unrelated future step-up.
-    auth.stepUpPendingAction = null;
-  }
+  // Closing after a successful step-up finds nothing left to cancel; the
+  // cancel/X-close case drops the queued action so it can't fire on an
+  // unrelated future step-up, and tells its caller.
+  if (open) auth.stepUpRequested = true;
+  else auth.cancelStepUp();
 }
 </script>
 
