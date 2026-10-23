@@ -479,13 +479,6 @@ const freshnessText = computed(() => {
   }
 }
 
-/* Name and badges wrap together on phones. */
-@media (max-width: 639.98px) {
-  .detail-hero-row {
-    row-gap: 6px;
-  }
-}
-
 /* Tab bar ---------------------------------------------------------------- */
 
 /* The tablist wrapper doesn't take part in the tab bar's flex layout. */
