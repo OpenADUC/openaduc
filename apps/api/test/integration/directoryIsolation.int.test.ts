@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addDirectory,
   configureDirectory,
+  DC,
   startApi,
   type TestApi,
   type TestClient,
@@ -123,6 +124,8 @@ describe('an operator signed into one directory', () => {
     // Installation-wide: one set of settings for every directory.
     const patch = await admin.patch('/api/settings', { 'view.stale_logon_days': 91 });
     expect(patch.statusCode).toBe(200);
+    const roles = await admin.put('/api/settings/roles', { auditor: DC.groups.auditors });
+    expect(roles.statusCode).toBe(200);
 
     const list = async (client: TestClient) => {
       const res = await client.get('/api/audit-events?pageSize=200');
@@ -150,6 +153,9 @@ describe('an operator signed into one directory', () => {
       expect(rows.find((r) => r.action === 'settings.update')).toMatchObject({
         providerId: null,
         targetId: 'view.stale_logon_days',
+      });
+      expect(rows.find((r) => r.action === 'settings.roles.update')).toMatchObject({
+        providerId: null,
       });
     }
   });
