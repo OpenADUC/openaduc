@@ -25,6 +25,7 @@ import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useThemeStore } from '../design/stores/useTheme.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
@@ -59,6 +60,8 @@ const total = ref(0);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+// The first load (or a reload of an empty list): the table shows skeleton rows.
+const skeleton = computed(() => loading.value && rows.value.length === 0);
 const drawerOpen = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
 
@@ -500,7 +503,7 @@ onMounted(() => {
 <template>
   <Toast />
   <div class="page-inner page-fill users-page">
-    <PageHeader :title="`Users (${total.toLocaleString()})`">
+    <PageHeader :title="skeleton ? 'Users' : `Users (${total.toLocaleString()})`">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
@@ -556,7 +559,7 @@ onMounted(() => {
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading"
+      :loading="loading && !skeleton"
       data-key="id"
       removable-sort
       sort-field="displayName"
@@ -569,7 +572,13 @@ onMounted(() => {
       @row-click="(ev) => openDetail(ev.data as UserSummary)"
     >
       <template #empty>
+        <ListSkeleton
+          v-if="skeleton"
+          :columns="['check', 'avatar', 'badge', 'badge', 'text', 'text', 'text', 'text']"
+          label="Loading users…"
+        />
         <EmptyState
+          v-else
           icon="pi pi-search"
           :title="activeCount > 0 ? 'No users match these filters' : 'No users yet'"
           :message="
