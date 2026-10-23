@@ -104,6 +104,8 @@ describe('creating and deleting groups', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
+        nameTaken: true,
+        samAccountNameTaken: true,
         nameTakenBy: ENGINEERING,
         samAccountNameTakenBy: `CN=Alice Anders,${STAFF_OU}`,
       });
@@ -116,7 +118,49 @@ describe('creating and deleting groups', () => {
         samAccountName: 'project.falcon',
       });
 
-      expect(res.json()).toEqual({ nameTakenBy: null, samAccountNameTakenBy: null });
+      expect(res.json()).toEqual({
+        nameTaken: false,
+        samAccountNameTaken: false,
+        nameTakenBy: null,
+        samAccountNameTakenBy: null,
+      });
+    });
+
+    it('says a name is taken outside the base DN without saying by what', async () => {
+      const scoped = await admin.post('/api/directories', {
+        name: 'Test OU only',
+        domain: DC.domain,
+        baseDn: 'OU=OpenADUC Test,DC=openaduc,DC=test',
+        ldapUrls: [DC.ldapsUrl],
+        tlsMode: 'ldaps',
+        adminUsername: 'oa.admin',
+        adminPassword: DC.password,
+      });
+      expect(scoped.statusCode).toBeLessThan(300);
+      const scopedId = scoped.json<{ directory: { id: number } }>().directory.id;
+      const bind = await admin.patch(`/api/directories/${scopedId}`, {
+        syncBindUpn: `${DC.serviceAccount}@${DC.domain}`,
+        syncBindPassword: DC.password,
+      });
+      expect(bind.statusCode).toBeLessThan(300);
+      await api.app.services.sync.runOnce(scopedId, 'ous.full');
+      const scopedOperator = api.client();
+      await scopedOperator.signInTo(scopedId, 'oa.operator');
+
+      const res = await scopedOperator.get(
+        `/api/groups/name-check?${new URLSearchParams({
+          parentDn: GROUPS_OU,
+          name: 'Engineering',
+          samAccountName: 'Administrator',
+        }).toString()}`,
+      );
+
+      expect(res.json()).toEqual({
+        nameTaken: true,
+        samAccountNameTaken: true,
+        nameTakenBy: ENGINEERING,
+        samAccountNameTakenBy: null,
+      });
     });
 
     it('refuses an OU OpenADUC doesn’t know', async () => {
@@ -140,6 +184,7 @@ describe('creating and deleting groups', () => {
         groupType: 'security',
         memberCount: 0,
       });
+      expect(res.json<{ distinguishedName: string }>().distinguishedName).toBe(CREATED);
       expect(await directoryGroup(CREATED)).toMatchObject({
         groupType: '-2147483646',
         sAMAccountName: 'project.falcon',

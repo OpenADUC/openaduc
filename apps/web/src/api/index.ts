@@ -15,6 +15,7 @@ import type {
   DirectoryOu,
   ElevatedSessionState,
   GroupCreateRequest,
+  GroupCreateResponse,
   GroupDeletePreflightResponse,
   GroupDeleteRequest,
   GroupDetail,
@@ -24,7 +25,6 @@ import type {
   GroupPolicyListResponse,
   GroupSearchQuery,
   GroupSearchResponse,
-  GroupSummary,
   LdapTlsMode,
   LoginRequest,
   MeResponse,
@@ -542,7 +542,7 @@ export const api = {
       for (const [k, v] of Object.entries(query)) if (v) params.set(k, v);
       return apiFetch(`/groups/name-check?${params.toString()}`);
     },
-    create(body: GroupCreateRequest): Promise<{ ok: boolean; group: GroupSummary }> {
+    create(body: GroupCreateRequest): Promise<GroupCreateResponse> {
       return apiFetch('/groups', { method: 'POST', body: JSON.stringify(body) });
     },
     deletePreflight(id: string): Promise<GroupDeletePreflightResponse> {

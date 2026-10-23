@@ -32,6 +32,14 @@ const FALCON = {
   memberCount: 0,
 };
 
+const CREATED = { ok: true, distinguishedName: FALCON.distinguishedName, group: FALCON };
+const FREE = {
+  nameTaken: false,
+  samAccountNameTaken: false,
+  nameTakenBy: null,
+  samAccountNameTakenBy: null,
+};
+
 function setup(elevated = true) {
   setActivePinia(createPinia());
   const auth = useAuthStore();
@@ -53,8 +61,8 @@ async function checked(): Promise<void> {
 describe('useGroupCreation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    nameCheck.mockReset().mockResolvedValue({ nameTakenBy: null, samAccountNameTakenBy: null });
-    create.mockReset().mockResolvedValue({ ok: true, group: FALCON });
+    nameCheck.mockReset().mockResolvedValue(FREE);
+    create.mockReset().mockResolvedValue(CREATED);
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -74,8 +82,9 @@ describe('useGroupCreation', () => {
   it('says which names are taken before submit, and won’t submit them', async () => {
     const { creation } = setup();
     nameCheck.mockResolvedValue({
+      ...FREE,
+      nameTaken: true,
       nameTakenBy: `CN=Engineering,${OU}`,
-      samAccountNameTakenBy: null,
     });
 
     creation.setName('Engineering');
@@ -88,17 +97,32 @@ describe('useGroupCreation', () => {
       samAccountName: 'Engineering',
     });
     expect(creation.checking.value).toBe(false);
-    expect(creation.taken.value).toEqual({ name: `CN=Engineering,${OU}`, samAccountName: null });
+    expect(creation.taken.value).toEqual({
+      name: `Already used in this OU by CN=Engineering,${OU}`,
+      samAccountName: null,
+    });
     expect(creation.canSubmit.value).toBe(false);
     creation.submit();
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('says a name is taken without saying by what when the server won’t', async () => {
+    const { creation } = setup();
+    nameCheck.mockResolvedValue({ ...FREE, samAccountNameTaken: true });
+
+    creation.setName('Administrator');
+    await checked();
+
+    expect(creation.taken.value.samAccountName).toBe('Already used elsewhere in the domain');
+    expect(creation.canSubmit.value).toBe(false);
+  });
+
   it('forgets a check once the operator changes the name it was for', async () => {
     const { creation } = setup();
     nameCheck.mockResolvedValueOnce({
+      ...FREE,
+      nameTaken: true,
       nameTakenBy: `CN=Engineering,${OU}`,
-      samAccountNameTakenBy: null,
     });
     creation.setName('Engineering');
     await checked();
@@ -135,7 +159,7 @@ describe('useGroupCreation', () => {
     expect(create).not.toHaveBeenCalled();
 
     await auth.stepUp('pw');
-    await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(FALCON));
+    await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(CREATED));
     expect(create).toHaveBeenCalledWith({
       parentDn: OU,
       name: 'Project Falcon',

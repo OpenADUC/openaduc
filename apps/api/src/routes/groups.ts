@@ -15,7 +15,7 @@ import {
   type GroupMember,
   type GroupNameCheckResponse,
   type GroupSearchResponse,
-  type GroupSummary,
+  type GroupCreateResponse,
 } from '@openaduc/shared';
 import {
   describeGroupDeleteBlock,
@@ -23,7 +23,7 @@ import {
   isProtectedGroup,
 } from '../lib/groupDeletion.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import { leafRdnValue } from '../providers/active-directory/normalize.js';
+import { childDn, leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { forgetDeletedGroup, upsertGroup } from '../services/groupCache.js';
 import { findCachedOu } from '../services/ouCache.js';
@@ -319,20 +319,26 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         cn: q.name,
         samAccountName: q.samAccountName,
       });
-      return { nameTakenBy: holders.cn, samAccountNameTakenBy: holders.samAccountName };
+      return {
+        nameTaken: holders.cn !== null,
+        samAccountNameTaken: holders.samAccountName !== null,
+        nameTakenBy: holders.cn?.dn ?? null,
+        samAccountNameTakenBy: holders.samAccountName?.dn ?? null,
+      };
     },
   });
 
   // ---- POST /api/groups (create in an OU) ------------------------------
   app.post('/api/groups', {
     config: { policy: { capability: 'write:group.create', stepUp: true, directory: 'caller' } },
-    handler: async (req): Promise<{ ok: true; group: GroupSummary }> => {
+    handler: async (req): Promise<GroupCreateResponse> => {
       const body = groupCreateRequestSchema.parse(req.body);
       const actor = req.actor!;
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
-      const parentDn = (await findCachedOu(app.db, provider.id, body.parentDn))?.distinguished_name;
-      if (!parentDn) throw app.httpErrors.badRequest('OU not found in directory cache');
+      const parent = await findCachedOu(app.db, provider.id, body.parentDn);
+      if (!parent) throw app.httpErrors.badRequest('OU not found in directory cache');
+      const dn = childDn('CN', body.name, parent.distinguished_name);
 
       const result = await withAudit(
         app.services.audit,
@@ -342,9 +348,9 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
           actorAuthMethod: 'ad-password',
           providerId: provider.id,
           targetType: 'group',
-          targetDn: `CN=${body.name},${parentDn}`,
+          targetDn: dn,
           metadata: {
-            parentDn,
+            parentDn: parent.distinguished_name,
             name: body.name,
             samAccountName: body.samAccountName,
             scope: body.scope,
@@ -354,7 +360,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         async () => {
           const r = await provider.createGroup(
             {
-              parentDn,
+              dn,
               cn: body.name,
               samAccountName: body.samAccountName,
               description: body.description || null,
@@ -373,25 +379,32 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
           };
         },
       );
-
-      if (!result.ok || !result.group) {
+      if (!result.ok) {
         throw directoryRefusal(app, result, { verb: 'create', notFound: 'OU not found' });
       }
 
-      const g = result.group;
-      await upsertGroup(app.db, provider.id, g);
+      // The group exists now. If the operator's bind couldn't read it back,
+      // try once with the service account; failing that, the next sync
+      // lists it.
+      const g =
+        result.group ??
+        (await provider.getGroup({ kind: 'distinguishedName', value: dn }).catch(() => null));
+      if (g) await upsertGroup(app.db, provider.id, g);
       return {
         ok: true,
-        group: {
-          id: g.objectGuid,
-          name: g.name,
-          samAccountName: g.samAccountName,
-          distinguishedName: g.distinguishedName,
-          description: g.description,
-          groupType: g.groupType,
-          groupScope: g.groupScope,
-          memberCount: 0,
-        },
+        distinguishedName: g?.distinguishedName ?? dn,
+        group: g
+          ? {
+              id: g.objectGuid,
+              name: g.name,
+              samAccountName: g.samAccountName,
+              distinguishedName: g.distinguishedName,
+              description: g.description,
+              groupType: g.groupType,
+              groupScope: g.groupScope,
+              memberCount: 0,
+            }
+          : null,
       };
     },
   });

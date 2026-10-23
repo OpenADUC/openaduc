@@ -21,7 +21,7 @@ import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import { useOuContents } from '../design/composables/useOuContents.js';
 import { useOuTree } from '../design/composables/useOuTree.js';
-import type { DirectoryOu, GroupSummary } from '@openaduc/shared';
+import type { DirectoryOu, GroupCreateResponse } from '@openaduc/shared';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
 import { groupCreatedToast } from '../design/feedback/groupToasts.js';
 
@@ -354,9 +354,9 @@ function openNewGroup(parentDn: string): void {
   newGroupOpen.value = true;
 }
 
-function onGroupCreated(group: GroupSummary): void {
+function onGroupCreated(created: GroupCreateResponse): void {
   newGroupOpen.value = false;
-  toast.add(groupCreatedToast(group));
+  toast.add(groupCreatedToast(created));
   if (selectedDn.value) void loadContents(selectedDn.value);
 }
 

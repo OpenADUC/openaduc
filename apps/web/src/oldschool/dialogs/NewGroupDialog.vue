@@ -34,8 +34,8 @@ const {
   error,
   submit,
 } = useGroupCreation({
-  onCreated: (group) => {
-    toast.add(groupCreatedToast(group));
+  onCreated: (created) => {
+    toast.add(groupCreatedToast(created));
     store.bumpData();
     emit('close');
   },
@@ -47,13 +47,9 @@ const createIn = computed(() => dnPath(rdns(props.parentDn)));
 const problem = computed(
   () =>
     problems.value.name ??
-    (taken.value.name
-      ? `The name is already used in this container by ${taken.value.name}.`
-      : null) ??
+    taken.value.name ??
     problems.value.samAccountName ??
-    (taken.value.samAccountName
-      ? `The pre-Windows 2000 name is already used by ${taken.value.samAccountName}.`
-      : null) ??
+    taken.value.samAccountName ??
     error.value,
 );
 </script>

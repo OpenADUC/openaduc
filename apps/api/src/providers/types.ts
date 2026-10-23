@@ -485,12 +485,13 @@ export interface DirectoryProvider {
   /** How many objects sit anywhere under each DN (null where unreadable). */
   countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
   // Who already holds a new object's names: `cn` among the direct children
-  // of `parentDn`, `samAccountName` anywhere in the domain. Each is the
-  // holder's DN, or null when free. Reads with the service account.
+  // of `parentDn`, `samAccountName` anywhere in the domain. Reads with the
+  // service account.
   findNameHolders(input: NewObjectNames): Promise<NameHolders>;
-  // Create a group directly under `parentDn`. Checks both names are free
-  // on the operator's bind first and returns `conflict` naming the holder
-  // otherwise. Returns the new group so the cache can show it at once.
+  // Create a group at `input.dn`. Checks both names are free on the
+  // operator's bind first and returns `conflict` naming the holder
+  // otherwise. Returns the new group so the cache can show it at once,
+  // unless it couldn't be read back after the add.
   createGroup(
     input: GroupCreateInput,
     ctx: WriteContext,
@@ -585,13 +586,16 @@ export interface NewObjectNames {
   samAccountName?: string | undefined;
 }
 
+// Who holds a name: null when nobody does. `dn` is null for a holder
+// outside the configured base DN, which isn't disclosed.
 export interface NameHolders {
-  cn: string | null;
-  samAccountName: string | null;
+  cn: { dn: string | null } | null;
+  samAccountName: { dn: string | null } | null;
 }
 
 export interface GroupCreateInput {
-  parentDn: string;
+  /** The new group's DN, built with childDn. */
+  dn: string;
   cn: string;
   samAccountName: string;
   description: string | null;
