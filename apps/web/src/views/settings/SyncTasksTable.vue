@@ -18,8 +18,10 @@ import {
 } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { fmtRelative } from '../../design/lib/format.js';
+import { useAuthStore } from '../../stores/auth.js';
 
 const props = defineProps<{ directoryId: number; canEdit: boolean }>();
+const auth = useAuthStore();
 
 const tasks = ref<SyncTaskSummary[]>([]);
 const loading = ref(true);
@@ -127,6 +129,11 @@ async function runNow(t: SyncTaskSummary): Promise<void> {
     startBurstPoll();
     void load();
   } catch (err) {
+    if (err instanceof ApiError && err.code === 'step_up_required') {
+      // The step-up dialog is opening; run again once it succeeds.
+      auth.stepUpPendingAction = () => runNow(t);
+      return;
+    }
     toast.add({
       severity: 'error',
       summary: 'Could not queue task',
@@ -181,6 +188,10 @@ async function resetStuck(t: SyncTaskSummary): Promise<void> {
     toast.add({ severity: 'success', summary: 'Task reset', life: 2500 });
     await load();
   } catch (err) {
+    if (err instanceof ApiError && err.code === 'step_up_required') {
+      auth.stepUpPendingAction = () => resetStuck(t);
+      return;
+    }
     toast.add({
       severity: 'error',
       summary: 'Could not reset task',
@@ -675,7 +686,7 @@ function anchorTimeToDate(value: string): Date | null {
               outlined
               size="small"
               title="Reset stuck task"
-              @click="resetStuck(t)"
+              @click="auth.requireEdit(() => resetStuck(t))"
             />
             <Button
               v-if="canEdit"
@@ -685,7 +696,7 @@ function anchorTimeToDate(value: string): Date | null {
               outlined
               title="Run now"
               :disabled="t.lastStatus === 'running' || queuing.has(t.taskKey)"
-              @click="runNow(t)"
+              @click="auth.requireEdit(() => runNow(t))"
             />
             <Button
               v-if="canEdit"
