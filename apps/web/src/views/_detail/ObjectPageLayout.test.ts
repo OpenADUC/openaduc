@@ -7,7 +7,7 @@ import ToastService from 'primevue/toastservice';
 import { defineComponent, h, ref, type Component } from 'vue';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ObjectAction, ObjectPageTab } from './objectPage.js';
+import type { ObjectAction, ObjectActionFailure, ObjectPageTab } from './objectPage.js';
 
 vi.mock('../../api/index.js', () => ({ api: {} }));
 
@@ -20,6 +20,7 @@ enableAutoUnmount(afterEach);
 type TabId = 'overview' | 'members' | 'raw';
 
 const refreshing = ref(false);
+const actionFailure = ref<ObjectActionFailure | null>(null);
 const onRefresh = vi.fn();
 let tabs: ObjectPageTab<TabId>[] = [];
 let actions: ObjectAction[] = [];
@@ -41,6 +42,7 @@ const GroupPage = defineComponent({
           fallbackTab: 'overview',
           actions,
           refreshing: refreshing.value,
+          actionFailure: actionFailure.value,
           onRefresh,
         },
         {
@@ -71,6 +73,7 @@ async function open(
   actions = opts.actions ?? [];
   freshness = opts.freshness ?? { cachedAt: null };
   refreshing.value = false;
+  actionFailure.value = null;
   onRefresh.mockClear();
   const pinia = createPinia();
   setActivePinia(pinia);
@@ -197,6 +200,27 @@ describe('the actions menu', () => {
     expect(item!.attributes('aria-disabled')).toBe('true');
     await item!.find('a').trigger('click');
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe('a failed action', () => {
+  it('shows under the Actions menu, with Retry and dismiss', async () => {
+    const { page } = await open('/groups/g1');
+    const retry = vi.fn();
+    const dismiss = vi.fn();
+    actionFailure.value = { summary: 'Disable failed', message: 'DC unreachable', retry, dismiss };
+    await flushPromises();
+    const alert = page.get('.inline-failure');
+    expect(alert.text()).toContain('Disable failed');
+    expect(alert.text()).toContain('DC unreachable');
+
+    await alert
+      .findAll('button')
+      .find((b) => b.text() === 'Retry')!
+      .trigger('click');
+    expect(retry).toHaveBeenCalledOnce();
+    await alert.find('button[aria-label="Close"]').trigger('click');
+    expect(dismiss).toHaveBeenCalledOnce();
   });
 });
 
