@@ -13,10 +13,9 @@ import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
-import {
-  useUserAttributeEdit,
-  type UserAttribute,
-} from '../../design/composables/useUserAttributeEdit.js';
+import type { UserAttribute } from '../../design/composables/useUserAttributeEdit.js';
+import { useUserChangesApply } from '../../design/composables/useUserChangesApply.js';
+import { membershipOf, useGroupMembership } from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
 import type { UserDetail } from '@openaduc/shared';
 
@@ -35,19 +34,11 @@ const user = ref<UserDetail | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
 
-const {
-  draft,
-  reset: resetDraft,
-  dirty: attributesDirty,
-  problems,
-  valid,
-  saving,
-  save: saveAttributes,
-} = useUserAttributeEdit({
-  onFailed: (message) =>
-    toast.add({ severity: 'error', summary: 'Apply failed', detail: message, life: 6000 }),
+const { draft, problems, valid, unlock, dirty, applying, reset, apply } = useUserChangesApply({
+  onApplied: () => toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 }),
+  onFailed: (summary, detail) => toast.add({ severity: 'error', summary, detail, life: 6000 }),
+  refresh: () => store.bumpData(),
 });
-const doUnlock = ref(false);
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -55,8 +46,7 @@ async function load(): Promise<void> {
   try {
     const resp = await api.users.get(props.id);
     user.value = resp.user;
-    resetDraft(resp.user);
-    doUnlock.value = false;
+    reset(resp.user);
   } catch (e) {
     err.value = e instanceof ApiError ? e.message : (e as Error).message;
   } finally {
@@ -65,8 +55,6 @@ async function load(): Promise<void> {
 }
 onMounted(load);
 watch(() => store.dataVersion, load);
-
-const dirty = computed(() => attributesDirty.value || doUnlock.value);
 
 // ADUC's labels for the attributes this dialog edits.
 const LABELS: Partial<Record<UserAttribute, string>> = {
@@ -176,84 +164,40 @@ const attributeRows = computed(() => {
 });
 
 // --- Apply ----------------------------------------------------------
-interface ApplyIntent {
-  close: boolean;
-  unlock: boolean;
-}
-
-function apply(close: boolean): void {
-  if (!user.value) return;
+function applyChanges(close: boolean): void {
   if (!dirty.value) {
     if (close) emit('close');
     return;
   }
-  const intent: ApplyIntent = { close, unlock: doUnlock.value && user.value.locked };
-  if (attributesDirty.value) saveAttributes(() => finishApply(intent, true));
-  else
-    auth.requireStepUp(
-      () => finishApply(intent, false),
-      'Updating a user requires step-up authentication.',
-    );
-}
-
-async function finishApply(intent: ApplyIntent, attributesSaved: boolean): Promise<void> {
-  if (intent.unlock) {
-    try {
-      await api.users.unlock(props.id);
-    } catch (e) {
-      if (auth.retryAfterStepUp(e, () => finishApply(intent, attributesSaved))) return;
-      toast.add({
-        severity: 'error',
-        summary: attributesSaved
-          ? 'Changes applied, but the account was not unlocked.'
-          : 'Unlock failed',
-        detail: e instanceof ApiError ? e.message : (e as Error).message,
-        life: 6000,
-      });
-      if (attributesSaved) {
-        store.bumpData();
-        await load();
-      }
-      return;
-    }
-  }
-  toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
-  store.bumpData();
-  await load();
-  if (intent.close) emit('close');
+  apply(close ? () => emit('close') : undefined);
 }
 
 // --- Member Of helpers -----------------------------------------------
-const memberOfPending = ref<string | null>(null);
-function removeMembership(groupId: string, groupName: string): void {
+const memberOfSelected = ref<string | null>(null);
+const selectedMembership = computed(
+  () => user.value?.groupMemberships.find((g) => g.id === memberOfSelected.value) ?? null,
+);
+const { pending: membershipPending, remove: removeMembership } = useGroupMembership({
+  onChanged: (_change, m) => {
+    toast.add({ severity: 'success', summary: `Removed from ${m.groupLabel}.`, life: 2500 });
+    store.bumpData();
+  },
+  onFailed: (_change, _m, message) =>
+    toast.add({ severity: 'error', summary: 'Remove failed', detail: message, life: 5000 }),
+});
+
+function confirmRemoveMembership(): void {
+  const u = user.value;
+  const g = selectedMembership.value;
+  if (!u || !g) return;
+  const membership = membershipOf(u, g);
   store.openDialog({
     kind: 'confirm',
-    title: 'Multiple Names Found',
-    message: `Remove ${user.value?.displayName ?? user.value?.samAccountName} from "${groupName}"?`,
+    title: 'Active Directory Domain Services',
+    message: `Remove ${membership.userLabel} from "${membership.groupLabel}"?`,
     okLabel: 'Yes',
     destructive: false,
-    onOk: () => {
-      const apply = async (): Promise<void> => {
-        memberOfPending.value = groupId;
-        try {
-          await api.users.removeGroup(props.id, { groupId });
-          toast.add({ severity: 'success', summary: `Removed from ${groupName}.`, life: 2500 });
-          await load();
-          store.bumpData();
-        } catch (e) {
-          if (auth.retryAfterStepUp(e, apply)) return;
-          toast.add({
-            severity: 'error',
-            summary: 'Remove failed',
-            detail: e instanceof ApiError ? e.message : (e as Error).message,
-            life: 5000,
-          });
-        } finally {
-          memberOfPending.value = null;
-        }
-      };
-      auth.requireStepUp(apply, 'Removing a group membership requires step-up authentication.');
-    },
+    onOk: () => removeMembership(membership),
   });
 }
 function openAddGroup(): void {
@@ -281,8 +225,8 @@ const upnLogonName = computed(() => {
     icon="user"
     :can-apply="dirty && valid"
     :can-ok="!loading && valid"
-    @ok="apply(true)"
-    @apply="apply(false)"
+    @ok="applyChanges(true)"
+    @apply="applyChanges(false)"
     @cancel="$emit('close')"
     @close="$emit('close')"
   >
@@ -311,7 +255,7 @@ const upnLogonName = computed(() => {
               id="givenName"
               class="os-input"
               v-model="draft.givenName"
-              :disabled="!canEditAttributes || saving"
+              :disabled="!canEditAttributes || applying"
               :aria-invalid="!!problems.givenName"
             />
             <label class="label" style="flex: 0 0 60px; text-align: right; align-self: center"
@@ -324,7 +268,7 @@ const upnLogonName = computed(() => {
             id="surname"
             class="os-input"
             v-model="draft.surname"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.surname"
           />
           <label class="label" for="displayName">Display name:</label>
@@ -332,7 +276,7 @@ const upnLogonName = computed(() => {
             id="displayName"
             class="os-input"
             v-model="draft.displayName"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.displayName"
           />
           <label class="label" for="description">Description:</label>
@@ -340,7 +284,7 @@ const upnLogonName = computed(() => {
             id="description"
             class="os-input"
             v-model="draft.description"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.description"
           />
           <label class="label" for="office">Office:</label>
@@ -359,7 +303,7 @@ const upnLogonName = computed(() => {
               id="phone"
               class="os-input"
               v-model="draft.phone"
-              :disabled="!canEditAttributes || saving"
+              :disabled="!canEditAttributes || applying"
               :aria-invalid="!!problems.phone"
             />
             <button class="os-btn" disabled style="min-width: 70px">Other…</button>
@@ -369,7 +313,7 @@ const upnLogonName = computed(() => {
             id="email"
             class="os-input"
             v-model="draft.email"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.email"
           />
           <label class="label" for="webPage">Web page:</label>
@@ -389,7 +333,7 @@ const upnLogonName = computed(() => {
             class="os-textarea"
             rows="3"
             v-model="draft.streetAddress"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.streetAddress"
           />
           <label class="label" for="pobox">P.O. Box:</label>
@@ -399,7 +343,7 @@ const upnLogonName = computed(() => {
             id="city"
             class="os-input"
             v-model="draft.l"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.l"
           />
           <label class="label" for="state">State/province:</label>
@@ -407,7 +351,7 @@ const upnLogonName = computed(() => {
             id="state"
             class="os-input"
             v-model="draft.st"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.st"
           />
           <label class="label" for="zip">Zip/Postal Code:</label>
@@ -415,7 +359,7 @@ const upnLogonName = computed(() => {
             id="zip"
             class="os-input"
             v-model="draft.postalCode"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.postalCode"
           />
           <label class="label" for="country">Country/region:</label>
@@ -423,7 +367,7 @@ const upnLogonName = computed(() => {
             id="country"
             class="os-input"
             v-model="draft.co"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.co"
             placeholder="(name)"
           />
@@ -447,7 +391,7 @@ const upnLogonName = computed(() => {
         </div>
         <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
         <label v-if="canUnlock" class="os-check" :class="{ disabled: !user.locked }">
-          <input type="checkbox" v-model="doUnlock" :disabled="!user.locked" />
+          <input type="checkbox" v-model="unlock" :disabled="!user.locked" />
           Unlock account. This account is currently
           {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
           Controller.
@@ -551,7 +495,7 @@ const upnLogonName = computed(() => {
             <input
               class="os-input"
               v-model="draft.homePhone"
-              :disabled="!canEditAttributes || saving"
+              :disabled="!canEditAttributes || applying"
               :aria-invalid="!!problems.homePhone"
             />
             <button class="os-btn" disabled>Other…</button>
@@ -562,7 +506,7 @@ const upnLogonName = computed(() => {
             <input
               class="os-input"
               v-model="draft.mobile"
-              :disabled="!canEditAttributes || saving"
+              :disabled="!canEditAttributes || applying"
               :aria-invalid="!!problems.mobile"
             />
             <button class="os-btn" disabled>Other…</button>
@@ -573,7 +517,7 @@ const upnLogonName = computed(() => {
             <input
               class="os-input"
               v-model="draft.ipPhone"
-              :disabled="!canEditAttributes || saving"
+              :disabled="!canEditAttributes || applying"
               :aria-invalid="!!problems.ipPhone"
             />
             <button class="os-btn" disabled>Other…</button>
@@ -592,21 +536,21 @@ const upnLogonName = computed(() => {
           <input
             class="os-input"
             v-model="draft.title"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.title"
           />
           <label class="label">Department:</label>
           <input
             class="os-input"
             v-model="draft.department"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.department"
           />
           <label class="label">Company:</label>
           <input
             class="os-input"
             v-model="draft.company"
-            :disabled="!canEditAttributes || saving"
+            :disabled="!canEditAttributes || applying"
             :aria-invalid="!!problems.company"
           />
         </div>
@@ -653,8 +597,8 @@ const upnLogonName = computed(() => {
             v-for="g in user.groupMemberships"
             :key="g.id"
             class="os-listbox-row"
-            :class="{ selected: memberOfPending === g.id }"
-            @click="memberOfPending = g.id"
+            :class="{ selected: memberOfSelected === g.id }"
+            @click="memberOfSelected = g.id"
           >
             <WinIcon name="group" :size="14" />
             <span style="flex: 1">{{ g.name }}</span>
@@ -666,13 +610,13 @@ const upnLogonName = computed(() => {
           <button
             class="os-btn"
             type="button"
-            :disabled="!memberOfPending"
-            @click="
-              () => {
-                const g = user!.groupMemberships.find((x) => x.id === memberOfPending);
-                if (g) removeMembership(g.id, g.name);
-              }
+            :disabled="!selectedMembership?.direct || membershipPending !== null"
+            :title="
+              selectedMembership && !selectedMembership.direct
+                ? 'Membership comes from a nested group'
+                : undefined
             "
+            @click="confirmRemoveMembership"
           >
             Remove
           </button>

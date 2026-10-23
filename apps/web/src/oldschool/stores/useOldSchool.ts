@@ -26,7 +26,7 @@ export type DialogSpec =
   | { kind: 'reset-password'; id: string; samAccountName: string }
   | { kind: 'rename-user'; id: string }
   | { kind: 'delete-user'; id: string; label: string }
-  | { kind: 'move'; objectKind: 'user' | 'group' | 'computer'; id: string; label: string }
+  | { kind: 'move'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | {
       kind: 'confirm';

@@ -37,9 +37,9 @@ const { useAuthStore } = await import('../../stores/auth.js');
 
 const RESET_AND_UNLOCK = ['read:user', 'write:user.resetPassword', 'write:user.unlock'];
 
-function setup(capabilities = RESET_AND_UNLOCK) {
+function setup(capabilities = RESET_AND_UNLOCK, elevated = true) {
   setActivePinia(createPinia());
-  useAuthStore().actor = { directoryId: 1, capabilities, elevated: { active: false } } as never;
+  useAuthStore().actor = { directoryId: 1, capabilities, elevated: { active: elevated } } as never;
   const onReset = vi.fn();
   return { reset: usePasswordReset({ onReset }), onReset };
 }
@@ -51,6 +51,9 @@ async function loaded(
   get.mockResolvedValue({ user });
   await reset.load(user.id);
 }
+
+// The submit runs once any step-up is through, after the click returns.
+const settled = () => new Promise((r) => setTimeout(r));
 
 describe('usePasswordReset', () => {
   beforeEach(() => {
@@ -65,7 +68,8 @@ describe('usePasswordReset', () => {
     expect(reset.alsoUnlock.value).toBe(true);
 
     reset.password.value = 'Correct-Horse-9';
-    await reset.submit();
+    reset.submit();
+    await settled();
 
     expect(resetPassword).toHaveBeenCalledOnce();
     expect(resetPassword).toHaveBeenCalledWith('u1', {
@@ -83,7 +87,8 @@ describe('usePasswordReset', () => {
 
     reset.alsoUnlock.value = true;
     reset.password.value = 'Correct-Horse-9';
-    await reset.submit();
+    reset.submit();
+    await settled();
     expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));
   });
 
@@ -93,7 +98,8 @@ describe('usePasswordReset', () => {
     expect(reset.offerUnlock.value).toBe(false);
 
     reset.password.value = 'Correct-Horse-9';
-    await reset.submit();
+    reset.submit();
+    await settled();
     expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));
   });
 
@@ -103,7 +109,8 @@ describe('usePasswordReset', () => {
 
     reset.password.value = 'Short-1a';
     expect(reset.acceptable.value).toBe(false);
-    await reset.submit();
+    reset.submit();
+    await settled();
     expect(resetPassword).not.toHaveBeenCalled();
 
     reset.generate();
@@ -113,13 +120,29 @@ describe('usePasswordReset', () => {
     expect(reset.historyNote.value).toContain('24');
   });
 
-  it('finishes the reset after the step-up its submit prompts', async () => {
+  it('prompts step-up before sending the new password, then resets', async () => {
+    const { reset, onReset } = setup(RESET_AND_UNLOCK, false);
+    await loaded(reset, aUserDetail());
+    reset.password.value = 'Correct-Horse-9';
+
+    reset.submit();
+    await settled();
+    expect(useAuthStore().stepUpRequested).toBe(true);
+    expect(resetPassword).not.toHaveBeenCalled();
+
+    await useAuthStore().stepUp('pw');
+    await vi.waitFor(() => expect(onReset).toHaveBeenCalledOnce());
+    expect(resetPassword).toHaveBeenCalledOnce();
+  });
+
+  it('finishes the reset after step-up when the server says the elevated session is gone', async () => {
     const { reset, onReset } = setup();
     await loaded(reset, aUserDetail({ locked: true }));
     reset.password.value = 'Correct-Horse-9';
     resetPassword.mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'));
 
-    await reset.submit();
+    reset.submit();
+    await settled();
     expect(reset.error.value).toBeNull();
     expect(onReset).not.toHaveBeenCalled();
 
@@ -153,7 +176,8 @@ describe('usePasswordReset', () => {
     reset.password.value = 'Correct-Horse-9';
     resetPassword.mockRejectedValueOnce(new ApiError(400, 'bad_request', 'directory rejected'));
 
-    await reset.submit();
+    reset.submit();
+    await settled();
     expect(reset.error.value).toBe('directory rejected');
     expect(onReset).not.toHaveBeenCalled();
   });

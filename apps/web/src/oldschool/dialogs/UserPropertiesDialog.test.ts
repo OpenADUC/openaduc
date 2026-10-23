@@ -14,6 +14,7 @@ const api = {
     get: vi.fn(async () => ({ user: aUserDetail({ title: 'Analyst', locked: true }) })),
     update: vi.fn(async () => ({})),
     unlock: vi.fn(async () => ({})),
+    removeGroup: vi.fn(async () => ({ ok: true })),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -167,6 +168,36 @@ describe('the Old School user properties', () => {
     expect(toast.add).toHaveBeenCalledWith(
       expect.objectContaining({ severity: 'error', detail: 'DC unreachable' }),
     );
+  });
+
+  it('remove a direct membership once confirmed, but not one from a nested group', async () => {
+    api.users.get.mockResolvedValueOnce({
+      user: aUserDetail({
+        groupMemberships: [
+          { id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales', direct: true },
+          { id: 'g2', name: 'Staff', distinguishedName: 'CN=Staff', direct: false },
+        ] as never,
+      }),
+    });
+    const { dialog } = await openProperties(['read:user', 'write:group.membership'], ELEVATED);
+    const oldSchool = useOldSchool();
+    await openTab(dialog, 'Member Of');
+    const row = (name: string) =>
+      dialog.findAll('.os-listbox-row').find((r) => r.text().includes(name))!;
+
+    await row('Staff').trigger('click');
+    expect(button(dialog, 'Remove').attributes('disabled')).toBeDefined();
+
+    await row('Sales').trigger('click');
+    await button(dialog, 'Remove').trigger('click');
+    const confirm = oldSchool.windows.at(-1)!.dialog;
+    expect(confirm).toMatchObject({ kind: 'confirm', message: 'Remove Jane Doe from "Sales"?' });
+    const version = oldSchool.dataVersion;
+
+    await (confirm as Extract<typeof confirm, { kind: 'confirm' }>).onOk();
+    await flushPromises();
+    expect(api.users.removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g1' });
+    expect(oldSchool.dataVersion).toBe(version + 1);
   });
 
   it('show a read-only operator nothing they can change', async () => {
