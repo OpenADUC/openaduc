@@ -33,3 +33,16 @@ export interface ObjectLink {
   href: string;
   title: string;
 }
+
+/**
+ * What the loaded page usually shows, so the skeleton shown while its
+ * record loads takes about the same room.
+ */
+export interface ObjectPageSkeleton {
+  /** A status line under the name, such as a user's sign-in status. */
+  status?: boolean;
+  /** A subtitle line, such as a user's title or a group's description. */
+  subtitle?: boolean;
+  /** Cards on the first tab; two or more sit side by side. Default 2. */
+  cards?: number;
+}

@@ -4,7 +4,8 @@
 shares: the header (avatar, name and badges, subtitle, identifier line,
 launchers and DN copy chip, primary actions), the tab bar with refresh and
 the Actions menu, the page body for the active tab, and the freshness line.
-Pages mount it once their record has loaded and pass:
+Pages mount it while their record loads and keep it mounted once it has,
+and pass:
 
 - header data as props, badges in the `badges` slot, the object's state
   in the `status` slot (under the name, folded away in the compact header),
@@ -19,7 +20,17 @@ Pages mount it once their record has loaded and pass:
 - `actionFailure` (`ActionFailure`, from `design/lib/actionFailure.ts`)
   when an action failed: the layout shows it under the Actions menu, with
   Retry and dismiss, until the page clears it;
-- `refreshing`, and handle `@refresh`.
+- `refreshing`, and handle `@refresh`;
+- `loading` while there's no record yet, with placeholder header props
+  and without the slots that read the record. The layout then draws a
+  skeleton in the header's own elements, shows the tabs with their counts
+  held, disables refresh, keeps the Actions button (disabled) if the
+  operator holds a capability any action needs, and puts skeleton cards
+  in place of the body. `skeleton` (`ObjectPageSkeleton`) says what the
+  loaded page usually has (a status line, a subtitle, how many cards), so
+  the skeleton takes about the same room. The record then fills the same
+  header and tab bar, so nothing above the body moves. The skeleton shows
+  only after 150 ms (`skeleton-delayed` in `theme.css`).
 
 The default slot renders the body; it gets `tab` (the active tab) and
 `select(id)` to switch tabs from the body.

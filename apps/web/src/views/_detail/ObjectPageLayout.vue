@@ -3,20 +3,23 @@
 import { computed, ref } from 'vue';
 import Button from 'primevue/button';
 import Menu from 'primevue/menu';
+import Skeleton from 'primevue/skeleton';
 import type { MenuItem } from 'primevue/menuitem';
 import { useToast } from 'primevue/usetoast';
 import Avatar from '../../design/primitives/Avatar.vue';
+import Card from '../../design/primitives/Card.vue';
 import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
-import type { ObjectAction, ObjectLink, ObjectPageTab } from './objectPage';
+import type { ObjectAction, ObjectLink, ObjectPageSkeleton, ObjectPageTab } from './objectPage';
 import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
-// The page mounts this once its record has loaded, so tab visibility is
-// already final.
+// The page mounts this while its record loads (`loading`, with
+// placeholder props) or once it has; it keeps it mounted from one to the
+// other, so the record fills the header and tab bar the skeleton drew.
 const props = withDefaults(
   defineProps<{
     kind: 'user' | 'group' | 'computer';
@@ -41,6 +44,9 @@ const props = withDefaults(
     /** Shown under the Actions menu. */
     actionFailure?: ActionFailure | null;
     refreshing?: boolean;
+    /** No record yet: skeletons stand in for the header and the page. */
+    loading?: boolean;
+    skeleton?: ObjectPageSkeleton;
     cachedAt: string | null;
     /** When the record was last read live from the directory, if it ever was. */
     liveRefreshedAt?: string | null;
@@ -53,6 +59,8 @@ const props = withDefaults(
     actionsBusy: false,
     actionFailure: null,
     refreshing: false,
+    loading: false,
+    skeleton: () => ({}),
     liveRefreshedAt: null,
   },
 );
@@ -106,7 +114,8 @@ async function copy(kind: 'identifier' | 'dn'): Promise<void> {
 const activeTab = useRouteTab<T>({
   tabs: () => props.tabs,
   fallback: props.fallbackTab,
-  ready: () => true,
+  // Some tabs only show once the record has loaded.
+  ready: () => !props.loading,
 });
 const visibleTabs = computed(() => props.tabs.filter((t) => t.visible));
 
@@ -131,6 +140,14 @@ const menuItems = computed<MenuItem[]>(() =>
     })),
 );
 
+// While loading, whether this object will offer anything isn't known yet;
+// the button holds its place if the operator could run any of the actions.
+const offersActions = computed(() =>
+  props.loading
+    ? props.actions.some((a) => auth.hasCapability(a.capability))
+    : menuItems.value.length > 0,
+);
+
 function toggleActionsMenu(event: Event): void {
   actionsMenu.value?.toggle(event);
 }
@@ -144,17 +161,50 @@ const freshnessText = computed(() => {
 </script>
 
 <template>
-  <div class="detail-stack" :style="{ '--detail-sticky-offset': `${heroHeight}px` }">
+  <div
+    class="detail-stack"
+    :class="{ 'skeleton-delayed': loading }"
+    :style="{ '--detail-sticky-offset': `${heroHeight}px` }"
+    :aria-busy="loading || undefined"
+  >
+    <span v-if="loading" class="sr-only" role="status">Loading {{ kind }}…</span>
+
     <!-- Identity on the left, primary actions on the right; everything else
          the operator can do sits in the tab bar's Actions menu. -->
     <section
       :ref="setHero"
       class="detail-hero"
-      :class="{ 'is-compact': heroCompact, 'has-primary': !!$slots.primary }"
+      :class="{ 'is-compact': heroCompact, 'has-primary': !loading && !!$slots.primary }"
     >
-      <Avatar v-bind="avatar" :size="heroCompact ? 28 : 80" />
+      <!-- The skeleton draws each line in the element the record's line
+           uses, so the record lands in the same room. -->
+      <template v-if="loading">
+        <Skeleton
+          :size="heroCompact ? '28px' : '80px'"
+          :shape="avatar.shape === 'rounded' ? 'rectangle' : 'circle'"
+          :border-radius="avatar.shape === 'rounded' ? '18%' : undefined"
+        />
+        <div class="detail-hero-main">
+          <div class="detail-hero-row">
+            <div class="detail-hero-name"><Skeleton class="skeleton-text" width="9em" /></div>
+            <Skeleton width="84px" height="26px" border-radius="5px" />
+          </div>
+          <div v-if="skeleton.status" class="detail-hero-status">
+            <div class="skeleton-status"><Skeleton class="skeleton-text" width="16em" /></div>
+          </div>
+          <div v-if="skeleton.subtitle" class="detail-hero-title">
+            <Skeleton class="skeleton-text" width="18em" />
+          </div>
+          <div class="detail-hero-upn"><Skeleton class="skeleton-text" width="16em" /></div>
+          <div class="detail-hero-actions-row">
+            <Skeleton width="24rem" height="26px" border-radius="6px" />
+          </div>
+        </div>
+      </template>
 
-      <div class="detail-hero-main">
+      <Avatar v-else v-bind="avatar" :size="heroCompact ? 28 : 80" />
+
+      <div v-if="!loading" class="detail-hero-main">
         <div class="detail-hero-row">
           <h1 class="detail-hero-name">{{ name }}</h1>
           <slot name="badges" />
@@ -201,7 +251,7 @@ const freshnessText = computed(() => {
         </div>
       </div>
 
-      <div v-if="$slots.primary" class="detail-hero-primary">
+      <div v-if="!loading && $slots.primary" class="detail-hero-primary">
         <slot name="primary" :compact="heroCompact" />
       </div>
     </section>
@@ -227,7 +277,10 @@ const freshnessText = computed(() => {
         >
           <i :class="['pi', t.icon]" aria-hidden="true" />
           <span class="object-tab-label">{{ t.label }}</span>
-          <span v-if="t.count !== undefined" class="ds-tab-count mono">{{ t.count }}</span>
+          <span v-if="t.count !== undefined" class="ds-tab-count mono">
+            <Skeleton v-if="loading" class="skeleton-text" width="1.2em" />
+            <template v-else>{{ t.count }}</template>
+          </span>
         </button>
       </div>
       <div class="object-tabs-spacer" />
@@ -237,11 +290,12 @@ const freshnessText = computed(() => {
         severity="secondary"
         size="small"
         :loading="refreshing"
+        :disabled="loading || refreshing"
         title="Refresh from directory"
         class="object-tabs-refresh"
         @click="$emit('refresh')"
       />
-      <div v-if="menuItems.length > 0" class="object-tabs-actions">
+      <div v-if="offersActions" class="object-tabs-actions">
         <Button
           label="Actions"
           icon="pi pi-chevron-down"
@@ -249,6 +303,7 @@ const freshnessText = computed(() => {
           severity="secondary"
           text
           size="small"
+          :disabled="loading || actionsBusy"
           :loading="actionsBusy"
           aria-haspopup="true"
           :aria-controls="menuId"
@@ -259,7 +314,7 @@ const freshnessText = computed(() => {
     </nav>
 
     <InlineFailure
-      v-if="actionFailure"
+      v-if="actionFailure && !loading"
       :summary="actionFailure.summary"
       :message="actionFailure.message"
       :busy="actionsBusy"
@@ -267,9 +322,28 @@ const freshnessText = computed(() => {
       @dismiss="actionFailure.dismiss"
     />
 
-    <slot :tab="activeTab" :select="select" />
+    <div
+      v-if="loading"
+      class="object-skeleton-grid"
+      :class="{ 'is-single': (skeleton.cards ?? 2) === 1 }"
+    >
+      <Card v-for="n in skeleton.cards ?? 2" :key="n" class="object-skeleton-card">
+        <template #head>
+          <div class="dc-card-title"><Skeleton class="skeleton-text" width="7em" /></div>
+        </template>
+        <div class="skeleton-kv">
+          <template v-for="row in 5" :key="row">
+            <span><Skeleton class="skeleton-text" :width="`${5 + ((row * 3) % 4)}em`" /></span>
+            <span
+              ><Skeleton class="skeleton-text" :width="`${40 + ((n * 17 + row * 13) % 45)}%`"
+            /></span>
+          </template>
+        </div>
+      </Card>
+    </div>
+    <slot v-else :tab="activeTab" :select="select" />
 
-    <p class="freshness-foot">
+    <p v-if="!loading" class="freshness-foot">
       <span class="hint">{{ freshnessText }}</span>
     </p>
   </div>
@@ -404,6 +478,9 @@ const freshnessText = computed(() => {
   color: var(--text-3);
   font-size: 12.5px;
   margin-top: 2px;
+  /* As tall as the identifier as a copy button, so the skeleton's line
+     fits either. */
+  padding: 2px 0;
 }
 
 .detail-hero-actions-row {
@@ -663,5 +740,46 @@ const freshnessText = computed(() => {
 
 .freshness-foot {
   margin: 4px 0 0;
+}
+
+/* Skeleton --------------------------------------------------------------- */
+
+/* A bar inside a line of text, so the line keeps the height the text gives
+   it. PrimeVue sets a skeleton's height inline. */
+.skeleton-text {
+  display: inline-block;
+  vertical-align: middle;
+  height: 0.75em !important;
+}
+
+/* The first line of SignInStatus. */
+.skeleton-status {
+  margin-top: 6px;
+  font-size: 13.5px;
+}
+
+/* Laid out like the object pages' overview grids. */
+.object-skeleton-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.object-skeleton-grid.is-single {
+  grid-template-columns: 1fr;
+}
+
+@media (max-width: 1100px) {
+  .object-skeleton-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.skeleton-kv {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 6px 14px;
+  font-size: 13px;
 }
 </style>

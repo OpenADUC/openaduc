@@ -217,3 +217,38 @@ describe('a computer’s actions', () => {
     expect(page.text()).toContain("That's the computer's current OU");
   });
 });
+
+describe('while the computer loads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a skeleton page with Actions held, then the computer in the same header', async () => {
+    let answer!: () => void;
+    api.computers.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ computer: aComputer() });
+        }),
+    );
+    const page = await openPage(ALL);
+    expect(page.get('[role="status"]').text()).toBe('Loading computer…');
+    expect(page.find('h1').exists()).toBe(false);
+    const actions = page.findAll('button').find((b) => b.text() === 'Actions');
+    expect(actions!.attributes('disabled')).toBeDefined();
+    const hero = page.get('.detail-hero').element;
+
+    answer();
+    await flushPromises();
+    expect(page.get('.detail-hero').element).toBe(hero);
+    expect(page.get('h1').text()).toBe('WS01');
+    expect(page.find('.p-skeleton').exists()).toBe(false);
+  });
+
+  it('shows a computer that isn’t there as before, with no skeleton', async () => {
+    api.computers.get.mockRejectedValueOnce(new ApiError(404, 'not_found', 'No such computer'));
+    const page = await openPage(ALL);
+    expect(page.text()).toContain('Computer not found');
+    expect(page.find('.detail-hero').exists()).toBe(false);
+  });
+});

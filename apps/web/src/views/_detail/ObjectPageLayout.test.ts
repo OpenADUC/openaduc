@@ -7,7 +7,7 @@ import ToastService from 'primevue/toastservice';
 import { defineComponent, h, ref, type Component } from 'vue';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ObjectAction, ObjectPageTab } from './objectPage.js';
+import type { ObjectAction, ObjectPageSkeleton, ObjectPageTab } from './objectPage.js';
 import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
 vi.mock('../../api/index.js', () => ({ api: {} }));
@@ -21,6 +21,8 @@ enableAutoUnmount(afterEach);
 type TabId = 'overview' | 'members' | 'raw';
 
 const refreshing = ref(false);
+const loading = ref(false);
+let skeleton: ObjectPageSkeleton | undefined;
 const actionFailure = ref<ActionFailure | null>(null);
 const onRefresh = vi.fn();
 let tabs: ObjectPageTab<TabId>[] = [];
@@ -43,6 +45,8 @@ const GroupPage = defineComponent({
           fallbackTab: 'overview',
           actions,
           refreshing: refreshing.value,
+          loading: loading.value,
+          skeleton,
           actionFailure: actionFailure.value,
           onRefresh,
         },
@@ -64,6 +68,8 @@ async function open(
     tabs?: ObjectPageTab<TabId>[];
     actions?: ObjectAction[];
     freshness?: typeof freshness;
+    loading?: boolean;
+    skeleton?: ObjectPageSkeleton;
   } = {},
 ) {
   tabs = opts.tabs ?? [
@@ -74,6 +80,8 @@ async function open(
   actions = opts.actions ?? [];
   freshness = opts.freshness ?? { cachedAt: null };
   refreshing.value = false;
+  loading.value = opts.loading ?? false;
+  skeleton = opts.skeleton;
   actionFailure.value = null;
   onRefresh.mockClear();
   const pinia = createPinia();
@@ -256,5 +264,73 @@ describe('the freshness line', () => {
   it('only says when it was cached for a record never read live', async () => {
     const { page } = await open('/groups/g1', { freshness: { cachedAt: hourAgo() } });
     expect(page.find('.freshness-foot').text()).toBe('Cache written 1h ago');
+  });
+});
+
+describe('while the record loads', () => {
+  it('shows the tabs, with a skeleton header and cards in place of the page', async () => {
+    const { page } = await open('/groups/g1', { loading: true });
+    expect(page.get('[role="status"]').text()).toBe('Loading group…');
+    expect(page.find('.detail-hero h1').exists()).toBe(false);
+    expect(page.find('.detail-hero .p-skeleton').exists()).toBe(true);
+    expect(tabLabels(page)).toEqual(['Overview', 'Members']);
+    expect(page.find('.body').exists()).toBe(false);
+    expect(page.findAll('.object-skeleton-card')).toHaveLength(2);
+    expect(page.find('.freshness-foot').exists()).toBe(false);
+  });
+
+  it('fills the same header and tab bar once the record is there', async () => {
+    const { page } = await open('/groups/g1', { loading: true });
+    const hero = page.get('.detail-hero').element;
+    const tabBar = page.get('.object-tabs').element;
+
+    loading.value = false;
+    await flushPromises();
+    expect(page.get('.detail-hero').element).toBe(hero);
+    expect(page.get('.object-tabs').element).toBe(tabBar);
+    expect(page.get('.detail-hero h1').text()).toBe('Finance');
+    expect(page.find('.detail-hero .p-skeleton').exists()).toBe(false);
+    expect(page.find('.object-skeleton-card').exists()).toBe(false);
+    expect(page.get('.body').text()).toContain('showing overview');
+  });
+
+  it('keeps the tab counts’ room without showing a count', async () => {
+    const { page } = await open('/groups/g1', { loading: true });
+    const count = page.get('[aria-label="Members"] .ds-tab-count');
+    expect(count.text()).toBe('');
+    expect(count.find('.p-skeleton').exists()).toBe(true);
+  });
+
+  it('holds a disabled Actions button for an operator who could act', async () => {
+    const remove: ObjectAction = {
+      label: 'Remove…',
+      icon: 'pi-trash',
+      capability: 'write:group.membership',
+      available: false,
+      run: vi.fn(),
+    };
+    const { page } = await open('/groups/g1', {
+      loading: true,
+      capabilities: ['write:group.membership'],
+      actions: [remove],
+    });
+    expect(actionsButton(page)!.attributes('disabled')).toBeDefined();
+    expect(
+      page.find('button[title="Refresh from directory"]').attributes('disabled'),
+    ).toBeDefined();
+  });
+
+  it('reserves the header lines and cards the page says it usually has', async () => {
+    const plain = (await open('/groups/g1', { loading: true })).page;
+    expect(plain.find('.detail-hero-status').exists()).toBe(false);
+    expect(plain.find('.detail-hero-title').exists()).toBe(false);
+
+    const { page } = await open('/groups/g1', {
+      loading: true,
+      skeleton: { status: true, subtitle: true, cards: 1 },
+    });
+    expect(page.find('.detail-hero-status .p-skeleton').exists()).toBe(true);
+    expect(page.find('.detail-hero-title .p-skeleton').exists()).toBe(true);
+    expect(page.findAll('.object-skeleton-card')).toHaveLength(1);
   });
 });

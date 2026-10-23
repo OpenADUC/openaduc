@@ -1,7 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { useComputerRecord } from '../design/composables/useDirectoryRecords.js';
-import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import Message from 'primevue/message';
@@ -153,12 +152,12 @@ const busy = computed(
 
 const actions = computed<ObjectAction[]>(() => {
   const c = computer.value;
-  if (!c) return [];
   // Disabling, resetting or moving a domain controller can take the domain
-  // down; the server refuses them too.
-  const writable = c.writeBlock === null;
+  // down; the server refuses them too. While the record loads nothing is
+  // available, but the list lets the layout hold the Actions button's place.
+  const writable = c?.writeBlock === null;
   return [
-    c.enabled
+    c?.enabled !== false
       ? {
           label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
           icon: 'pi-ban',
@@ -166,7 +165,7 @@ const actions = computed<ObjectAction[]>(() => {
           available: writable,
           danger: true,
           disabled: busy.value,
-          run: () => runAccountAction('disable', c),
+          run: () => c && runAccountAction('disable', c),
         }
       : {
           label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
@@ -176,13 +175,13 @@ const actions = computed<ObjectAction[]>(() => {
           run: () => runAccountAction('enable', c),
         },
     {
-      label: resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
+      label: c && resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
       icon: 'pi-refresh',
       capability: 'write:computer.resetAccount',
       available: writable,
       danger: true,
       disabled: busy.value,
-      run: () => askReset(c),
+      run: () => c && askReset(c),
     },
     {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
@@ -225,30 +224,31 @@ function openManagedBy(): void {
   <div class="page-inner computer-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
-    <DetailLoading v-if="!computer && loading">Loading computer…</DetailLoading>
     <ObjectPageLayout
-      v-if="computer"
+      v-if="computer || loading"
       kind="computer"
-      :name="computer.name ?? computer.distinguishedName"
+      :loading="!computer"
+      :skeleton="{ cards: 1 }"
+      :name="computer?.name ?? computer?.distinguishedName ?? ''"
       :avatar="{
-        name: computer.name ?? computer.distinguishedName,
-        seed: computer.samAccountName ?? computer.distinguishedName,
+        name: computer?.name ?? computer?.distinguishedName ?? null,
+        seed: computer?.samAccountName ?? computer?.distinguishedName ?? null,
         shape: 'rounded',
         icon: 'pi-desktop',
       }"
-      :subtitle="computer.description"
-      :identifier="computer.dnsHostName ? { text: computer.dnsHostName } : null"
-      :dn="computer.distinguishedName"
+      :subtitle="computer?.description ?? null"
+      :identifier="computer?.dnsHostName ? { text: computer.dnsHostName } : null"
+      :dn="computer?.distinguishedName ?? ''"
       :tabs="tabs"
       fallback-tab="overview"
       :actions="actions"
       :actions-busy="busy"
       :action-failure="actionFailure"
       :refreshing="refreshing"
-      :cached-at="computer.freshness.cachedAt"
+      :cached-at="computer?.freshness.cachedAt ?? null"
       @refresh="refreshFromAd"
     >
-      <template #badges>
+      <template v-if="computer" #badges>
         <span v-if="computer.enabled" class="badge badge-green badge-lg" title="enabled">
           <i class="pi pi-check-circle" /> enabled
         </span>
@@ -271,7 +271,7 @@ function openManagedBy(): void {
         </span>
       </template>
 
-      <template #default="{ tab: activeTab }">
+      <template v-if="computer" #default="{ tab: activeTab }">
         <Card v-if="activeTab === 'overview'" title="Identity" sub="Read from Active Directory">
           <dl class="kv-grid">
             <dt>Name</dt>
