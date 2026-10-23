@@ -126,6 +126,7 @@ describe('stuck runs', () => {
     const { runId } = await api.app.services.syncTasks.markStarted(api.directoryId!, 'users.delta');
     const admin = api.client();
     await admin.signIn(api, 'oa.admin');
+    await admin.stepUp();
     const res = await admin.post(
       `/api/directories/${api.directoryId}/sync-tasks/users.delta/reset`,
     );
