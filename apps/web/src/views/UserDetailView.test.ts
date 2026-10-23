@@ -165,21 +165,26 @@ describe('resetting a locked-out user’s password', () => {
     api.users.get.mockResolvedValue({ user });
   });
 
-  it('unlocks the account in the same request, unless the operator unticks it', async () => {
+  async function openResetForLocked() {
     api.users.get.mockResolvedValue({ user: aUserDetail({ locked: true }) });
     const { page } = await openTab(
       'account',
       ['read:user', 'write:user.resetPassword', 'write:user.unlock'],
       true,
     );
-
     await click(page, 'Reset password');
     const unlock = page
       .findAll('label')
       .find((l) => l.text() === 'Also unlock the account')!
       .get('input');
-    expect((unlock.element as HTMLInputElement).checked).toBe(true);
     await page.get('#reset-new-password').setValue('N3w-passw0rd!');
+    return { page, unlock };
+  }
+
+  it('unlocks the account in the same request', async () => {
+    const { page, unlock } = await openResetForLocked();
+    expect((unlock.element as HTMLInputElement).checked).toBe(true);
+
     await click(page, 'Reset');
 
     expect(api.users.resetPassword).toHaveBeenCalledOnce();
@@ -188,6 +193,18 @@ describe('resetting a locked-out user’s password', () => {
       forceChangeAtNextLogin: true,
       unlock: true,
     });
+  });
+
+  it('leaves the lockout when the operator unticks "Also unlock"', async () => {
+    const { page, unlock } = await openResetForLocked();
+
+    await unlock.setValue(false);
+    await click(page, 'Reset');
+
+    expect(api.users.resetPassword).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ unlock: false }),
+    );
   });
 
   it('offers to unlock an account locked since the page loaded', async () => {
