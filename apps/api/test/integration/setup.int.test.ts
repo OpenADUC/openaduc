@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { configureDirectory, DC, startApi, type TestApi, type TestClient } from './harness.js';
+import {
+  configureDirectory,
+  DC,
+  expectOk,
+  startApi,
+  type TestApi,
+  type TestClient,
+} from './harness.js';
 
 const initializeBody = (adminUsername: string) => ({
   domain: DC.domain,
@@ -162,5 +169,18 @@ describe('the later setup steps', () => {
     });
     delete admin.headers.origin;
     expect(res.statusCode).toBe(403);
+  });
+
+  // Setup/initialize opens an elevated session, so normally they don't ask.
+  it('need a live step-up', async () => {
+    const body = { passwordExpiringDays: 14, staleLogonDays: 90 };
+    expectOk(await admin.delete('/api/auth/step-up'), 'end step-up');
+
+    const refused = await admin.post('/api/setup/policy', body);
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({ error: { code: 'step_up_required' } });
+
+    await admin.stepUp();
+    expect((await admin.post('/api/setup/policy', body)).statusCode).toBe(200);
   });
 });

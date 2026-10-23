@@ -6,8 +6,10 @@ import Message from 'primevue/message';
 import ProgressBar from 'primevue/progressbar';
 import { api, type InitialSyncJob } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { useAuthStore } from '../../stores/auth.js';
 
 const emit = defineEmits<{ complete: [job: InitialSyncJob] }>();
+const auth = useAuthStore();
 
 const job = ref<InitialSyncJob | null>(null);
 const starting = ref(false);
@@ -116,6 +118,11 @@ async function start(): Promise<void> {
     attachUnloadGuard();
     schedulePoll();
   } catch (err) {
+    if (err instanceof ApiError && err.code === 'step_up_required') {
+      // The step-up dialog is opening; start once it succeeds.
+      auth.stepUpPendingAction = start;
+      return;
+    }
     startError.value =
       err instanceof ApiError
         ? err.message
@@ -138,6 +145,10 @@ async function retry(): Promise<void> {
       schedulePoll();
     }
   } catch (err) {
+    if (err instanceof ApiError && err.code === 'step_up_required') {
+      auth.stepUpPendingAction = retry;
+      return;
+    }
     startError.value =
       err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Retry failed';
   } finally {
