@@ -6,7 +6,6 @@ import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import Button from 'primevue/button';
-import Password from 'primevue/password';
 import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Menu from 'primevue/menu';
@@ -28,6 +27,8 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
+import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
+import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
@@ -658,45 +659,21 @@ async function doToggleEnabled(disable: boolean): Promise<void> {
 // ---- Reset password dialog ------------------------------------------------
 
 const resetDialogOpen = ref(false);
-const resetDraft = ref({ newPassword: '', forceChangeAtNextLogin: true });
-const resetSubmitting = ref(false);
-const resetError = ref<string | null>(null);
 
 function openResetDialog(): void {
-  resetDraft.value = { newPassword: '', forceChangeAtNextLogin: true };
-  resetError.value = null;
   resetDialogOpen.value = true;
 }
 
-async function onResetSubmit(): Promise<void> {
-  if (!user.value) return;
-  resetError.value = null;
-  if (resetDraft.value.newPassword.length < 8) {
-    resetError.value = 'New password must be at least 8 characters';
-    return;
-  }
-  resetSubmitting.value = true;
-  try {
-    await api.users.resetPassword(user.value.id, {
-      newPassword: resetDraft.value.newPassword,
-      forceChangeAtNextLogin: resetDraft.value.forceChangeAtNextLogin,
-    });
-    toast.add({
-      severity: 'success',
-      summary: 'Password reset',
-      detail: resetDraft.value.forceChangeAtNextLogin
-        ? 'User must change at next sign-in'
-        : 'New password is in effect',
-      life: 4000,
-    });
-    resetDialogOpen.value = false;
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, onResetSubmit)) return;
-    resetError.value = err instanceof ApiError ? err.message : 'reset failed';
-  } finally {
-    resetSubmitting.value = false;
-  }
+async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
+  toast.add({
+    severity: 'success',
+    summary: outcome.unlocked ? 'Password reset and account unlocked' : 'Password reset',
+    detail: outcome.forceChangeAtNextLogin
+      ? 'User must change it at next sign-in'
+      : 'New password is in effect',
+    life: 4000,
+  });
+  await load();
 }
 
 // ---- Move to OU ----------------------------------------------------------
@@ -2098,60 +2075,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       </p>
     </div>
 
-    <!-- Reset password dialog. No longer needs the AD password input —
-         the active edit-mode session has it cached server-side. -->
-    <Dialog
-      :visible="resetDialogOpen"
-      modal
-      header="Reset password"
-      :style="{ width: '28rem' }"
-      :closable="!resetSubmitting"
-      @update:visible="(v) => !v && (resetDialogOpen = false)"
-    >
-      <p class="dialog-prose primary">
-        Set a new password for <strong>{{ user?.displayName ?? user?.samAccountName }}</strong
-        >.
-      </p>
-      <p class="dialog-prose secondary">
-        AD policy still applies — complexity, length, and history rules can reject the value.
-      </p>
-      <div class="reset-form">
-        <div class="form-row">
-          <label for="reset-new-password" class="fld-label">New password</label>
-          <Password
-            v-model="resetDraft.newPassword"
-            input-id="reset-new-password"
-            :feedback="false"
-            toggle-mask
-            input-class="w-full"
-            class="w-full"
-            :disabled="resetSubmitting"
-            autocomplete="new-password"
-            @keyup.enter="onResetSubmit"
-          />
-        </div>
-        <label class="check-row">
-          <input
-            v-model="resetDraft.forceChangeAtNextLogin"
-            type="checkbox"
-            :disabled="resetSubmitting"
-          />
-          <span>Force change at next sign-in</span>
-        </label>
-        <Message v-if="resetError" severity="error" :closable="false">{{ resetError }}</Message>
-      </div>
-      <template #footer>
-        <Button
-          label="Cancel"
-          text
-          severity="secondary"
-          :disabled="resetSubmitting"
-          @click="resetDialogOpen = false"
-        />
-        <Button label="Reset" :loading="resetSubmitting" @click="onResetSubmit" />
-      </template>
-    </Dialog>
-
     <!-- Move to OU dialog: TreeSelect over the cached OU list. The current
          parent OU is preselected so the operator can see where they are
          before picking a destination. -->
@@ -2285,6 +2208,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
 
     <ConfirmDialog v-bind="leaveDialog" />
 
+    <ResetPasswordDialog v-model:visible="resetDialogOpen" :user="user" @reset="onPasswordReset" />
     <RenameUserDialog v-model:visible="renameDialogOpen" :user="user" @renamed="onRenamed" />
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
@@ -3285,7 +3209,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   text-overflow: ellipsis;
 }
 
-/* Reset dialog ------------------------------------------------------------ */
+/* Dialogs ----------------------------------------------------------------- */
 .dialog-prose {
   font-size: 13px;
   margin: 0 0 8px;
@@ -3299,12 +3223,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   color: var(--text-3);
   font-size: 12px;
   margin-bottom: 14px;
-}
-
-.reset-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .move-current {
@@ -3333,33 +3251,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
 .move-tree {
   margin: 0 0 12px;
   min-height: 40px;
-}
-
-.form-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.w-full {
-  width: 100%;
-}
-
-:deep(.p-password) {
-  display: block;
-  width: 100%;
-}
-
-:deep(.p-password .p-password-input) {
-  width: 100%;
 }
 
 /* MFA methods list rendered under the registration badge in the

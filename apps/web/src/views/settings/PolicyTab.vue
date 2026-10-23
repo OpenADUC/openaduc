@@ -130,6 +130,11 @@ function formatDays(days: number | null): string {
   return `${days} day${days === 1 ? '' : 's'}`;
 }
 
+function formatComplexity(required: boolean | null): string {
+  if (required === null) return 'unknown';
+  return required ? 'required' : 'not required';
+}
+
 function formatThreshold(n: number | null): string {
   if (n === null) return 'unknown';
   if (n === 0) return 'lockout disabled';
@@ -166,6 +171,8 @@ onMounted(async () => {
       <dd>{{ adPolicy.minPwdLength ?? 'unknown' }}</dd>
       <dt class="fld-label">Password history</dt>
       <dd>{{ adPolicy.pwdHistoryLength ?? 'unknown' }}</dd>
+      <dt class="fld-label">Password complexity</dt>
+      <dd>{{ formatComplexity(adPolicy.complexityRequired) }}</dd>
     </dl>
     <p class="setting-hint">
       AD enforces these directly. Per-user password expiration is computed from

@@ -321,6 +321,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             'maxPwdAge',
             'minPwdLength',
             'pwdHistoryLength',
+            'pwdProperties',
           ],
         });
         const root: Entry = searchEntries[0] ?? ({} as Entry);
@@ -330,6 +331,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           const n = Number.parseInt(s, 10);
           return Number.isFinite(n) ? n : null;
         };
+        const pwdProperties = intAttr(root['pwdProperties']);
         return {
           lockoutDurationMs: adDurationToMs(asString(root['lockoutDuration'])),
           lockoutThreshold: intAttr(root['lockoutThreshold']),
@@ -337,6 +339,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           maxPwdAgeMs: adDurationToMs(asString(root['maxPwdAge'])),
           minPwdLength: intAttr(root['minPwdLength']),
           pwdHistoryLength: intAttr(root['pwdHistoryLength']),
+          complexityRequired: pwdProperties === null ? null : (pwdProperties & 1) === 1,
         } satisfies DirectoryDomainPolicy;
       });
       this.domainPolicyCache = {
@@ -353,6 +356,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         maxPwdAgeMs: null,
         minPwdLength: null,
         pwdHistoryLength: null,
+        complexityRequired: null,
       };
     }
   }
@@ -646,7 +650,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
    * LDAPS (the cleartext-on-the-wire requirement is enforced by AD itself).
    *
    * If `forceChangeAtNextLogin` is true, also set `pwdLastSet=0`. AD treats
-   * that as "needs to change on next sign-in".
+   * that as "needs to change on next sign-in". `unlock` also sets
+   * `lockoutTime=0`. All of it is one modify, so it applies or fails whole.
    */
   async resetPassword(
     userId: DirectoryObjectIdentifier,
@@ -676,6 +681,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             }),
           );
         }
+        if (input.unlock) {
+          changes.push(
+            new Change({
+              operation: 'replace',
+              modification: new Attribute({ type: 'lockoutTime', values: ['0'] }),
+            }),
+          );
+        }
 
         await client.modify(before.distinguishedName, changes);
 
@@ -687,10 +700,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           // audit row carries the "what" without the "how".
           before: {
             passwordLastSetAt: before.passwordLastSetAt?.toISOString() ?? null,
+            ...(input.unlock ? { locked: before.locked } : {}),
           },
           after: {
             passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null,
             forceChangeAtNextLogin: input.forceChangeAtNextLogin,
+            // Unknown when the re-read failed; don't claim it's unlocked.
+            ...(input.unlock ? { locked: after ? after.locked : null } : {}),
           },
         };
       } catch (err) {

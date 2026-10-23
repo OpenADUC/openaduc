@@ -72,7 +72,7 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
     case 'computer-properties':
       return { width: 540, height: 560 };
     case 'reset-password':
-      return { width: 440, height: 340 };
+      return { width: 440, height: 440 };
     case 'rename-user':
       return { width: 460, height: 400 };
     case 'delete-user':
