@@ -46,8 +46,33 @@ async function openTab(elevated: boolean) {
   const tab = mount(PolicyTab, { global: { plugins: [pinia, PrimeVue, ToastService] } });
   await flushPromises();
   const save = tab.findAll('button').find((b) => b.text().includes('Save changes'))!;
-  return { auth, save };
+  return { auth, save, tab };
 }
+
+describe('elevated session limits', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows the configured limits and saves them with the rest', async () => {
+    api.settings.list.mockResolvedValueOnce({
+      settings: {
+        'stepup.idle_timeout_minutes': { value: 10 },
+        'stepup.absolute_lifetime_minutes': { value: 120 },
+      },
+    } as never);
+    const { save, tab } = await openTab(true);
+    expect((tab.find('#stepup-idle').element as HTMLInputElement).value).toBe('10');
+    expect((tab.find('#stepup-lifetime').element as HTMLInputElement).value).toBe('120');
+
+    await save.trigger('click');
+    await flushPromises();
+    expect(api.settings.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'stepup.idle_timeout_minutes': 10,
+        'stepup.absolute_lifetime_minutes': 120,
+      }),
+    );
+  });
+});
 
 // Settings changes need step-up (ADR 0001: the first write prompts, then retries).
 describe('saving settings', () => {

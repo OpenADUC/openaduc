@@ -29,6 +29,8 @@ const form = ref({
   staleLogonDays: 60,
   auditAccountView: true,
   auditSearch: false,
+  stepUpIdleMinutes: 15,
+  stepUpLifetimeMinutes: 240,
 });
 
 const canEdit = computed(() => auth.hasCapability('configure:security'));
@@ -43,6 +45,8 @@ async function load(): Promise<void> {
       staleLogonDays: numericValue('view.stale_logon_days', 60) ?? 60,
       auditAccountView: booleanValue('audit.account_view_enabled', true),
       auditSearch: booleanValue('audit.search_enabled', false),
+      stepUpIdleMinutes: numericValue('stepup.idle_timeout_minutes', 15) ?? 15,
+      stepUpLifetimeMinutes: numericValue('stepup.absolute_lifetime_minutes', 240) ?? 240,
     };
   } catch (err) {
     toast.add({
@@ -74,6 +78,8 @@ async function save(): Promise<void> {
       'view.stale_logon_days': form.value.staleLogonDays,
       'audit.account_view_enabled': form.value.auditAccountView,
       'audit.search_enabled': form.value.auditSearch,
+      'stepup.idle_timeout_minutes': form.value.stepUpIdleMinutes,
+      'stepup.absolute_lifetime_minutes': form.value.stepUpLifetimeMinutes,
     });
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
     await load();
@@ -187,6 +193,35 @@ onMounted(async () => {
           :disabled="!canEdit || loading"
           :min="1"
           :max="3650"
+          class="w-full"
+        />
+      </div>
+    </div>
+  </Card>
+
+  <Card title="Elevated sessions" sub="how long write access lasts after step-up">
+    <div class="form-grid-2">
+      <div class="setting-block">
+        <label class="fld-label" for="stepup-idle">Idle timeout (minutes)</label>
+        <p class="setting-hint">Writes need step-up again after this long without activity.</p>
+        <InputNumber
+          v-model="form.stepUpIdleMinutes"
+          input-id="stepup-idle"
+          :disabled="!canEdit || loading"
+          :min="1"
+          :max="480"
+          class="w-full"
+        />
+      </div>
+      <div class="setting-block">
+        <label class="fld-label" for="stepup-lifetime">Absolute lifetime (minutes)</label>
+        <p class="setting-hint">Writes need step-up again this long after it, however busy.</p>
+        <InputNumber
+          v-model="form.stepUpLifetimeMinutes"
+          input-id="stepup-lifetime"
+          :disabled="!canEdit || loading"
+          :min="1"
+          :max="1440"
           class="w-full"
         />
       </div>
