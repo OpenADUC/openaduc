@@ -87,9 +87,12 @@ export async function withAudit<T extends WriteOpResult>(
 
   const before = opResult?.before ?? null;
   const after = opResult?.after ?? null;
+  // Keep the directory's own reason for a refusal with the failed row.
+  const errorMessage = opResult?.ok === false ? opResult.errorMessage : null;
 
   await audit.recordEvent({
     ...base,
+    ...(errorMessage ? { metadata: { ...base.metadata, errorMessage } } : {}),
     result,
     errorCode,
     before,
@@ -108,4 +111,6 @@ export interface WriteOpResult {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   errorCode?: string | null;
+  /** Why the directory refused, recorded with a failed row. */
+  errorMessage?: string | null;
 }
