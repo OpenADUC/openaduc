@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Why a user can't sign in, from what the API has cached for the account,
-// and the write that fixes it.
+// Why a user can't sign in, from the account as the API last read it, and
+// the write that fixes it.
 import type { Capability, UserDetail } from '@openaduc/shared';
-import { fmtAbsolute, fmtRelative } from './format.js';
+import { fmtAbsolute, fmtRelative, type UserStatusKind } from './format.js';
 
 export type SignInInput = Pick<
   UserDetail,
@@ -29,6 +29,8 @@ export type SignInBlocker =
   | { kind: 'password-expired'; since: string }
   | { kind: 'account-expired'; since: string }
   | { kind: 'must-change-password' };
+
+type Kind = SignInBlocker['kind'];
 
 export type SignInFixKind = 'enable' | 'unlock' | 'reset-password' | 'extend-expiry';
 
@@ -72,40 +74,6 @@ export function signInBlockers(u: SignInInput, now: Date = new Date()): SignInBl
   return blockers;
 }
 
-const FIXES: Record<SignInBlocker['kind'], SignInFix> = {
-  disabled: {
-    fix: 'enable',
-    label: 'Enable',
-    icon: 'pi-check',
-    capability: 'write:user.enableDisable',
-  },
-  locked: { fix: 'unlock', label: 'Unlock', icon: 'pi-unlock', capability: 'write:user.unlock' },
-  'password-expired': {
-    fix: 'reset-password',
-    label: 'Reset password',
-    icon: 'pi-key',
-    capability: 'write:user.resetPassword',
-  },
-  'account-expired': {
-    fix: 'extend-expiry',
-    label: 'Extend expiry',
-    icon: 'pi-calendar-plus',
-    capability: 'write:user.enableDisable',
-  },
-  // Sign-ins that can't ask for a new password fail until it changes; the
-  // helpdesk's fix is a new password, with or without the change required.
-  'must-change-password': {
-    fix: 'reset-password',
-    label: 'Reset password',
-    icon: 'pi-key',
-    capability: 'write:user.resetPassword',
-  },
-};
-
-export function signInFix(b: SignInBlocker): SignInFix {
-  return FIXES[b.kind];
-}
-
 const when = (iso: string, now: Date) => `${fmtAbsolute(iso)} (${fmtRelative(iso, now)})`;
 
 /** How a lockout ends, or null when the domain's policy couldn't be read. */
@@ -115,17 +83,42 @@ export function lockoutEnd(b: { ends: LockoutEnd }, now: Date = new Date()): str
   return `Unlocks on its own ${when(b.ends.at, now)}`;
 }
 
-export function describeBlocker(
-  b: SignInBlocker,
-  now: Date = new Date(),
-): { title: string; details: string[] } {
-  switch (b.kind) {
-    case 'disabled':
-      return {
-        title: 'Disabled',
-        details: b.changedAt ? [`Account last changed ${when(b.changedAt, now)}`] : [],
-      };
-    case 'locked': {
+const RESET_PASSWORD: SignInFix = {
+  fix: 'reset-password',
+  label: 'Reset password',
+  icon: 'pi-key',
+  capability: 'write:user.resetPassword',
+};
+
+/** Everything said about a condition, and the fix offered for it. */
+const CONDITIONS: {
+  [K in Kind]: {
+    title: string;
+    icon: string;
+    /** The status badge that names it. */
+    badge: UserStatusKind;
+    fix: SignInFix;
+    details: (b: Extract<SignInBlocker, { kind: K }>, now: Date) => string[];
+  };
+} = {
+  disabled: {
+    title: 'Disabled',
+    icon: 'pi-ban',
+    badge: 'disabled',
+    fix: {
+      fix: 'enable',
+      label: 'Enable',
+      icon: 'pi-check',
+      capability: 'write:user.enableDisable',
+    },
+    details: (b, now) => (b.changedAt ? [`Account last changed ${when(b.changedAt, now)}`] : []),
+  },
+  locked: {
+    title: 'Locked',
+    icon: 'pi-lock',
+    badge: 'locked',
+    fix: { fix: 'unlock', label: 'Unlock', icon: 'pi-unlock', capability: 'write:user.unlock' },
+    details: (b, now) => {
       const details: string[] = [];
       if (b.since) details.push(`Since ${when(b.since, now)}`);
       if (b.badPasswords !== null) {
@@ -133,18 +126,51 @@ export function describeBlocker(
       }
       const end = lockoutEnd(b, now);
       if (end) details.push(end);
-      return { title: 'Locked', details };
-    }
-    case 'password-expired':
-      return { title: 'Password expired', details: [`Since ${when(b.since, now)}`] };
-    case 'account-expired':
-      return { title: 'Account expired', details: [`Since ${when(b.since, now)}`] };
-    case 'must-change-password':
-      return {
-        title: 'Must change password at next sign-in',
-        details: [
-          'Sign-ins that can’t ask for a new password, such as many VPNs and web apps, fail until it’s changed',
-        ],
-      };
-  }
+      return details;
+    },
+  },
+  'password-expired': {
+    title: 'Password expired',
+    icon: 'pi-key',
+    badge: 'pwd-expired',
+    fix: RESET_PASSWORD,
+    details: (b, now) => [`Since ${when(b.since, now)}`],
+  },
+  'account-expired': {
+    title: 'Account expired',
+    icon: 'pi-calendar-times',
+    badge: 'expired',
+    fix: {
+      fix: 'extend-expiry',
+      label: 'Extend expiry',
+      icon: 'pi-calendar-plus',
+      capability: 'write:user.enableDisable',
+    },
+    details: (b, now) => [`Since ${when(b.since, now)}`],
+  },
+  // Sign-ins that can't ask for a new password fail until it changes; the
+  // helpdesk's fix is a new password, with or without the change required.
+  'must-change-password': {
+    title: 'Must change password at next sign-in',
+    icon: 'pi-key',
+    badge: 'pwd-must-change',
+    fix: RESET_PASSWORD,
+    details: () => [
+      'Sign-ins that can’t ask for a new password, such as many VPNs and web apps, fail until it’s changed',
+    ],
+  },
+};
+
+export function signInFix(b: SignInBlocker): SignInFix {
+  return CONDITIONS[b.kind].fix;
+}
+
+export function describeBlocker(
+  b: SignInBlocker,
+  now: Date = new Date(),
+): { title: string; icon: string; badge: UserStatusKind; details: string[] } {
+  const { title, icon, badge, details } = CONDITIONS[b.kind];
+  // TypeScript can't pair the row's `details` with this blocker's kind.
+  const describe = details as (b: SignInBlocker, now: Date) => string[];
+  return { title, icon, badge, details: describe(b, now) };
 }

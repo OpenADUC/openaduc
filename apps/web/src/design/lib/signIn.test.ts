@@ -143,8 +143,9 @@ describe('describeBlocker', () => {
   const at = (iso: string) => new Date(iso).toLocaleString();
 
   it('names each condition with its timing', () => {
-    expect(describeBlocker({ kind: 'disabled', changedAt: HOUR_AGO }, NOW)).toEqual({
+    expect(describeBlocker({ kind: 'disabled', changedAt: HOUR_AGO }, NOW)).toMatchObject({
       title: 'Disabled',
+      badge: 'disabled',
       details: [`Account last changed ${at(HOUR_AGO)} (1h ago)`],
     });
     expect(
@@ -152,7 +153,7 @@ describe('describeBlocker', () => {
         { kind: 'locked', since: HOUR_AGO, badPasswords: 5, ends: 'when-unlocked' },
         NOW,
       ),
-    ).toEqual({
+    ).toMatchObject({
       title: 'Locked',
       details: [
         `Since ${at(HOUR_AGO)} (1h ago)`,
@@ -160,11 +161,11 @@ describe('describeBlocker', () => {
         'Stays locked until someone unlocks it',
       ],
     });
-    expect(describeBlocker({ kind: 'password-expired', since: HOUR_AGO }, NOW)).toEqual({
+    expect(describeBlocker({ kind: 'password-expired', since: HOUR_AGO }, NOW)).toMatchObject({
       title: 'Password expired',
       details: [`Since ${at(HOUR_AGO)} (1h ago)`],
     });
-    expect(describeBlocker({ kind: 'account-expired', since: HOUR_AGO }, NOW)).toEqual({
+    expect(describeBlocker({ kind: 'account-expired', since: HOUR_AGO }, NOW)).toMatchObject({
       title: 'Account expired',
       details: [`Since ${at(HOUR_AGO)} (1h ago)`],
     });
