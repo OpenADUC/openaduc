@@ -257,6 +257,13 @@ describe('creating and deleting groups', () => {
       expect(res.statusCode).toBe(400);
     });
 
+    it('refuses control characters in the names', async () => {
+      const name = await operator.post('/api/groups', { ...newGroup, name: 'Bad\u0001Name' });
+      const sam = await operator.post('/api/groups', { ...newGroup, samAccountName: 'bad\u007f' });
+
+      expect([name.statusCode, sam.statusCode]).toEqual([400, 400]);
+    });
+
     it('needs step-up', async () => {
       const unelevated = api.client();
       await unelevated.signIn(api, 'oa.operator');

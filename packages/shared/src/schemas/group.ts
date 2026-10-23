@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
 import { listFreshnessSchema } from './freshness.js';
-import { samAccountNameSchemaOf } from './user.js';
+import { CONTROL_CHARS, samAccountNameSchemaOf } from './user.js';
 import { ROLES } from '../capabilities.js';
 
 export const groupSummarySchema = z.object({
@@ -97,7 +97,8 @@ export const groupNameSchema = z
   .min(1, 'name is required')
   .max(64, 'name is too long')
   .regex(/^[^,=+<>;\\"]+$/, 'name can’t contain , = + < > ; \\ "')
-  .refine((v) => !v.startsWith('#'), 'name can’t start with #');
+  .refine((v) => !v.startsWith('#'), 'name can’t start with #')
+  .refine((v) => !CONTROL_CHARS.test(v), 'name can’t contain control characters');
 
 // AD caps sAMAccountName at 256 characters; only users are held to 20.
 export const groupSamAccountNameSchema = samAccountNameSchemaOf(256);

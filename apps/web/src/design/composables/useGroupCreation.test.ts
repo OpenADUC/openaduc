@@ -146,6 +146,26 @@ describe('useGroupCreation', () => {
     expect(creation.canSubmit.value).toBe(false);
   });
 
+  it('refuses control characters in either name', () => {
+    const { creation } = setup();
+
+    creation.setName('Sales\tEMEA');
+    creation.setSamAccountName('sales\u0007');
+
+    expect(creation.problems.value.name).toMatch(/control characters/);
+    expect(creation.problems.value.samAccountName).toMatch(/control characters/);
+  });
+
+  it('warns, without refusing, about a pre-Windows 2000 name older clients can’t use', async () => {
+    const { creation } = setup();
+
+    creation.setName('Regional Sales Managers');
+    await checked();
+
+    expect(creation.samLegacyWarning.value).toMatch(/Longer than 20 characters/);
+    expect(creation.canSubmit.value).toBe(true);
+  });
+
   it('prompts step-up before the first create, then creates with the form’s values', async () => {
     const { creation, auth, onCreated } = setup(false);
     creation.setName('Project Falcon');

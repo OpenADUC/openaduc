@@ -23,6 +23,7 @@ import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
 const CHECK_DELAY_MS = 300;
+const LEGACY_SAM_LENGTH = 20;
 
 export const SCOPE_LABEL: Record<GroupScope, string> = {
   'domain-local': 'Domain local',
@@ -79,6 +80,14 @@ export function useGroupCreation(options: {
     name: ruleBroken(groupNameSchema, form.name),
     samAccountName: ruleBroken(groupSamAccountNameSchema, form.samAccountName),
   }));
+  // AD takes up to 256, but clients from before Windows 2000 (and some
+  // tools that still use the NetBIOS-era APIs) stop at 20. Worth saying,
+  // not refusing.
+  const samLegacyWarning = computed(() =>
+    form.samAccountName.trim().length > LEGACY_SAM_LENGTH && !problems.value.samAccountName
+      ? `Longer than ${LEGACY_SAM_LENGTH} characters: clients older than Windows 2000 can’t use it.`
+      : null,
+  );
   const wellFormed = computed(
     () =>
       !!form.parentDn &&
@@ -191,6 +200,7 @@ export function useGroupCreation(options: {
     setName,
     setSamAccountName,
     problems,
+    samLegacyWarning,
     checking,
     checkError: computed(() => (current.value ? checkError.value : null)),
     taken,
