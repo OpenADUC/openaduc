@@ -214,7 +214,9 @@ const freshnessText = computed(() => {
           <slot name="status" />
         </div>
 
-        <div v-if="subtitle" class="detail-hero-title">{{ subtitle }}</div>
+        <!-- A line the skeleton held stays, empty, when the record has
+             nothing for it, so the tab bar doesn't move up. -->
+        <div v-if="subtitle || skeleton.subtitle" class="detail-hero-title">{{ subtitle }}</div>
 
         <button
           v-if="identifier?.copyLabel"
@@ -226,7 +228,7 @@ const freshnessText = computed(() => {
           <i :class="copied.identifier ? 'pi pi-check' : 'pi pi-copy'" />
           <span class="mono">{{ identifier.text }}</span>
         </button>
-        <div v-else-if="identifier" class="detail-hero-upn mono">{{ identifier.text }}</div>
+        <div v-else class="detail-hero-upn mono">{{ identifier?.text }}</div>
 
         <div class="detail-hero-actions-row">
           <a
@@ -481,6 +483,12 @@ const freshnessText = computed(() => {
   /* As tall as the identifier as a copy button, so the skeleton's line
      fits either. */
   padding: 2px 0;
+}
+
+/* An empty line keeps its height. */
+.detail-hero-title:empty::before,
+.detail-hero-upn:empty::before {
+  content: '\200b';
 }
 
 .detail-hero-actions-row {
