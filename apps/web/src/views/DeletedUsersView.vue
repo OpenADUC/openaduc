@@ -132,10 +132,7 @@ async function confirmRestore(): Promise<void> {
     void load();
     void resp;
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = confirmRestore;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, confirmRestore)) return;
     const message =
       err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Restore failed';
     toast.add({ severity: 'error', summary: 'Restore failed', detail: message, life: 8000 });

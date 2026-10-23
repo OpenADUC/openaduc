@@ -59,11 +59,7 @@ async function submit(): Promise<void> {
     });
     emit('next');
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      // The step-up dialog is opening; save again once it succeeds.
-      auth.stepUpPendingAction = submit;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, submit)) return;
     error.value =
       err instanceof ApiError
         ? err.message

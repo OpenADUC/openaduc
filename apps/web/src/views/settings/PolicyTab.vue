@@ -78,11 +78,7 @@ async function save(): Promise<void> {
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
     await load();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      // The step-up dialog is opening; save again once it succeeds.
-      auth.stepUpPendingAction = save;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, save)) return;
     toast.add({
       severity: 'error',
       summary: 'Save failed',

@@ -604,10 +604,7 @@ async function saveAttributes(): Promise<void> {
     // re-auth submits the same patch — the operator should not have to
     // re-enter edits or click Save a second time. No toast: the dialog
     // is the operator-visible affordance.
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = saveAttributes;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, saveAttributes)) return;
     toast.add({
       severity: 'error',
       summary: 'Save failed',

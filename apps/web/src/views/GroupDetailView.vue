@@ -133,10 +133,7 @@ async function confirmAdd(): Promise<void> {
     addResults.value = [];
     await load();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = confirmAdd;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, confirmAdd)) return;
     toast.add({
       severity: 'error',
       summary: 'Add failed',
@@ -162,10 +159,7 @@ async function startRemove(member: GroupMember): Promise<void> {
     });
     await load();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = () => startRemove(member);
-      return;
-    }
+    if (auth.retryAfterStepUp(err, () => startRemove(member))) return;
     toast.add({
       severity: 'error',
       summary: 'Remove failed',

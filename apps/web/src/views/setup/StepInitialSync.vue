@@ -118,11 +118,7 @@ async function start(): Promise<void> {
     attachUnloadGuard();
     schedulePoll();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      // The step-up dialog is opening; start once it succeeds.
-      auth.stepUpPendingAction = start;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, start)) return;
     startError.value =
       err instanceof ApiError
         ? err.message
@@ -145,10 +141,7 @@ async function retry(): Promise<void> {
       schedulePoll();
     }
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = retry;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, retry)) return;
     startError.value =
       err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Retry failed';
   } finally {
