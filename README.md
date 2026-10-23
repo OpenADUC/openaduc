@@ -131,7 +131,7 @@ For the threat model, capability list, step-up flow, and AD-specific risks, see 
 
 | Surface             | What you can do today                                                                                                                                                                                         |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Dashboard**       | Sync status, recent activity, locked-account counts                                                                                                                                                           |
+| **Dashboard**       | Sync status, recent activity, and accounts needing attention, each with its fix (unlock, reset password, extend expiry)                                                                                       |
 | **Users**           | Search, view, see why someone can't sign in, edit attributes, rename (logon names and email included), reset passwords, unlock, enable/disable, set account expiry, move OU, delete disabled accounts in bulk |
 | **Groups**          | Search, view members and memberOf, add/remove members                                                                                                                                                         |
 | **Computers**       | Search, view, disable/enable, reset account, move OU                                                                                                                                                          |
