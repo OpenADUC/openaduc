@@ -84,6 +84,7 @@ function onCancel(): void {
     :visible="visible"
     @update:visible="(v) => emit('update:visible', v)"
     modal
+    class="ds-sheet"
     header="Confirm your identity"
     :style="{ width: '26rem' }"
     :closable="!submitting"

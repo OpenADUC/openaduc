@@ -63,6 +63,7 @@ function close(): void {
   <Dialog
     :visible="visible"
     modal
+    class="ds-sheet"
     header="Reset password"
     :style="{ width: '30rem' }"
     :closable="!submitting"
@@ -215,5 +216,28 @@ function close(): void {
 
 .rp-msg {
   margin: 8px 0 0;
+}
+
+/* Thumb-sized at phone width, where the dialog is a sheet. */
+@media (max-width: 767.98px) {
+  .rp-input :deep(.p-inputtext) {
+    min-height: 44px;
+  }
+
+  .rp-input :deep(.p-button),
+  .rp-tools :deep(.p-button) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .rp-check {
+    min-height: 44px;
+    margin-bottom: 0;
+  }
+
+  .rp-check input {
+    width: 18px;
+    height: 18px;
+  }
 }
 </style>
