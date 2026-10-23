@@ -10,6 +10,7 @@ import {
   type SearchResults,
 } from '../composables/useDirectorySearch.js';
 import { useAccountActions } from '../composables/useAccountActions.js';
+import { useResponsive } from '../composables/useResponsive.js';
 import { useResultKeys } from '../composables/useResultKeys.js';
 import type { ResetOutcome } from '../composables/usePasswordReset.js';
 import AppToast from '../feedback/AppToast.vue';
@@ -56,6 +57,7 @@ const toast = useToast();
 const finder = useDirectorySearch({ pageSize: PER_KIND });
 const { loading } = finder;
 const can = (capability: Capability) => auth.hasCapability(capability);
+const { isMobile } = useResponsive();
 
 const open = ref(false);
 const query = ref('');
@@ -194,8 +196,10 @@ const { highlight, actionAt, highlighted, selectedAction } = keys;
 const waitNotice = ref<string | null>(null);
 watch(results, () => (waitNotice.value = null));
 
+// On a phone nothing hovers, and tapping a row opens it, so every row
+// shows its actions.
 function showsActions(row: ResultRow): boolean {
-  return verb.value !== null || isHighlighted(row);
+  return verb.value !== null || isMobile.value || isHighlighted(row);
 }
 
 // Why a user found by a verb isn't offered it, e.g. Unlock for an account
@@ -845,9 +849,13 @@ const announcement = computed(() => {
   color: var(--text-3);
 }
 
+/* A phone: the trigger is thumb-sized, the panel takes what the on-screen
+   keyboard leaves of the screen, a user's actions wrap under the name, and
+   the keyboard hints go. */
 @media (max-width: 767.98px) {
   .gs-trigger {
-    padding: 6px 8px;
+    min-height: 44px;
+    padding: 6px 12px;
   }
 
   .gs-trigger-kbd {
@@ -859,9 +867,52 @@ const announcement = computed(() => {
   }
 
   .gs-panel {
-    max-height: 100vh;
+    max-height: none;
+    height: calc(100dvh - var(--keyboard-inset, 0px));
     border-radius: 0;
-    height: 100vh;
+  }
+
+  .gs-input-row {
+    padding: 4px 4px 4px 16px;
+  }
+
+  /* Safari zooms the page into any input set smaller. */
+  .gs-input {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  .gs-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .gs-row {
+    flex-wrap: wrap;
+    min-height: 48px;
+  }
+
+  .gs-actions {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-left: 40px;
+  }
+
+  .gs-action {
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .gs-row-note {
+    flex: 1 0 100%;
+    padding-left: 40px;
+    white-space: normal;
+  }
+
+  .gs-foot {
+    display: none;
   }
 }
 </style>
