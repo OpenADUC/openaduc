@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { aUserDetail } from '../../test/userDetail.js';
-
-vi.mock('../../api/index.js', () => ({ api: {} }));
-const { needsAttention } = await import('./useAttentionQueue.js');
+import { needsAttention } from './attention.js';
 
 const NOW = new Date('2026-10-23T12:00:00.000Z');
 const HOUR_AGO = '2026-10-23T11:00:00.000Z';

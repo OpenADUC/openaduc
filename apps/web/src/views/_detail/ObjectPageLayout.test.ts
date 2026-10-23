@@ -7,7 +7,8 @@ import ToastService from 'primevue/toastservice';
 import { defineComponent, h, ref, type Component } from 'vue';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ObjectAction, ObjectActionFailure, ObjectPageTab } from './objectPage.js';
+import type { ObjectAction, ObjectPageTab } from './objectPage.js';
+import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
 vi.mock('../../api/index.js', () => ({ api: {} }));
 
@@ -20,7 +21,7 @@ enableAutoUnmount(afterEach);
 type TabId = 'overview' | 'members' | 'raw';
 
 const refreshing = ref(false);
-const actionFailure = ref<ObjectActionFailure | null>(null);
+const actionFailure = ref<ActionFailure | null>(null);
 const onRefresh = vi.fn();
 let tabs: ObjectPageTab<TabId>[] = [];
 let actions: ObjectAction[] = [];

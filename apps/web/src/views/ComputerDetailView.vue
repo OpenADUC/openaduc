@@ -19,7 +19,8 @@ import { placeFailure } from '../design/lib/failurePlacement.js';
 import { useAccountActions } from '../design/composables/useAccountActions.js';
 import { useComputerReset } from '../design/composables/useComputerReset.js';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
-import type { ObjectAction, ObjectActionFailure, ObjectPageTab } from './_detail/objectPage';
+import type { ObjectAction, ObjectPageTab } from './_detail/objectPage';
+import type { ActionFailure } from '../design/lib/actionFailure.js';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useMoveDialog } from './_detail/useMoveDialog';
 
@@ -122,7 +123,7 @@ const { onPage: resetPageFailure } = placeFailure(resetFailure, {
   belongsHere: (f) => f.op.computer.id === props.id,
 });
 
-const actionFailure = computed<ObjectActionFailure | null>(() => {
+const actionFailure = computed<ActionFailure | null>(() => {
   const account = accountPageFailure.value;
   if (account) {
     const { action, account: c } = account.op;

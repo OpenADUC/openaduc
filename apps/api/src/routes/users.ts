@@ -261,6 +261,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       // Disabled accounts are excluded from "needs attention" entirely — an
       // operator can find them via the dedicated `enabled=false` filter, but
       // they shouldn't drown the daily-action list.
+      //
+      // The dashboard rechecks a row after fixing it with `needsAttention`
+      // in apps/web/src/design/lib/attention.ts; keep the two in step.
       if (q.issues === true) {
         const horizonDays = q.issuesWithinDays ?? 14;
         const horizon = new Date(Date.now() + horizonDays * 24 * 60 * 60 * 1000);

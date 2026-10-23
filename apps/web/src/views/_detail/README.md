@@ -16,9 +16,9 @@ Pages mount it once their record has loaded and pass:
   unavailable for this object (Unlock on an account that isn't locked) or
   disabled while something runs. The layout drops what the operator can't
   do and hides the Actions button when nothing is left;
-- `actionFailure` (`ObjectActionFailure`) when an action failed: the layout
-  shows it under the Actions menu, with Retry and dismiss, until the page
-  clears it;
+- `actionFailure` (`ActionFailure`, from `design/lib/actionFailure.ts`)
+  when an action failed: the layout shows it under the Actions menu, with
+  Retry and dismiss, until the page clears it;
 - `refreshing`, and handle `@refresh`.
 
 The default slot renders the body; it gets `tab` (the active tab) and

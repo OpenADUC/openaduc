@@ -12,7 +12,8 @@ import { useAuthStore } from '../../stores/auth.js';
 import { useStickyHeader } from './useStickyHeader';
 import { useCompactTabs } from './useCompactTabs';
 import { useRouteTab } from './useRouteTab';
-import type { ObjectAction, ObjectActionFailure, ObjectLink, ObjectPageTab } from './objectPage';
+import type { ObjectAction, ObjectLink, ObjectPageTab } from './objectPage';
+import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
 // The page mounts this once its record has loaded, so tab visibility is
 // already final.
@@ -37,7 +38,8 @@ const props = withDefaults(
     actions?: readonly ObjectAction[];
     /** An action is running: the Actions button shows it. */
     actionsBusy?: boolean;
-    actionFailure?: ObjectActionFailure | null;
+    /** Shown under the Actions menu. */
+    actionFailure?: ActionFailure | null;
     refreshing?: boolean;
     cachedAt: string | null;
     /** When the record was last read live from the directory, if it ever was. */
