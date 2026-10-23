@@ -52,9 +52,9 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => actor.value !== null);
   // When the elevated session ends if the operator does nothing more. Kept
   // current by the idle end each response carries.
-  const elevatedExpiresAt = computed(() => actor.value?.elevated.idleExpiresAt ?? null);
-  const elevatedExpiresAtMs = computed(() => {
-    const iso = elevatedExpiresAt.value;
+  const elevatedIdleEndsAt = computed(() => actor.value?.elevated.idleExpiresAt ?? null);
+  const elevatedIdleEndsAtMs = computed(() => {
+    const iso = elevatedIdleEndsAt.value;
     return iso ? new Date(iso).getTime() : null;
   });
 
@@ -63,15 +63,15 @@ export const useAuthStore = defineStore('auth', () => {
   // the server-side TTL lapses — no separate watcher needed.
   const elevated = computed(() => {
     if (actor.value?.elevated.active !== true) return false;
-    const exp = elevatedExpiresAtMs.value;
+    const exp = elevatedIdleEndsAtMs.value;
     return exp === null || exp > nowMs.value;
   });
 
   const editMode = elevated;
 
   const remainingSeconds = computed(() => {
-    if (!elevated.value || elevatedExpiresAtMs.value === null) return null;
-    return Math.max(0, Math.floor((elevatedExpiresAtMs.value - nowMs.value) / 1000));
+    if (!elevated.value || elevatedIdleEndsAtMs.value === null) return null;
+    return Math.max(0, Math.floor((elevatedIdleEndsAtMs.value - nowMs.value) / 1000));
   });
 
   function hasCapability(cap: string): boolean {
@@ -249,7 +249,7 @@ export const useAuthStore = defineStore('auth', () => {
     error,
     isAuthenticated,
     elevated,
-    elevatedExpiresAt,
+    elevatedIdleEndsAt,
     editMode,
     remainingSeconds,
     canEverWrite,

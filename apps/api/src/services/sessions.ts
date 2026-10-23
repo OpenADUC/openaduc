@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
+import { ELEVATED_SESSION_LIMITS, type ElevatedSessionState } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import { generateToken, hashToken } from '../lib/crypto.js';
 import type { SettingsService } from './settings.js';
+
+const { idleTimeout, absoluteLifetime } = ELEVATED_SESSION_LIMITS;
 
 // ---- Public types -----------------------------------------------------------
 
@@ -276,8 +279,8 @@ export class SessionsService {
    */
   private async elevationLimits(): Promise<{ idleMs: number; absoluteMs: number }> {
     const [idleMinutes, absoluteMinutes, signInIdleMs] = await Promise.all([
-      this.settings.get<number>('stepup.idle_timeout_minutes', 15),
-      this.settings.get<number>('stepup.absolute_lifetime_minutes', 240),
+      this.settings.get<number>(idleTimeout.key, idleTimeout.default),
+      this.settings.get<number>(absoluteLifetime.key, absoluteLifetime.default),
       this.signInIdleMs(),
     ]);
     return {
@@ -305,6 +308,15 @@ export class SessionsService {
       .execute();
     return rows.map((r) => r.id);
   }
+}
+
+/** How the current-session and step-up responses describe an elevated session. */
+export function elevatedState(elevated: ElevatedSession | null): ElevatedSessionState {
+  return {
+    active: !!elevated,
+    idleExpiresAt: elevated?.idleExpiresAt.toISOString() ?? null,
+    absoluteExpiresAt: elevated?.absoluteExpiresAt.toISOString() ?? null,
+  };
 }
 
 // ---- Row mappers ------------------------------------------------------------

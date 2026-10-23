@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Typed fetch client. Filled out alongside Phase 7 API endpoints.
+import { BACKGROUND_REQUEST_HEADER, ELEVATED_IDLE_END_HEADER } from '@openaduc/shared';
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
@@ -71,13 +72,13 @@ export async function apiFetch<T>(
   if (init.body && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
-  if (background) headers.set('x-background-request', '1');
+  if (background) headers.set(BACKGROUND_REQUEST_HEADER, '1');
   const res = await fetch(url, {
     credentials: 'include',
     ...init,
     headers,
   });
-  const idleEnd = res.headers.get('x-elevated-idle-expires-at');
+  const idleEnd = res.headers.get(ELEVATED_IDLE_END_HEADER);
   if (idleEnd) onElevatedIdleEnd?.(idleEnd);
   if (!res.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};

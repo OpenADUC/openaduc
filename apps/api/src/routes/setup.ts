@@ -13,7 +13,7 @@ import { auditContextFromRequest } from '../services/auditContext.js';
 import { buildEphemeralProvider } from '../services/directoryConfig.js';
 import { loadEnv } from '../config/env.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
-import { elevatedState } from './auth.js';
+import { elevatedState } from '../services/sessions.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
 import type { SyncTaskKey } from '../services/syncTasks/types.js';
 import { TASK_REGISTRY } from '../services/syncTasks/registry.js';

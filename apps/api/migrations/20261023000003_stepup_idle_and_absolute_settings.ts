@@ -7,6 +7,8 @@ import type { Knex } from 'knex';
 // lifetime and the idle timeout never exceeds it; nobody's elevated session
 // gets longer than they configured. Untouched installations get the new
 // defaults.
+// Literals, not @openaduc/shared's constants: a migration must keep doing
+// what it did when it shipped.
 const OLD_KEY = 'stepup.ttl_minutes';
 const OLD_DEFAULT = 60;
 const IDLE_KEY = 'stepup.idle_timeout_minutes';
@@ -59,6 +61,7 @@ export async function down(knex: Knex): Promise<void> {
     .first()) as { value_json: unknown } | undefined;
   const value = absolute?.value_json;
   const ttl =
+    // 480: the most stepup.ttl_minutes accepted.
     typeof value === 'number' && value !== ABSOLUTE_DEFAULT ? Math.min(value, 480) : OLD_DEFAULT;
   await knex.raw(
     `INSERT INTO app_settings (key, value_json, description) VALUES (?, ?::jsonb, ?)

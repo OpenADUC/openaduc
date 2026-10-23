@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import {
-  meResponseSchema,
-  stepUpRequestSchema,
-  type Capability,
-  type ElevatedSessionState,
-} from '@openaduc/shared';
+import { meResponseSchema, stepUpRequestSchema, type Capability } from '@openaduc/shared';
 import { loadEnv } from '../config/env.js';
 import {
   AppError,
@@ -17,6 +12,7 @@ import {
 } from '../plugins/errorHandler.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
+import { elevatedState } from '../services/sessions.js';
 
 // Capability subset that step-up should grant. Step-up is "you proved you
 // can bind as yourself recently" — it doesn't elevate to capabilities you
@@ -445,16 +441,6 @@ function meResponse(
     elevated: elevatedState(elevated),
   };
   return meResponseSchema.parse(payload);
-}
-
-export function elevatedState(
-  elevated: import('../services/sessions.js').ElevatedSession | null,
-): ElevatedSessionState {
-  return {
-    active: !!elevated,
-    idleExpiresAt: elevated?.idleExpiresAt.toISOString() ?? null,
-    absoluteExpiresAt: elevated?.absoluteExpiresAt.toISOString() ?? null,
-  };
 }
 
 function formatRetry(seconds: number): string {

@@ -5,12 +5,13 @@ import Button from 'primevue/button';
 import InputNumber from 'primevue/inputnumber';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import type { DirectoryPolicy } from '@openaduc/shared';
+import { ELEVATED_SESSION_LIMITS, type DirectoryPolicy } from '@openaduc/shared';
 import { api, type AppSettings } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
 
+const { idleTimeout, absoluteLifetime } = ELEVATED_SESSION_LIMITS;
 const auth = useAuthStore();
 const toast = useToast();
 
@@ -29,8 +30,8 @@ const form = ref({
   staleLogonDays: 60,
   auditAccountView: true,
   auditSearch: false,
-  stepUpIdleMinutes: 15,
-  stepUpLifetimeMinutes: 240,
+  stepUpIdleMinutes: idleTimeout.default,
+  stepUpLifetimeMinutes: absoluteLifetime.default,
 });
 
 const canEdit = computed(() => auth.hasCapability('configure:security'));
@@ -45,8 +46,9 @@ async function load(): Promise<void> {
       staleLogonDays: numericValue('view.stale_logon_days', 60) ?? 60,
       auditAccountView: booleanValue('audit.account_view_enabled', true),
       auditSearch: booleanValue('audit.search_enabled', false),
-      stepUpIdleMinutes: numericValue('stepup.idle_timeout_minutes', 15) ?? 15,
-      stepUpLifetimeMinutes: numericValue('stepup.absolute_lifetime_minutes', 240) ?? 240,
+      stepUpIdleMinutes: numericValue(idleTimeout.key, idleTimeout.default) ?? idleTimeout.default,
+      stepUpLifetimeMinutes:
+        numericValue(absoluteLifetime.key, absoluteLifetime.default) ?? absoluteLifetime.default,
     };
   } catch (err) {
     toast.add({
@@ -78,8 +80,8 @@ async function save(): Promise<void> {
       'view.stale_logon_days': form.value.staleLogonDays,
       'audit.account_view_enabled': form.value.auditAccountView,
       'audit.search_enabled': form.value.auditSearch,
-      'stepup.idle_timeout_minutes': form.value.stepUpIdleMinutes,
-      'stepup.absolute_lifetime_minutes': form.value.stepUpLifetimeMinutes,
+      [idleTimeout.key]: form.value.stepUpIdleMinutes,
+      [absoluteLifetime.key]: form.value.stepUpLifetimeMinutes,
     });
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
     await load();
@@ -208,8 +210,8 @@ onMounted(async () => {
           v-model="form.stepUpIdleMinutes"
           input-id="stepup-idle"
           :disabled="!canEdit || loading"
-          :min="1"
-          :max="480"
+          :min="idleTimeout.min"
+          :max="idleTimeout.max"
           class="w-full"
         />
       </div>
@@ -220,8 +222,8 @@ onMounted(async () => {
           v-model="form.stepUpLifetimeMinutes"
           input-id="stepup-lifetime"
           :disabled="!canEdit || loading"
-          :min="1"
-          :max="1440"
+          :min="absoluteLifetime.min"
+          :max="absoluteLifetime.max"
           class="w-full"
         />
       </div>
