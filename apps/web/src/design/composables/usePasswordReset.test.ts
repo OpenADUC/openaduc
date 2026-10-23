@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
 import { createPinia, setActivePinia } from 'pinia';
+import { nextTick } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DirectoryPolicy } from '@openaduc/shared';
 import { ApiError } from '../../api/client.js';
@@ -125,6 +126,25 @@ describe('usePasswordReset', () => {
     await useAuthStore().stepUp('pw');
     await vi.waitFor(() => expect(onReset).toHaveBeenCalledOnce());
     expect(resetPassword).toHaveBeenCalledTimes(2);
+  });
+
+  it('says whether copying worked, until the password changes', async () => {
+    const { reset } = setup();
+    await loaded(reset, aUserDetail());
+    reset.password.value = 'Correct-Horse-9';
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('denied'));
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+
+    await reset.copy();
+    expect(reset.copied.value).toBe(false);
+    await reset.copy();
+    expect(writeText).toHaveBeenLastCalledWith('Correct-Horse-9');
+    expect(reset.copied.value).toBe(true);
+
+    reset.password.value = 'Correct-Horse-10';
+    await nextTick();
+    expect(reset.copied.value).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it('shows why the directory refused the password', async () => {

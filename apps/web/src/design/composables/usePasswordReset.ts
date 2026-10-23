@@ -7,7 +7,7 @@
 // unlock" starts ticked and travels in the same request, so the API
 // changes both in one directory modify.
 
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { DirectoryPolicy, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
@@ -30,6 +30,9 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
   const loading = ref(false);
   const password = ref('');
   const shown = ref(false);
+  // Whether the last copy worked; null until one is tried for this value.
+  const copied = ref<boolean | null>(null);
+  watch(password, () => (copied.value = null));
   const forceChangeAtNextLogin = ref(true);
   const alsoUnlock = ref(false);
   const submitting = ref(false);
@@ -55,6 +58,7 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     target.value = null;
     password.value = '';
     shown.value = false;
+    copied.value = null;
     forceChangeAtNextLogin.value = true;
     error.value = null;
     const policyLoaded = loadPolicy();
@@ -87,12 +91,12 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     shown.value = true;
   }
 
-  async function copy(): Promise<boolean> {
+  async function copy(): Promise<void> {
     try {
       await navigator.clipboard.writeText(password.value);
-      return true;
+      copied.value = true;
     } catch {
-      return false;
+      copied.value = false;
     }
   }
 
@@ -124,6 +128,7 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     loading,
     password,
     shown,
+    copied,
     forceChangeAtNextLogin,
     alsoUnlock,
     offerUnlock,
