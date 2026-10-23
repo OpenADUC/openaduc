@@ -28,9 +28,10 @@ import { fmtRelative } from '../../design/lib/format.js';
 // integration of the directory the operator is signed in to; the API
 // refuses any other directory's.
 //
-// The form is opened in a modal dialog rather than an inline card: the field set is non-trivial (tenant ID, client ID,
-// secret rotation, four feature toggles, webhook URL, permissions help)
-// and the modal keeps the parent list compact.
+// The form is opened in a modal dialog rather than an inline card: the
+// field set is non-trivial (tenant ID, client ID, secret rotation, four
+// feature toggles, webhook URL, permissions help) and the modal keeps the
+// tab compact.
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -42,7 +43,7 @@ interface DirectoryEntra {
   integration: EntraIntegrationSummary | null;
 }
 
-const rows = ref<DirectoryEntra[]>([]);
+const row = ref<DirectoryEntra | null>(null);
 const loading = ref(true);
 
 async function load(): Promise<void> {
@@ -51,9 +52,9 @@ async function load(): Promise<void> {
     const r = await api.directories.list();
     const own = r.directories.find((d) => d.configured && d.id === auth.actor?.directoryId);
     // The API returns null when nothing is configured yet.
-    rows.value = own
-      ? [{ directory: own, integration: (await api.directories.entra.get(own.id)).integration }]
-      : [];
+    row.value = own
+      ? { directory: own, integration: (await api.directories.entra.get(own.id)).integration }
+      : null;
   } catch (err) {
     toast.add({
       severity: 'error',
@@ -341,12 +342,12 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
     >
       <div v-if="loading" class="int-loading">Loading…</div>
       <EmptyState
-        v-else-if="rows.length === 0"
+        v-else-if="!row"
         title="No directories configured"
         sub="Add an Active Directory in the Configuration tab first — Entra integrations attach to an existing directory."
       />
       <ul v-else class="entra-list">
-        <li v-for="row in rows" :key="row.directory.id" class="entra-row">
+        <li class="entra-row">
           <div class="entra-row-main">
             <div class="entra-row-name">
               <strong>{{ row.directory.displayName ?? row.directory.name }}</strong>
