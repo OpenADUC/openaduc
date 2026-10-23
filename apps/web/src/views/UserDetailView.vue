@@ -10,8 +10,6 @@ import Dialog from 'primevue/dialog';
 import InputText from 'primevue/inputtext';
 import Textarea from 'primevue/textarea';
 import Message from 'primevue/message';
-import TreeSelect from 'primevue/treeselect';
-import type { TreeNode } from 'primevue/treenode';
 import { useToast } from 'primevue/usetoast';
 import { api, type AuditEventRow } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
@@ -24,6 +22,7 @@ import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import { undoable } from '../design/feedback/undoToast.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
@@ -54,7 +53,6 @@ import {
   type MembershipFailure,
 } from '../design/composables/useGroupMembership.js';
 import { placeFailure } from '../design/lib/failurePlacement.js';
-import { ouTreeNodes } from '../design/lib/ouTree.js';
 import type { UndoOffer } from '../design/lib/undoableWrite.js';
 import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
@@ -544,22 +542,7 @@ async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
 // ---- Move to OU ----------------------------------------------------------
 
 const moveDialogOpen = ref(false);
-const {
-  ous: moveOus,
-  loading: moveOusLoading,
-  currentOuDn,
-  destination: moveDestination,
-  atCurrent: moveTargetIsCurrent,
-  ready: moveReady,
-  submitting: moveSubmitting,
-  error: moveError,
-  failure: moveFailure,
-  load: loadMove,
-  submit: submitMove,
-  ouName,
-  retry: retryMove,
-  dismiss: dismissMoveFailure,
-} = useAccountMove({
+const mover = useAccountMove({
   onMoved: async (u, to, offer) => {
     toast.add(
       undoable(
@@ -571,14 +554,14 @@ const {
     await load();
   },
 });
-
-// PrimeVue TreeSelect keys its single selection by node key, which is the DN.
-const moveSelection = computed<Record<string, boolean>>({
-  get: () => (moveDestination.value ? { [moveDestination.value]: true } : {}),
-  set: (keys) => (moveDestination.value = Object.keys(keys).find((k) => keys[k]) ?? null),
-});
-
-const moveOuTree = computed<TreeNode[]>(() => ouTreeNodes(moveOus.value));
+const {
+  submitting: moveSubmitting,
+  failure: moveFailure,
+  load: loadMove,
+  ouName,
+  retry: retryMove,
+  dismiss: dismissMoveFailure,
+} = mover;
 
 function openMoveDialog(): void {
   if (!user.value) return;
@@ -1799,65 +1782,14 @@ watch(user, (u) => {
         </transition>
       </template>
     </ObjectPageLayout>
-    <!-- Move to OU dialog: TreeSelect over the directory's OUs. The current
-         parent OU is preselected so the operator can see where they are
-         before picking a destination. -->
-    <Dialog
+    <MoveToOuDialog
       :visible="moveDialogOpen"
-      modal
-      header="Move to OU"
-      :style="{ width: '34rem' }"
-      :closable="!moveSubmitting"
-      @update:visible="(v) => !v && closeMoveDialog()"
-    >
-      <p class="dialog-prose primary">
-        Move <strong>{{ user?.displayName ?? user?.samAccountName }}</strong> to a different
-        organizational unit.
-      </p>
-      <p class="dialog-prose secondary">
-        The user's CN stays the same — only the parent container changes. Group memberships and the
-        user's GUID are preserved.
-      </p>
-      <div v-if="currentOuDn" class="move-current">
-        <span class="muted">Currently in:</span>
-        <code class="dn-line">{{ currentOuDn }}</code>
-      </div>
-      <div class="move-tree">
-        <div v-if="moveOusLoading" class="hint">Loading OUs…</div>
-        <TreeSelect
-          v-else
-          v-model="moveSelection"
-          :options="moveOuTree"
-          selection-mode="single"
-          placeholder="Pick a destination OU"
-          fluid
-          :disabled="moveSubmitting"
-        />
-      </div>
-      <Message v-if="moveError" severity="error" :closable="false">{{ moveError }}</Message>
-      <Message v-else-if="moveDialogFailure" severity="error" closable @close="dismissMoveFailure">
-        {{ moveDialogFailure.message }}
-      </Message>
-      <Message v-else-if="moveTargetIsCurrent" severity="info" :closable="false">
-        That's the user's current OU — pick a different one.
-      </Message>
-      <template #footer>
-        <Button
-          label="Cancel"
-          text
-          severity="secondary"
-          :disabled="moveSubmitting"
-          @click="closeMoveDialog"
-        />
-        <Button
-          label="Move"
-          icon="pi pi-folder-open"
-          :loading="moveSubmitting"
-          :disabled="!moveReady"
-          @click="submitMove"
-        />
-      </template>
-    </Dialog>
+      :move="mover"
+      kind="user"
+      :name="user?.displayName ?? user?.samAccountName ?? ''"
+      :failure="moveDialogFailure"
+      @close="closeMoveDialog"
+    />
 
     <!-- Add group dialog: search by name; groups the user is directly in are
          shown but can't be added. -->
@@ -2559,34 +2491,6 @@ watch(user, (u) => {
   color: var(--text-3);
   font-size: 12px;
   margin-bottom: 14px;
-}
-
-.move-current {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  font-size: 12px;
-}
-
-.move-current .muted {
-  color: var(--text-3);
-}
-
-.dn-line {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  color: var(--text-2);
-  word-break: break-all;
-}
-
-.move-tree {
-  margin: 0 0 12px;
-  min-height: 40px;
 }
 
 /* MFA methods list rendered under the registration badge in the
