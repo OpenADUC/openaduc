@@ -95,6 +95,7 @@ import {
 } from './normalize.js';
 import {
   adDurationToMs,
+  defaultComputerPassword,
   encodeUnicodePassword,
   escapeLdapFilter,
   isLocked,
@@ -743,34 +744,54 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   enableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult> {
-    return this.toggleAccountDisable(userId, ctx, false);
+    return this.toggleAccountDisable('user', userId, ctx, false);
   }
 
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult> {
-    return this.toggleAccountDisable(userId, ctx, true);
+    return this.toggleAccountDisable('user', userId, ctx, true);
+  }
+
+  enableComputer(
+    computerId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.toggleAccountDisable('computer', computerId, ctx, false);
+  }
+
+  disableComputer(
+    computerId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.toggleAccountDisable('computer', computerId, ctx, true);
+  }
+
+  private findAccountEntry(
+    client: Client,
+    kind: AccountKind,
+    identifier: DirectoryObjectIdentifier,
+  ): Promise<Entry | null> {
+    return kind === 'user'
+      ? this.findUserEntry(client, identifier)
+      : this.findComputerEntry(client, identifier);
   }
 
   /**
    * Flip the ACCOUNTDISABLE bit (0x2) of `userAccountControl`. Reads the
    * current UAC value from the live entry so we don't clobber other bits
-   * (DONT_EXPIRE_PASSWORD, etc).
+   * (DONT_EXPIRE_PASSWORD, WORKSTATION_TRUST_ACCOUNT, etc).
    */
   private async toggleAccountDisable(
-    userId: DirectoryObjectIdentifier,
+    kind: AccountKind,
+    id: DirectoryObjectIdentifier,
     ctx: WriteContext,
     disable: boolean,
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const target = await this.findUserEntry(client, userId);
-        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
-        const before = normalizeUser(target);
-        const currentUacRaw = (target as { userAccountControl?: string | string[] })
-          .userAccountControl;
-        const currentUac = Array.isArray(currentUacRaw)
-          ? currentUacRaw[currentUacRaw.length - 1]
-          : currentUacRaw;
-        const uacNum = currentUac ? Number.parseInt(String(currentUac), 10) : 0;
+        const target = await this.findAccountEntry(client, kind, id);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: `${kind} not found` };
+        const dn = asString(target.distinguishedName) ?? target.dn;
+        const uacNum = userAccountControlOf(target);
         if (!Number.isFinite(uacNum)) {
           return {
             ok: false,
@@ -778,18 +799,19 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             errorMessage: 'unparseable userAccountControl',
           };
         }
+        const enabled = (uacNum & UAC.ACCOUNTDISABLE) === 0;
         const nextUac = disable ? uacNum | UAC.ACCOUNTDISABLE : uacNum & ~UAC.ACCOUNTDISABLE;
         if (nextUac === uacNum) {
           // Idempotent no-op.
           return {
             ok: true,
-            before: { enabled: before.enabled, userAccountControl: uacNum },
-            after: { enabled: before.enabled, userAccountControl: uacNum },
+            before: { enabled, userAccountControl: uacNum },
+            after: { enabled, userAccountControl: uacNum },
           };
         }
 
         await client.modify(
-          before.distinguishedName,
+          dn,
           new Change({
             operation: 'replace',
             modification: new Attribute({
@@ -799,13 +821,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           }),
         );
 
-        const afterEntry = await this.findUserEntry(client, userId);
-        const after = afterEntry ? normalizeUser(afterEntry) : null;
+        const afterEntry = await this.findAccountEntry(client, kind, id);
         return {
           ok: true,
-          before: { enabled: before.enabled, userAccountControl: uacNum },
+          before: { enabled, userAccountControl: uacNum },
           after: {
-            enabled: after?.enabled ?? !disable,
+            enabled: afterEntry
+              ? (userAccountControlOf(afterEntry) & UAC.ACCOUNTDISABLE) === 0
+              : !disable,
             userAccountControl: nextUac,
           },
         };
@@ -817,6 +840,47 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           reason: isAuthz ? 'permission_denied' : 'directory_error',
           errorMessage: message,
         };
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  async resetComputerAccount(
+    computerId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const target = await this.findComputerEntry(client, computerId);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'computer not found' };
+        const before = normalizeComputer(target);
+        if (!before.samAccountName) {
+          return {
+            ok: false,
+            reason: 'directory_error',
+            errorMessage: 'computer has no pre-Windows 2000 name',
+          };
+        }
+        await client.modify(
+          before.distinguishedName,
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'unicodePwd',
+              values: [encodeUnicodePassword(defaultComputerPassword(before.samAccountName))],
+            }),
+          }),
+        );
+        const afterEntry = await this.findComputerEntry(client, computerId);
+        const after = afterEntry ? normalizeComputer(afterEntry) : null;
+        return {
+          ok: true,
+          before: { passwordLastSetAt: before.passwordLastSetAt?.toISOString() ?? null },
+          after: { passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null },
+        };
+      } catch (err) {
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -970,22 +1034,39 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Move a user to a different OU. AD permits this via modifyDN: keep the
-   * user's existing RDN (the CN=…) but change its parent to `targetOuDn`.
+   * Move a user or computer to a different OU. AD permits this via
+   * modifyDN: keep the account's existing RDN (the CN=…) but change its parent to `targetOuDn`.
    * ldapts accepts a full new DN as the second argument and translates it
    * into the wire-level Modify DN request (with `newSuperior` set to the
    * target OU).
    *
-   * Idempotent: if the user is already directly under `targetOuDn`, returns
+   * Idempotent: if the account is already directly under `targetOuDn`, returns
    * `ok: true` with a no-op snapshot so the caller doesn't have to special-
    * case the case where someone clicked "Move" without changing the value.
    *
    * `objectGuid` survives a move, so cached IDs (memberships, audit
-   * targetId) remain valid — only the DN changes, which `userLiveRefresh`
-   * will pick up at the route layer.
+   * targetId) remain valid — only the DN changes, which the route re-reads
+   * into the cache.
    */
-  async moveUser(
+  moveUser(
     userId: DirectoryObjectIdentifier,
+    targetOuDn: string,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.moveAccount('user', userId, targetOuDn, ctx);
+  }
+
+  moveComputer(
+    computerId: DirectoryObjectIdentifier,
+    targetOuDn: string,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.moveAccount('computer', computerId, targetOuDn, ctx);
+  }
+
+  private async moveAccount(
+    kind: AccountKind,
+    id: DirectoryObjectIdentifier,
     targetOuDn: string,
     ctx: WriteContext,
   ): Promise<MutationResult> {
@@ -995,28 +1076,28 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     }
     return this.asOperator(ctx, async (client) => {
       try {
-        const target = await this.findUserEntry(client, userId);
-        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
-        const before = normalizeUser(target);
-        const currentParent = parentDn(before.distinguishedName);
+        const target = await this.findAccountEntry(client, kind, id);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: `${kind} not found` };
+        const dn = asString(target.distinguishedName) ?? target.dn;
+        const currentParent = parentDn(dn);
         // Compare case-insensitively — AD treats DN components as case-
         // insensitive even though it preserves the casing on writes.
         if (currentParent && currentParent.toLowerCase() === trimmedTarget.toLowerCase()) {
           return {
             ok: true,
-            before: { distinguishedName: before.distinguishedName, parentDn: currentParent },
-            after: { distinguishedName: before.distinguishedName, parentDn: currentParent },
+            before: { distinguishedName: dn, parentDn: currentParent },
+            after: { distinguishedName: dn, parentDn: currentParent },
           };
         }
 
-        const rdn = leafRdn(before.distinguishedName);
+        const rdn = leafRdn(dn);
         const newDn = `${rdn},${trimmedTarget}`;
-        await client.modifyDN(before.distinguishedName, newDn);
+        await client.modifyDN(dn, newDn);
 
         return {
           ok: true,
           before: {
-            distinguishedName: before.distinguishedName,
+            distinguishedName: dn,
             parentDn: currentParent,
           },
           after: {
@@ -2606,6 +2687,15 @@ function groupSnapshot(group: DirectoryGroup): Record<string, unknown> {
  * Map an LDAP write failure to a MutationResult reason by result code
  * rather than by message text, which varies across DC versions.
  */
+type AccountKind = 'user' | 'computer';
+
+/** An entry's userAccountControl as a number; NaN when unparseable. */
+function userAccountControlOf(entry: Entry): number {
+  const raw = (entry as { userAccountControl?: string | string[] }).userAccountControl;
+  const value = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+  return value ? Number.parseInt(String(value), 10) : 0;
+}
+
 function classifyWriteError(err: unknown): MutationResult {
   const errorMessage = err instanceof Error ? err.message : 'write failed';
   if (err instanceof InsufficientAccessError) {

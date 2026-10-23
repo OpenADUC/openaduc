@@ -22,13 +22,14 @@ export const ouListResponseSchema = z.object({
 });
 export type OuListResponse = z.infer<typeof ouListResponseSchema>;
 
-export const userMoveRequestSchema = z.object({
+// Moving a user or a computer.
+export const moveRequestSchema = z.object({
   // The new parent OU's DN. The server validates that it exists in the
   // cached directory_ous table for the active provider before issuing the
   // modifyDN to AD.
   targetOuDn: z.string().min(1).max(1024),
 });
-export type UserMoveRequest = z.infer<typeof userMoveRequestSchema>;
+export type MoveRequest = z.infer<typeof moveRequestSchema>;
 
 // OU name constraints for create:
 //   - 1..64 characters after trimming

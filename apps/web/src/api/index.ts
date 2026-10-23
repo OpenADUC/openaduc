@@ -28,6 +28,7 @@ import type {
   LdapTlsMode,
   LoginRequest,
   MeResponse,
+  MoveRequest,
   OuContentsResponse,
   OuCreateRequest,
   OuDeleteRequest,
@@ -47,7 +48,6 @@ import type {
   UserDeletePreflightResponse,
   UserDeleteRequest,
   UserDetail,
-  UserMoveRequest,
   UserRenameRequest,
   UserSearchQuery,
   UserSearchResponse,
@@ -452,10 +452,7 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
-    move(
-      id: string,
-      body: UserMoveRequest,
-    ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+    move(id: string, body: MoveRequest): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/move`, {
         method: 'POST',
         body: JSON.stringify(body),

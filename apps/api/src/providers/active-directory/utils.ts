@@ -284,3 +284,13 @@ export function encodeUnicodePassword(plaintext: string): Buffer {
   const quoted = `"${plaintext}"`;
   return Buffer.from(quoted, 'utf16le');
 }
+
+/**
+ * The password ADUC's Reset Account gives a computer: its name without the
+ * trailing `$`, in lowercase. A computer rejoining under the same name
+ * tries this password, cut to 14 characters (the old LM limit) as Windows
+ * and Samba's joins do.
+ */
+export function defaultComputerPassword(samAccountName: string): string {
+  return samAccountName.replace(/\$$/, '').toLowerCase().slice(0, 14);
+}
