@@ -412,10 +412,7 @@ async function onCreateSubmit(): Promise<void> {
     createDialogOpen.value = false;
     await loadTree();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = onCreateSubmit;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, onCreateSubmit)) return;
     createError.value = err instanceof ApiError ? err.message : 'create failed';
   } finally {
     createSubmitting.value = false;
@@ -467,10 +464,7 @@ async function onEditSubmit(): Promise<void> {
     editDialogOpen.value = false;
     await loadTree();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = onEditSubmit;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, onEditSubmit)) return;
     editError.value = err instanceof ApiError ? err.message : 'update failed';
   } finally {
     editSubmitting.value = false;
@@ -513,10 +507,7 @@ async function onDeleteSubmit(): Promise<void> {
     }
     await loadTree();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      auth.stepUpPendingAction = onDeleteSubmit;
-      return;
-    }
+    if (auth.retryAfterStepUp(err, onDeleteSubmit)) return;
     deleteError.value = err instanceof ApiError ? err.message : 'delete failed';
   } finally {
     deleteSubmitting.value = false;

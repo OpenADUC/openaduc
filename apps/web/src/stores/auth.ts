@@ -198,6 +198,18 @@ export const useAuthStore = defineStore('auth', () => {
     requestStepUp(reason);
   }
 
+  /**
+   * For a write's catch block: when `err` says step-up is required (the API
+   * client has already opened the dialog), queue `retry` to run once the
+   * operator steps up and return true. Otherwise return false so the caller
+   * reports the error.
+   */
+  function retryAfterStepUp(err: unknown, retry: () => void | Promise<void>): boolean {
+    if (!(err instanceof ApiError) || err.code !== 'step_up_required') return false;
+    stepUpPendingAction.value = retry;
+    return true;
+  }
+
   async function revokeStepUp(): Promise<void> {
     try {
       await api.auth.revokeStepUp();
@@ -240,5 +252,6 @@ export const useAuthStore = defineStore('auth', () => {
     stepUpPendingAction,
     requestStepUp,
     requireEdit,
+    retryAfterStepUp,
   };
 });
