@@ -135,7 +135,6 @@ export function useListShortcuts<T extends { id: string }>(opts: ListShortcutOpt
     ];
   });
 
-  /** The DataTable's ref. */
   function setTable(el: unknown): void {
     table.value = (el as ListTable | null) ?? null;
   }
