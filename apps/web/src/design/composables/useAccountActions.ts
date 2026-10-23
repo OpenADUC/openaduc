@@ -40,7 +40,8 @@ export type AccountActionFailure<T, A extends AccountAction = AccountAction> = W
  * `onDone` gets the account the action ran on, as the caller passed it, so
  * it can refresh and describe it, and the offer of Undo (none for an
  * unlock). The last failure stays in `failure` until it's retried,
- * dismissed or another action starts.
+ * dismissed or another action starts; with `failuresPerAccount`, each
+ * account's stays in `failureOn(id)` until one on that account does.
  */
 export function useAccountActions<
   T extends { id: string },
@@ -49,6 +50,7 @@ export function useAccountActions<
   kind?: K;
   onDone: (action: ActionOn<K>, account: T, offer: UndoOffer) => void | Promise<void>;
   onFailed?: (failure: AccountActionFailure<T, ActionOn<K>>) => void | Promise<void>;
+  failuresPerAccount?: boolean;
 }) {
   type A = ActionOn<K>;
   // `kind` defaults to 'user' exactly when K does.
@@ -62,6 +64,7 @@ export function useAccountActions<
     key: ({ account }) => account.id,
     onDone: ({ action, account }, offer) => options.onDone(action, account, offer),
     onFailed: options.onFailed,
+    failuresPerKey: options.failuresPerAccount,
   });
 
   const runningOn = (id: string): A | null => writes.runningOn(id)?.action ?? null;
@@ -75,7 +78,10 @@ export function useAccountActions<
     runningOn,
     run,
     failure: writes.failure,
+    failureOn: writes.failureOn,
     retry: writes.retry,
     dismiss: writes.dismiss,
+    retryOn: writes.retryOn,
+    dismissOn: writes.dismissOn,
   };
 }
