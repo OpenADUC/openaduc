@@ -111,14 +111,14 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   }
 
   // ---- GET /api/directories/public -------------------------------------
-  app.get('/api/directories/public', async () => {
+  app.get('/api/directories/public', { config: { policy: { public: true } } }, async () => {
     const directories = await app.services.directoryConfig.listPublic();
     return { directories };
   });
 
   // ---- GET /api/directories --------------------------------------------
   app.get('/api/directories', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async () => {
       const rows = await app.services.directoryConfig.listAll();
       return { directories: rows };
@@ -130,16 +130,12 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // can read users — the same screens that show lockout state need this to
   // make sense of the timestamps. The provider caches results for 5min.
   app.get('/api/directories/:id/policy', {
-    preHandler: app.requireCapability('read:user'),
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
       if (!directory) throw NotFound('directory not found');
       const provider = await app.services.providers.buildForRequest(req);
-      if (provider.id !== id) {
-        // Multi-directory deployments isolate by session.directoryId.
-        throw NotFound('directory not found');
-      }
       const policy = await provider.getDomainPolicy();
       const minutes = (ms: number | null): number | null =>
         ms === null ? null : Math.round(ms / 60_000);
@@ -161,8 +157,10 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
 
   // ---- POST /api/directories -------------------------------------------
   app.post('/api/directories', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
-    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 5, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
+    },
     handler: async (req) => {
       const body = directoryCreateSchema.parse(req.body);
       const transportProblem = ldapTransportProblem(body.ldapUrls, body.tlsMode);
@@ -243,7 +241,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
 
   // ---- PATCH /api/directories/:id --------------------------------------
   app.patch('/api/directories/:id', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const body = directoryPatchSchema.parse(req.body);
@@ -348,8 +346,10 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // pass/fail message so the operator finds out about a typo at the
   // moment of typing instead of after waiting for the next scheduled run.
   app.post('/api/directories/:id/test-sync-bind', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 10, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const bodySchema = z.object({
@@ -412,7 +412,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // every registered task immediately, instead of leaving the operator
   // staring at an "awaiting first tick" empty state.
   app.get('/api/directories/:id/sync-tasks', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -428,7 +428,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // ---- PATCH /api/directories/:id/sync-tasks/:key ----------------------
   // Update cadence / anchor / enabled for a single task.
   app.patch('/api/directories/:id/sync-tasks/:key', {
-    preHandler: [app.requireCapability('configure:directory'), app.requireStepUp],
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const { key } = z.object({ key: z.string().min(1) }).parse(req.params);
@@ -501,8 +501,10 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
 
   // ---- POST /api/directories/:id/sync-tasks/:key/run -------------------
   app.post('/api/directories/:id/sync-tasks/:key/run', {
-    preHandler: app.requireCapability('configure:directory'),
-    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 30, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const { key } = z.object({ key: z.string().min(1) }).parse(req.params);
@@ -537,7 +539,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // the Tasks UI so the operator can see "ran 3× in the last 10 min, all
   // failed with X" rather than just the latest result.
   app.get('/api/directories/:id/sync-tasks/:key/history', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const { key } = z.object({ key: z.string().min(1) }).parse(req.params);
@@ -573,7 +575,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // "Run now" click registered even when the runner finishes faster than
   // the UI's poll cadence.
   app.get('/api/directories/:id/sync-tasks/queue', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -589,7 +591,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // ---- POST /api/directories/:id/sync-tasks/:key/reset -----------------
   // Operator escape hatch — flip a single stuck task out of `running`.
   app.post('/api/directories/:id/sync-tasks/:key/reset', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const { key } = z.object({ key: z.string().min(1) }).parse(req.params);
@@ -618,7 +620,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // resetting every stuck task for the directory. Removed in a future
   // release once the UI fully migrates.
   app.post('/api/directories/:id/sync/reset', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -648,8 +650,10 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // Pre-task-split clients triggered "the sync"; map it to running the
   // users.full task. Removed in a future release once the UI cuts over.
   app.post('/api/directories/:id/sync', {
-    preHandler: app.requireCapability('configure:directory'),
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 10, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+    },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);

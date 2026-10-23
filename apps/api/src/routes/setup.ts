@@ -144,7 +144,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // which step is done, what the operator already typed (no secrets), and
   // whether the whole flow has finished. The router consults this to
   // decide whether to keep forcing the operator into /setup.
-  app.get('/api/setup/status', async (req) => {
+  app.get('/api/setup/status', { config: { policy: { public: true } } }, async (req) => {
     const directories = await app.services.directoryConfig.listAll();
     const onboardingCompletedAt = await readOnboardingCompletedAt();
     // The directory's details are only for the admin finishing setup: never
@@ -184,7 +184,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // for that admin. The bind is the proof of admin authority — no separate
   // ACL or group check today; we trust whatever the directory's bind does.
   app.post('/api/setup/initialize', {
-    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' }, policy: { public: true } },
     handler: async (req, reply) => {
       // Hard-stop if anyone has already configured a directory. Adding
       // additional domains uses POST /api/directories, which is auth-gated.
@@ -364,8 +364,10 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // The same-account warning is computed and returned (non-blocking) —
   // the wizard surfaces it inline so the operator can choose.
   app.post('/api/setup/service-account', {
-    preHandler: app.requireCapability('configure:directory'),
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 10, timeWindow: '1 minute' },
+      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+    },
     handler: async (req) => {
       await ensureOnboardingActive();
       const body = serviceAccountSchema.parse(req.body);
@@ -457,7 +459,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // session — making them step up again to set defaults would be
   // theatre.
   app.post('/api/setup/policy', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const body = policySchema.parse(req.body);
@@ -531,7 +533,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // it — even on failure — so a partial onboarding doesn't leave sync
   // permanently disabled.
   app.post('/api/setup/run-initial-sync', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
@@ -589,7 +591,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // response is `{ job: null }` — the wizard treats that as "needs to
   // start" and will POST run-initial-sync.
   app.get('/api/setup/initial-sync-status', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async () => {
       const directoryId = await firstConfiguredDirectoryId();
       if (!directoryId) return { job: null };
@@ -604,7 +606,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // earlier-succeeded tasks untouched, then resume the sequence from the
   // next pending task.
   app.post('/api/setup/retry-task', {
-    preHandler: app.requireCapability('configure:directory'),
+    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();

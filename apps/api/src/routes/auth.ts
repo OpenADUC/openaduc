@@ -66,6 +66,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/auth/login', {
     config: {
       rateLimit: { max: 5, timeWindow: '1 minute' },
+      policy: { public: true },
     },
     handler: async (req, reply) => {
       const body = loginRequestSchema.parse(req.body);
@@ -192,7 +193,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- POST /api/auth/logout -------------------------------------------
-  app.post('/api/auth/logout', async (req, reply) => {
+  app.post('/api/auth/logout', { config: { policy: { public: true } } }, async (req, reply) => {
     const actor = req.actor;
     if (actor) {
       const { revokedElevatedIds } = await app.services.sessions.revokeAdminSession(
@@ -223,12 +224,16 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- GET /api/auth/me ------------------------------------------------
-  app.get('/api/auth/me', { preHandler: app.requireAuth }, async (req) => {
-    const directory = await app.services.directoryConfig.getById(req.actor!.session.directoryId);
-    return {
-      actor: meResponse(req.actor!.session, req.actor!.elevated, directory?.domain ?? null),
-    };
-  });
+  app.get(
+    '/api/auth/me',
+    { config: { policy: { capability: null, stepUp: false, directory: 'caller' } } },
+    async (req) => {
+      const directory = await app.services.directoryConfig.getById(req.actor!.session.directoryId);
+      return {
+        actor: meResponse(req.actor!.session, req.actor!.elevated, directory?.domain ?? null),
+      };
+    },
+  );
 
   // ---- POST /api/auth/step-up ------------------------------------------
   // Step-up rotates the admin session cookie. A fresh admin session is minted
@@ -237,8 +242,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   // ride along after elevation — the only token that names the elevated
   // session has been replaced.
   app.post('/api/auth/step-up', {
-    preHandler: app.requireAuth,
-    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    config: {
+      rateLimit: { max: 5, timeWindow: '1 minute' },
+      policy: { capability: null, stepUp: false, directory: 'caller' },
+    },
     handler: async (req, reply) => {
       const body = stepUpRequestSchema.parse(req.body);
       const actor = req.actor!;
@@ -382,30 +389,36 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- DELETE /api/auth/step-up ----------------------------------------
-  app.delete('/api/auth/step-up', { preHandler: app.requireAuth }, async (req) => {
-    const actor = req.actor!;
-    const revokedIds = await app.services.sessions.revokeElevatedSessionsForAdmin(actor.session.id);
-    app.services.credentialCache.deleteMany(revokedIds);
-    if (revokedIds.length > 0) {
-      await app.services.audit
-        .recordEvent({
-          action: 'auth.stepup.revoke',
-          result: 'success',
-          actorUserId: actor.session.actorUserId,
-          actorDisplayName: actor.session.actorDisplayName,
-          actorAuthMethod: 'ad-password',
-          sourceIp: req.ip,
-          userAgent: req.headers['user-agent'] ?? null,
-          sessionId: actor.session.id,
-          correlationId: req.correlationId,
-          providerId: actor.session.directoryId,
-          targetType: 'session',
-          metadata: { revokedCount: revokedIds.length },
-        })
-        .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup.revoke'));
-    }
-    return { ok: true };
-  });
+  app.delete(
+    '/api/auth/step-up',
+    { config: { policy: { capability: null, stepUp: false, directory: 'caller' } } },
+    async (req) => {
+      const actor = req.actor!;
+      const revokedIds = await app.services.sessions.revokeElevatedSessionsForAdmin(
+        actor.session.id,
+      );
+      app.services.credentialCache.deleteMany(revokedIds);
+      if (revokedIds.length > 0) {
+        await app.services.audit
+          .recordEvent({
+            action: 'auth.stepup.revoke',
+            result: 'success',
+            actorUserId: actor.session.actorUserId,
+            actorDisplayName: actor.session.actorDisplayName,
+            actorAuthMethod: 'ad-password',
+            sourceIp: req.ip,
+            userAgent: req.headers['user-agent'] ?? null,
+            sessionId: actor.session.id,
+            correlationId: req.correlationId,
+            providerId: actor.session.directoryId,
+            targetType: 'session',
+            metadata: { revokedCount: revokedIds.length },
+          })
+          .catch((err) => req.log.error({ err }, 'audit insert failed for auth.stepup.revoke'));
+      }
+      return { ok: true };
+    },
+  );
 }
 
 // ---- Helpers ----------------------------------------------------------------

@@ -18,7 +18,7 @@ const idParamSchema = z.object({ id: z.guid() });
 export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/groups (cache search) ----------------------------------
   app.get('/api/groups', {
-    preHandler: app.requireCapability('read:group'),
+    config: { policy: { capability: 'read:group', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<GroupSearchResponse> => {
       const q = groupSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -145,7 +145,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
   // (thousands of members) we defer paging to a follow-up; for now the cap
   // is the sync's pageSize.
   app.get('/api/groups/:id', {
-    preHandler: app.requireCapability('read:group'),
+    config: { policy: { capability: 'read:group', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<{ group: GroupDetail }> => {
       const { id } = idParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);

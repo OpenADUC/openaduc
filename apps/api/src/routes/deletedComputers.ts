@@ -43,7 +43,7 @@ function ctxFromReq(req: FastifyRequest): WriteContext {
 export async function registerDeletedComputerRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/deleted-computers --------------------------------------
   app.get('/api/deleted-computers', {
-    preHandler: [app.requireCapability('read:computer.deleted'), app.requireStepUp],
+    config: { policy: { capability: 'read:computer.deleted', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<DeletedComputerSearchResponse> => {
       const q = deletedComputerSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -100,7 +100,7 @@ export async function registerDeletedComputerRoutes(app: FastifyInstance): Promi
 
   // ---- GET /api/deleted-computers/:guid --------------------------------
   app.get('/api/deleted-computers/:guid', {
-    preHandler: [app.requireCapability('read:computer.deleted'), app.requireStepUp],
+    config: { policy: { capability: 'read:computer.deleted', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<{ computer: DeletedComputerDetail }> => {
       const { guid } = guidParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);
