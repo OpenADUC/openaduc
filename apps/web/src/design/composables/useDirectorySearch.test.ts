@@ -103,6 +103,18 @@ describe('useDirectorySearch', () => {
     expect(finder.loading.value).toBe(false);
   });
 
+  it('fetches the OU list once, until reset', async () => {
+    const finder = setup();
+    await finder.search('sal', ['ou']);
+    finder.clear();
+    await finder.search('sales', ['ou']);
+    expect(api.ous.list).toHaveBeenCalledOnce();
+
+    finder.reset();
+    await finder.search('sal', ['ou']);
+    expect(api.ous.list).toHaveBeenCalledTimes(2);
+  });
+
   it('drops a search still under way when cleared', async () => {
     const slow = deferred<{ rows: { id: string }[] }>();
     api.users.search.mockReturnValueOnce(slow.promise);

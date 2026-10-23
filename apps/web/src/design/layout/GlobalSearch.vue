@@ -148,7 +148,7 @@ function openSearch(): void {
 
 function close(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
-  finder.clear();
+  finder.reset();
   open.value = false;
   query.value = '';
   highlight.value = 0;

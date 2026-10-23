@@ -38,7 +38,7 @@ export function useDirectorySearch(options: { pageSize: number }) {
   const requests = latestRequest();
 
   // OUs have no search endpoint; the list is small enough to filter here.
-  // Fetched once, until the next clear().
+  // Fetched once, until reset().
   let ouList: Promise<DirectoryOu[]> | null = null;
 
   async function searchOus(q: string): Promise<DirectoryOu[]> {
@@ -91,13 +91,19 @@ export function useDirectorySearch(options: { pageSize: number }) {
     loading.value = false;
   }
 
+  /** Drops the results and any search under way. */
   function clear(): void {
     requests.begin();
     results.value = none();
     failed.value = [];
     loading.value = false;
+  }
+
+  /** Clears, and fetches the OU list afresh next time. */
+  function reset(): void {
+    clear();
     ouList = null;
   }
 
-  return { results, failed, loading, canSearch, search, clear };
+  return { results, failed, loading, canSearch, search, clear, reset };
 }
