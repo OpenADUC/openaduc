@@ -197,10 +197,12 @@ const feedback = {
     store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
 };
 const { runningOn, run: runAccountAction } = useAccountActions<Row>(feedback);
-const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActions<Row>({
-  kind: 'computer',
-  ...feedback,
-});
+const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActions<Row, 'computer'>(
+  {
+    kind: 'computer',
+    ...feedback,
+  },
+);
 
 function userItems(r: Row): CtxItem[] {
   const busy = runningOn(r.id) !== null;
