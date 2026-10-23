@@ -27,8 +27,8 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
 
       // The caller's directory's rows, and installation-wide ones (no
       // directory, config target: settings changes, first-run setup).
-      // Rows recorded before every row named its directory (authz.deny)
-      // belong to the directory of the session that made them.
+      // Older authz.deny rows have no provider_id; attribute them via
+      // their session's directory.
       let baseQuery = app.db.selectFrom('audit_events').where((eb) =>
         eb.or([
           eb('provider_id', '=', directoryId),
