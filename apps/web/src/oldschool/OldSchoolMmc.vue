@@ -22,6 +22,7 @@ import { useOldSchool } from './stores/useOldSchool.js';
 import OuTreePane from './panes/OuTreePane.vue';
 import ContentsListPane from './panes/ContentsListPane.vue';
 import WinIcon from './primitives/WinIcon.vue';
+import ElevatedStatusSection from './primitives/ElevatedStatusSection.vue';
 import UserPropertiesDialog from './dialogs/UserPropertiesDialog.vue';
 import GroupPropertiesDialog from './dialogs/GroupPropertiesDialog.vue';
 import ComputerPropertiesDialog from './dialogs/ComputerPropertiesDialog.vue';
@@ -323,6 +324,7 @@ function exitOldSchool(): void {
       <div class="os-statusbar">
         <div class="os-statusbar-section" :title="statusLeft">{{ statusLeft }}</div>
         <div class="os-statusbar-section" :title="statusRight">{{ statusRight }}</div>
+        <ElevatedStatusSection />
       </div>
     </div>
 
