@@ -21,6 +21,7 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
+import { groupCreatedToast } from '../design/feedback/groupToasts.js';
 import { useToast } from 'primevue/usetoast';
 import { useAuthStore } from '../stores/auth.js';
 
@@ -35,12 +36,7 @@ async function onCreated(group: GroupSummary): Promise<void> {
   newGroupOpen.value = false;
   // The group's page shows the toast, so it waits until the page is there.
   await router.push({ name: 'group-detail', params: { id: group.id } });
-  toast.add({
-    severity: 'success',
-    summary: 'Group created',
-    detail: `${group.name ?? group.samAccountName} was created.`,
-    life: 4000,
-  });
+  toast.add(groupCreatedToast(group));
 }
 
 type GroupType = GroupSummary['groupType'];

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
-import { sql, type Kysely } from 'kysely';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   groupCreateRequestSchema,
@@ -17,13 +17,14 @@ import {
   type GroupSearchResponse,
   type GroupSummary,
 } from '@openaduc/shared';
-import type { DB } from '../db/types.js';
 import { describeGroupDeleteBlock, groupDeleteBlockReason } from '../lib/groupDeletion.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { upsertGroup } from '../services/groupCache.js';
+import { forgetDeletedGroup, upsertGroup } from '../services/groupCache.js';
+import { findCachedOu } from '../services/ouCache.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
 
@@ -307,7 +308,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     handler: async (req): Promise<GroupNameCheckResponse> => {
       const q = groupNameCheckQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
-      const parentDn = await cachedOuDn(app.db, provider.id, q.parentDn);
+      const parentDn = (await findCachedOu(app.db, provider.id, q.parentDn))?.distinguished_name;
       if (!parentDn) throw app.httpErrors.badRequest('OU not found in directory cache');
       const holders = await provider.findNameHolders({
         parentDn,
@@ -326,7 +327,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       const actor = req.actor!;
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
-      const parentDn = await cachedOuDn(app.db, provider.id, body.parentDn);
+      const parentDn = (await findCachedOu(app.db, provider.id, body.parentDn))?.distinguished_name;
       if (!parentDn) throw app.httpErrors.badRequest('OU not found in directory cache');
 
       const result = await withAudit(
@@ -370,17 +371,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       );
 
       if (!result.ok || !result.group) {
-        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
-        switch (result.errorCode) {
-          case 'conflict':
-            throw app.httpErrors.conflict(result.errorMessage ?? 'name already in use');
-          case 'permission_denied':
-            throw app.httpErrors.forbidden(`directory rejected the create${detail}`);
-          case 'policy_violation':
-            throw app.httpErrors.unprocessableEntity(`directory refused the create${detail}`);
-          default:
-            throw app.httpErrors.badGateway(`create failed${detail}`);
-        }
+        throw directoryRefusal(app, result, { verb: 'create', notFound: 'OU not found' });
       }
 
       const g = result.group;
@@ -498,47 +489,15 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       );
 
       if (!result.ok) {
-        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
-        switch (result.errorCode) {
-          case 'permission_denied':
-            throw app.httpErrors.forbidden(
-              `directory refused the delete — you may lack the Delete right, or the group is protected from accidental deletion${detail}`,
-            );
-          case 'policy_violation':
-            throw app.httpErrors.conflict(`cannot delete${detail}`);
-          case 'not_found':
-            throw NotFound('group not found');
-          default:
-            throw app.httpErrors.badGateway(`delete failed${detail}`);
-        }
+        throw directoryRefusal(app, result, {
+          verb: 'delete',
+          notFound: 'group not found',
+          forbidden:
+            'directory refused the delete — you may lack the Delete right, or the group is protected from accidental deletion',
+        });
       }
 
-      // Drop the group, its members and its own memberships from the cache
-      // now rather than at the next sync.
-      await app.db.transaction().execute(async (trx) => {
-        await trx
-          .updateTable('group_cache_records')
-          .set({ deleted_at: new Date().toISOString() })
-          .where('provider_id', '=', provider.id)
-          .where('object_guid', '=', live.objectGuid)
-          .execute();
-        await trx
-          .deleteFrom('user_group_memberships')
-          .where('provider_id', '=', provider.id)
-          .where('group_object_guid', '=', live.objectGuid)
-          .execute();
-        await trx
-          .deleteFrom('group_group_memberships')
-          .where('provider_id', '=', provider.id)
-          .where((eb) =>
-            eb.or([
-              eb('group_object_guid', '=', live.objectGuid),
-              eb('member_group_object_guid', '=', live.objectGuid),
-            ]),
-          )
-          .execute();
-      });
-
+      await forgetDeletedGroup(app.db, provider.id, live.objectGuid);
       return { ok: true };
     },
   });
@@ -555,16 +514,4 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
     handler: async (req) => changeMembership(app, req, 'group', 'remove'),
   });
-}
-
-/** The cached OU's DN as AD spells it, or null when OpenADUC doesn't know it. */
-async function cachedOuDn(db: Kysely<DB>, providerId: number, dn: string): Promise<string | null> {
-  const row = await db
-    .selectFrom('directory_ous')
-    .select('distinguished_name')
-    .where('provider_id', '=', providerId)
-    .where('deleted_at', 'is', null)
-    .where(sql<string>`lower(distinguished_name)`, '=', dn.toLowerCase())
-    .executeTakeFirst();
-  return row?.distinguished_name ?? null;
 }

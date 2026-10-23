@@ -2,7 +2,8 @@
 import type { GroupDeleteBlockReason } from '@openaduc/shared';
 import { GROUP_TYPE } from '../providers/active-directory/normalize.js';
 import { rawScalarValue } from './rawAttributes.js';
-import { rawFlag, ridOf } from './userDeletion.js';
+import { rawFlag } from './rawAttributes.js';
+import { ridOf } from './sid.js';
 
 export interface GroupDeletionCandidate {
   distinguishedName: string;
