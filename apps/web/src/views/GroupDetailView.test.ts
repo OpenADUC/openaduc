@@ -87,6 +87,7 @@ vi.mock('../api/index.js', () => ({ api }));
 
 const { default: GroupDetailView } = await import('./GroupDetailView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
+const { shortcuts } = await import('../design/composables/useShortcuts.js');
 
 enableAutoUnmount(afterEach);
 
@@ -278,5 +279,15 @@ describe('deleting a group', () => {
 
     expect(api.groups.remove).toHaveBeenCalledWith('g1', { confirmSamAccountName: 'engineering' });
     expect(router.currentRoute.value.name).toBe('group-search');
+  });
+});
+
+describe('shortcuts on a group’s page', () => {
+  it('switch tabs, and run no action', async () => {
+    await openMembers('g1', ['read:group', 'write:group.membership', 'write:group.delete']);
+    expect(shortcuts.value.map((s) => `${s.section} ${s.key} ${s.label}`)).toEqual([
+      'Tabs 1 Overview',
+      'Tabs 2 Members',
+    ]);
   });
 });

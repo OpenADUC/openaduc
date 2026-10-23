@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComputerDetail } from '@openaduc/shared';
 import { ApiError } from '../api/client.js';
 
@@ -60,6 +60,10 @@ vi.mock('../api/index.js', () => ({ api }));
 
 const { default: ComputerDetailView } = await import('./ComputerDetailView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
+const { onShortcutKey, shortcuts } = await import('../design/composables/useShortcuts.js');
+
+// Each page offers its shortcuts until it goes.
+enableAutoUnmount(afterEach);
 
 const inFifteenMinutes = () => new Date(Date.now() + 15 * 60_000).toISOString();
 
@@ -87,6 +91,7 @@ async function openPage(capabilities: string[]) {
   });
   await router.push('/computers/c1');
   const page = mount(RouterView, {
+    attachTo: document.body,
     global: {
       plugins: [pinia, router, PrimeVue, ToastService],
       directives: { tooltip: Tooltip },
@@ -215,6 +220,62 @@ describe('a computer’s actions', () => {
     expect(api.computers.get).toHaveBeenCalledTimes(2);
     expect(page.text()).toContain(`Currently in:${WORKSTATIONS}`);
     expect(page.text()).toContain("That's the computer's current OU");
+  });
+});
+
+describe('shortcuts on a computer’s page', () => {
+  beforeAll(() => window.addEventListener('keydown', onShortcutKey));
+  afterAll(() => window.removeEventListener('keydown', onShortcutKey));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.computers.get.mockResolvedValue({ computer: aComputer() });
+  });
+
+  async function press(key: string) {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, cancelable: true }));
+    await flushPromises();
+  }
+  const listed = () =>
+    shortcuts.value.map((s) =>
+      s.unavailable ? `${s.key} ${s.label} (${s.unavailable})` : `${s.key} ${s.label}`,
+    );
+
+  it('disables on e, asks before resetting on r, and moves on m', async () => {
+    const page = await openPage(ALL);
+    expect(listed()).toEqual([
+      'e Disable account',
+      'r Reset account…',
+      'm Move to OU…',
+      '1 Overview',
+      '2 Groups',
+    ]);
+
+    await press('e');
+    expect(api.computers.disable).toHaveBeenCalledWith('c1');
+
+    await press('r');
+    expect(page.text()).toContain('can’t sign in to the domain until it rejoins');
+    expect(api.computers.resetAccount).not.toHaveBeenCalled();
+    await click(page, 'Cancel');
+
+    await press('m');
+    expect(page.text()).toContain(`Currently in:${WORKSTATIONS}`);
+  });
+
+  it('says why a domain controller takes no action shortcuts', async () => {
+    api.computers.get.mockResolvedValue({
+      computer: aComputer({ name: 'DC1', writeBlock: 'domain_controller' }),
+    });
+    await openPage(ALL);
+    expect(listed()).toEqual([
+      'e Disable account (it’s a domain controller)',
+      'r Reset account… (it’s a domain controller)',
+      'm Move to OU… (it’s a domain controller)',
+      '1 Overview',
+      '2 Groups',
+    ]);
+    await press('e');
+    expect(api.computers.disable).not.toHaveBeenCalled();
   });
 });
 
