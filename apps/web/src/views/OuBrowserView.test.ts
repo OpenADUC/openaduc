@@ -32,9 +32,15 @@ const api = {
     })),
   },
   groups: {
-    nameCheck: vi.fn(async () => ({ nameTakenBy: null, samAccountNameTakenBy: null })),
+    nameCheck: vi.fn(async () => ({
+      nameTaken: false,
+      samAccountNameTaken: false,
+      nameTakenBy: null,
+      samAccountNameTakenBy: null,
+    })),
     create: vi.fn(async () => ({
       ok: true,
+      distinguishedName: `CN=Closers,${SALES}`,
       group: { id: 'g1', name: 'Closers', samAccountName: 'Closers' },
     })),
   },

@@ -80,6 +80,7 @@ import {
   USER_ATTRS_FULL,
   asString,
   asStringArray,
+  escapeRdnValueRfc,
   groupTypeValue,
   leafRdn,
   normalizeComputer,
@@ -1254,6 +1255,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
+    const baseLower = this.config.baseDn.toLowerCase();
+    // A holder outside the base DN is reported without its DN: the
+    // operator has no business seeing what lives there.
     const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
       const { searchEntries } = await client.search(base, {
         scope,
@@ -1261,7 +1265,10 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         attributes: ['distinguishedName'],
         sizeLimit: 1,
       });
-      return searchEntries[0]?.dn ?? null;
+      const dn = searchEntries[0]?.dn;
+      if (!dn) return null;
+      const lower = dn.toLowerCase();
+      return { dn: lower === baseLower || lower.endsWith(`,${baseLower}`) ? dn : null };
     };
     const cn = input.cn?.trim();
     const sam = input.samAccountName?.trim();
@@ -1279,8 +1286,10 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Create a group under `parentDn`, bound as the operator. The names are
+   * Create a group at `input.dn`, bound as the operator. The names are
    * checked again on this bind: the preflight the dialog ran may be stale.
+   * Once AD has added the group the create has happened, so a failed
+   * read-back still reports success, without the group.
    */
   async createGroup(
     input: GroupCreateInput,
@@ -1289,26 +1298,27 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     return this.asOperator(ctx, async (client) => {
       try {
         const holders = await this.nameHolders(client, {
-          parentDn: input.parentDn,
+          parentDn: parentDn(input.dn) ?? '',
           cn: input.cn,
           samAccountName: input.samAccountName,
         });
+        const usedBy = (h: { dn: string | null }, where: string) =>
+          h.dn ? `already used by ${h.dn}` : `already used ${where}`;
         if (holders.cn) {
           return {
             ok: false,
             reason: 'conflict',
-            errorMessage: `the name "${input.cn}" is already used in this OU by ${holders.cn}`,
+            errorMessage: `the name "${input.cn}" is ${usedBy(holders.cn, 'in this OU')}`,
           };
         }
         if (holders.samAccountName) {
           return {
             ok: false,
             reason: 'conflict',
-            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is already used by ${holders.samAccountName}`,
+            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is ${usedBy(holders.samAccountName, 'elsewhere in the domain')}`,
           };
         }
 
-        const dn = `CN=${escapeRdnValueRfc(input.cn)},${input.parentDn}`;
         const attrs: Record<string, string | string[]> = {
           objectClass: ['top', 'group'],
           cn: input.cn,
@@ -1316,14 +1326,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           groupType: String(groupTypeValue(input.scope, input.type)),
         };
         if (input.description) attrs.description = input.description;
-        await client.add(dn, attrs);
+        await client.add(input.dn, attrs);
 
-        const entry = await this.findGroupEntry(client, { kind: 'distinguishedName', value: dn });
+        const entry = await this.findGroupEntry(client, {
+          kind: 'distinguishedName',
+          value: input.dn,
+        }).catch(() => null);
         if (!entry) {
+          const { dn, cn, samAccountName, description, scope, type } = input;
           return {
-            ok: false,
-            reason: 'directory_error',
-            errorMessage: `the group was created at ${dn} but couldn’t be read back`,
+            ok: true,
+            after: { distinguishedName: dn, cn, samAccountName, description, scope, type },
           };
         }
         const group = normalizeGroup(entry);
@@ -2331,39 +2344,6 @@ function classifyBindError(err: unknown): AuthResult {
 function escapeRdnValue(value: string): string {
   // NUL (written as \0, never a raw byte) is intentionally escaped per RFC 4514 §2.4
   return value.replace(/[,+<>;"=\\\0]/g, (m) => `\\${m}`);
-}
-
-/**
- * Strict RFC 4514 §2.4 RDN value escaping. Used for tombstone
- * reanimation, where AD's modify primitive validates the new DN
- * strictly: comma/equals/etc. inside a CN must be escaped, but spaces
- * in the middle of the value must NOT be escaped. The general-purpose
- * `escapeRdnValue` above is over-aggressive for that case.
- */
-function escapeRdnValueRfc(value: string): string {
-  if (!value) return value;
-  let out = '';
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i]!;
-    if (
-      ch === ',' ||
-      ch === '+' ||
-      ch === '"' ||
-      ch === '\\' ||
-      ch === '<' ||
-      ch === '>' ||
-      ch === ';' ||
-      ch === '=' ||
-      ch === '\x00'
-    ) {
-      out += '\\' + ch;
-    } else {
-      out += ch;
-    }
-  }
-  if (out.startsWith('#') || out.startsWith(' ')) out = '\\' + out;
-  if (out.length > 1 && out.endsWith(' ')) out = out.slice(0, -1) + '\\ ';
-  return out;
 }
 
 /**

@@ -12,8 +12,8 @@ import { computed, reactive, ref, watch } from 'vue';
 import {
   groupNameSchema,
   groupSamAccountNameSchema,
+  type GroupCreateResponse,
   type GroupScope,
-  type GroupSummary,
   type GroupType,
 } from '@openaduc/shared';
 import type { ZodType } from 'zod';
@@ -36,7 +36,7 @@ export const TYPE_LABEL: Record<GroupType, string> = {
 };
 
 export function useGroupCreation(options: {
-  onCreated: (group: GroupSummary) => void | Promise<void>;
+  onCreated: (created: GroupCreateResponse) => void | Promise<void>;
 }) {
   const auth = useAuthStore();
   const form = reactive({
@@ -93,7 +93,10 @@ export function useGroupCreation(options: {
   const subjectKey = () =>
     JSON.stringify([form.parentDn, form.name.trim(), form.samAccountName.trim()]);
   const checkedKey = ref<string | null>(null);
-  const holders = ref<{ name: string | null; samAccountName: string | null }>({
+  // Who holds each name: null when free; `dn` null when the holder is
+  // outside the directory's base DN and the server won't say.
+  type Holder = { dn: string | null } | null;
+  const holders = ref<{ name: Holder; samAccountName: Holder }>({
     name: null,
     samAccountName: null,
   });
@@ -113,7 +116,10 @@ export function useGroupCreation(options: {
           samAccountName: form.samAccountName.trim(),
         });
         if (!isCurrent()) return;
-        holders.value = { name: r.nameTakenBy, samAccountName: r.samAccountNameTakenBy };
+        holders.value = {
+          name: r.nameTaken ? { dn: r.nameTakenBy } : null,
+          samAccountName: r.samAccountNameTaken ? { dn: r.samAccountNameTakenBy } : null,
+        };
         checkError.value = null;
       } catch (err) {
         if (!isCurrent()) return;
@@ -127,10 +133,18 @@ export function useGroupCreation(options: {
 
   const current = computed(() => checkedKey.value === subjectKey());
   const checking = computed(() => wellFormed.value && !current.value);
-  /** Who holds each name, from a check of the values on screen. */
-  const taken = computed(() =>
-    current.value ? holders.value : { name: null, samAccountName: null },
-  );
+  /** Why each name can't be used, from a check of the values on screen. */
+  const taken = computed(() => {
+    const h = current.value ? holders.value : { name: null, samAccountName: null };
+    return {
+      name: h.name ? `Already used in this OU${h.name.dn ? ` by ${h.name.dn}` : ''}` : null,
+      samAccountName: h.samAccountName
+        ? h.samAccountName.dn
+          ? `Already used in the domain by ${h.samAccountName.dn}`
+          : 'Already used elsewhere in the domain'
+        : null,
+    };
+  });
 
   const canSubmit = computed(
     () =>
@@ -154,7 +168,7 @@ export function useGroupCreation(options: {
     submitting.value = true;
     error.value = null;
     try {
-      const { group } = await api.groups.create({
+      const created = await api.groups.create({
         parentDn: form.parentDn!,
         name: form.name.trim(),
         samAccountName: form.samAccountName.trim(),
@@ -162,7 +176,7 @@ export function useGroupCreation(options: {
         scope: form.scope,
         type: form.type,
       });
-      await options.onCreated(group);
+      await options.onCreated(created);
     } catch (err) {
       if (auth.retryAfterStepUp(err, commit)) return;
       error.value = errorMessage(err, 'Create failed');

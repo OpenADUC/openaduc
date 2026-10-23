@@ -12,7 +12,7 @@ import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import SelectButton from 'primevue/selectbutton';
 import TreeSelect from 'primevue/treeselect';
-import { GROUP_SCOPES, GROUP_TYPES, type GroupSummary } from '@openaduc/shared';
+import { GROUP_SCOPES, GROUP_TYPES, type GroupCreateResponse } from '@openaduc/shared';
 import { SCOPE_LABEL, TYPE_LABEL, useGroupCreation } from '../composables/useGroupCreation.js';
 import { useOuTree } from '../composables/useOuTree.js';
 import { ouTreeNodes } from '../lib/ouTree.js';
@@ -25,7 +25,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean];
-  created: [group: GroupSummary];
+  created: [created: GroupCreateResponse];
 }>();
 
 const {
@@ -41,7 +41,7 @@ const {
   submitting,
   error,
   submit,
-} = useGroupCreation({ onCreated: (group) => emit('created', group) });
+} = useGroupCreation({ onCreated: (created) => emit('created', created) });
 
 const { ous, loading: ousLoading, error: ousError, load: loadOus } = useOuTree();
 const ouTree = computed(() => ouTreeNodes(ous.value));
@@ -109,7 +109,7 @@ function close(): void {
       />
       <span v-if="problems.name" class="ng-note ng-note-bad">{{ problems.name }}</span>
       <span v-else-if="taken.name" class="ng-note ng-note-bad">
-        Already used in this OU by <span class="mono">{{ taken.name }}</span>
+        {{ taken.name }}
       </span>
     </div>
 
@@ -130,7 +130,7 @@ function close(): void {
         {{ problems.samAccountName }}
       </span>
       <span v-else-if="taken.samAccountName" class="ng-note ng-note-bad">
-        Already used in the domain by <span class="mono">{{ taken.samAccountName }}</span>
+        {{ taken.samAccountName }}
       </span>
       <span v-else class="ng-note">Must be unique across the domain, users included.</span>
     </div>

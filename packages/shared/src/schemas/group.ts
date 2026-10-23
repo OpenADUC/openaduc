@@ -115,6 +115,15 @@ export const groupCreateRequestSchema = z
   .strict();
 export type GroupCreateRequest = z.input<typeof groupCreateRequestSchema>;
 
+export const groupCreateResponseSchema = z.object({
+  ok: z.literal(true),
+  distinguishedName: z.string(),
+  // Null when AD created the group but it couldn't be read back yet; the
+  // next sync lists it.
+  group: groupSummarySchema.nullable(),
+});
+export type GroupCreateResponse = z.infer<typeof groupCreateResponseSchema>;
+
 // Whether a new group's names are free: its name among the OU's direct
 // children, its pre-Windows 2000 name across the whole domain (users and
 // computers included). Either may be omitted to check only the other.
@@ -126,7 +135,11 @@ export const groupNameCheckQuerySchema = z.object({
 export type GroupNameCheckQuery = z.infer<typeof groupNameCheckQuerySchema>;
 
 export const groupNameCheckResponseSchema = z.object({
-  // The DN of the object already holding each name, or null when free.
+  nameTaken: z.boolean(),
+  samAccountNameTaken: z.boolean(),
+  // The DN of the object holding each taken name. Null when the name is
+  // free, or when the holder is outside the configured base DN, which
+  // isn't disclosed.
   nameTakenBy: z.string().nullable(),
   samAccountNameTakenBy: z.string().nullable(),
 });

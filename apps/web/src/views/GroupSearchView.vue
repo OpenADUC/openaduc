@@ -15,7 +15,7 @@ import Select from 'primevue/select';
 import Message from 'primevue/message';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
-import type { GroupSummary } from '@openaduc/shared';
+import type { GroupCreateResponse, GroupSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -32,11 +32,15 @@ const auth = useAuthStore();
 const canCreate = computed(() => auth.hasCapability('write:group.create'));
 const newGroupOpen = ref(false);
 
-async function onCreated(group: GroupSummary): Promise<void> {
+async function onCreated(created: GroupCreateResponse): Promise<void> {
   newGroupOpen.value = false;
-  // The group's page shows the toast, so it waits until the page is there.
-  await router.push({ name: 'group-detail', params: { id: group.id } });
-  toast.add(groupCreatedToast(group));
+  if (created.group) {
+    // The group's page shows the toast, so it waits until the page is there.
+    await router.push({ name: 'group-detail', params: { id: created.group.id } });
+  } else {
+    await load();
+  }
+  toast.add(groupCreatedToast(created));
 }
 
 type GroupType = GroupSummary['groupType'];
