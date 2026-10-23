@@ -43,6 +43,14 @@ function setup(capabilities = RESET_AND_UNLOCK) {
   return { reset: usePasswordReset({ onReset }), onReset };
 }
 
+async function loaded(
+  reset: ReturnType<typeof usePasswordReset>,
+  user: ReturnType<typeof aUserDetail>,
+) {
+  get.mockResolvedValue({ user });
+  await reset.load(user.id);
+}
+
 describe('usePasswordReset', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -51,7 +59,7 @@ describe('usePasswordReset', () => {
 
   it('offers to unlock a locked account, ticked, and unlocks it in the same request', async () => {
     const { reset, onReset } = setup();
-    await reset.load(aUserDetail({ locked: true }));
+    await loaded(reset, aUserDetail({ locked: true }));
     expect(reset.offerUnlock.value).toBe(true);
     expect(reset.alsoUnlock.value).toBe(true);
 
@@ -69,7 +77,7 @@ describe('usePasswordReset', () => {
 
   it('doesn’t offer to unlock an account that isn’t locked', async () => {
     const { reset } = setup();
-    await reset.load(aUserDetail({ locked: false }));
+    await loaded(reset, aUserDetail({ locked: false }));
     expect(reset.offerUnlock.value).toBe(false);
 
     reset.alsoUnlock.value = true;
@@ -80,7 +88,7 @@ describe('usePasswordReset', () => {
 
   it('doesn’t offer to unlock to an operator who may only reset', async () => {
     const { reset } = setup(['read:user', 'write:user.resetPassword']);
-    await reset.load(aUserDetail({ locked: true }));
+    await loaded(reset, aUserDetail({ locked: true }));
     expect(reset.offerUnlock.value).toBe(false);
 
     reset.password.value = 'Correct-Horse-9';
@@ -88,17 +96,9 @@ describe('usePasswordReset', () => {
     expect(resetPassword).toHaveBeenCalledWith('u1', expect.objectContaining({ unlock: false }));
   });
 
-  it('reads the account by id, for a view that only has the id', async () => {
-    get.mockResolvedValue({ user: aUserDetail({ locked: true }) });
-    const { reset } = setup();
-    await reset.load('u1');
-    expect(get).toHaveBeenCalledWith('u1');
-    expect(reset.alsoUnlock.value).toBe(true);
-  });
-
   it('checks against the domain’s policy and generates a password that passes it', async () => {
     const { reset } = setup();
-    await reset.load(aUserDetail());
+    await loaded(reset, aUserDetail());
 
     reset.password.value = 'Short-1a';
     expect(reset.acceptable.value).toBe(false);
@@ -114,7 +114,7 @@ describe('usePasswordReset', () => {
 
   it('finishes the reset after the step-up its submit prompts', async () => {
     const { reset, onReset } = setup();
-    await reset.load(aUserDetail({ locked: true }));
+    await loaded(reset, aUserDetail({ locked: true }));
     reset.password.value = 'Correct-Horse-9';
     resetPassword.mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'));
 
@@ -129,7 +129,7 @@ describe('usePasswordReset', () => {
 
   it('shows why the directory refused the password', async () => {
     const { reset, onReset } = setup();
-    await reset.load(aUserDetail());
+    await loaded(reset, aUserDetail());
     reset.password.value = 'Correct-Horse-9';
     resetPassword.mockRejectedValueOnce(new ApiError(400, 'bad_request', 'directory rejected'));
 

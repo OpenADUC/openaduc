@@ -49,8 +49,9 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     return `AD also refuses ${which}, which can’t be checked here.`;
   });
 
-  /** Start over for an account; give its id when the caller hasn't read it. */
-  async function load(user: ResetTarget | string): Promise<void> {
+  // Reads the account even when the caller has it, so a lockout since the
+  // caller's read is offered.
+  async function load(id: string): Promise<void> {
     target.value = null;
     password.value = '';
     shown.value = false;
@@ -59,7 +60,7 @@ export function usePasswordReset(options: { onReset: (outcome: ResetOutcome) => 
     const policyLoaded = loadPolicy();
     loading.value = true;
     try {
-      target.value = typeof user === 'string' ? (await api.users.get(user)).user : user;
+      target.value = (await api.users.get(id)).user;
       alsoUnlock.value = target.value.locked;
       await policyLoaded;
     } catch (err) {
