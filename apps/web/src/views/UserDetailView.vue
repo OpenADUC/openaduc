@@ -42,7 +42,11 @@ import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
 import { useUserMove } from '../design/composables/useUserMove.js';
-import { useGroupMembership, type Membership } from '../design/composables/useGroupMembership.js';
+import {
+  membershipOf,
+  useGroupMembership,
+  type Membership,
+} from '../design/composables/useGroupMembership.js';
 import { useAddToGroup, MIN_GROUP_QUERY } from '../design/composables/useAddToGroup.js';
 import {
   useUserAttributeEdit,
@@ -625,14 +629,9 @@ const { pending: groupPending, remove: removeMembership } = useGroupMembership({
   onFailed: (_change, _m, message) => groupFailed('Remove failed', message),
 });
 
-function requestRemoveGroup(groupId: string, label: string): void {
+function requestRemoveGroup(group: UserDetail['groupMemberships'][number]): void {
   if (!user.value || groupPending.value) return;
-  removeConfirm.value = {
-    userId: user.value.id,
-    userLabel: user.value.displayName ?? user.value.samAccountName,
-    groupId,
-    groupLabel: label,
-  };
+  removeConfirm.value = membershipOf(user.value, group);
 }
 
 function cancelRemoveGroup(): void {
@@ -645,13 +644,15 @@ function confirmRemoveGroup(): void {
 
 const addGroupOpen = ref(false);
 const {
-  loading: addGroupLoading,
   error: addGroupError,
   query: groupSearchQuery,
   queryTooShort: groupQueryTooShort,
+  ready: addGroupReady,
   results: groupSearchResults,
+  truncated: groupResultsTruncated,
   searching: groupSearchLoading,
-  isMember,
+  searchError: groupSearchError,
+  existing: existingMembership,
   adding: addingGroupId,
   load: loadAddGroup,
   add: addToGroup,
@@ -1569,7 +1570,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :nested="false"
                 :removable="canManageGroups && groupPending?.membership.groupId !== g.id"
                 :to="{ name: 'group-detail', params: { id: g.id } }"
-                @remove="requestRemoveGroup(g.id, g.name || g.distinguishedName)"
+                @remove="requestRemoveGroup(g)"
               />
             </div>
           </section>
@@ -1901,7 +1902,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       </template>
     </Dialog>
 
-    <!-- Add group dialog: search by name; groups the user is already in are
+    <!-- Add group dialog: search by name; groups the user is directly in are
          shown but can't be added. -->
     <Dialog
       :visible="addGroupOpen"
@@ -1922,6 +1923,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           :message="`At least ${MIN_GROUP_QUERY} characters.`"
           compact
         />
+        <Message v-else-if="groupSearchError" severity="error" :closable="false">
+          Couldn’t search groups: {{ groupSearchError }}
+        </Message>
         <EmptyState
           v-else-if="groupSearchResults.length === 0"
           icon="pi pi-inbox"
@@ -1933,24 +1937,30 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
             v-for="g in groupSearchResults"
             :key="g.id"
             class="group-result"
-            :class="{ disabled: isMember(g.id) }"
+            :class="{ disabled: existingMembership(g.id) === 'direct' }"
           >
             <div class="group-result-meta">
               <span class="group-result-name">{{ g.name || g.distinguishedName }}</span>
               <span class="group-result-dn mono">{{ g.distinguishedName }}</span>
+              <span v-if="existingMembership(g.id) === 'nested'" class="hint">
+                member via a nested group
+              </span>
             </div>
             <Button
-              v-if="!isMember(g.id)"
+              v-if="existingMembership(g.id) !== 'direct'"
               label="Add"
               icon="pi pi-plus"
               size="small"
               :loading="addingGroupId === g.id"
-              :disabled="addingGroupId !== null || addGroupLoading"
+              :disabled="addingGroupId !== null || !addGroupReady"
               @click="addToGroup(g)"
             />
             <span v-else class="hint">already a member</span>
           </li>
         </ul>
+        <p v-if="groupResultsTruncated && !groupSearchLoading" class="hint">
+          Showing {{ groupSearchResults.length }} — refine your search
+        </p>
       </div>
       <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
       <template #footer>

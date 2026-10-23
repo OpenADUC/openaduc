@@ -18,13 +18,15 @@ const toast = useToast();
 
 const addError = ref<string | null>(null);
 const {
-  loading,
   error: loadError,
   query,
+  ready,
   queryTooShort,
   results,
+  truncated,
   searching,
-  isMember,
+  searchError,
+  existing,
   adding,
   load,
   add,
@@ -46,7 +48,8 @@ onMounted(() => load(props.userId));
 
 const selected = ref<GroupSummary | null>(null);
 const canOk = computed(
-  () => !!selected.value && !isMember(selected.value.id) && !loading.value && !adding.value,
+  () =>
+    !!selected.value && existing(selected.value.id) !== 'direct' && ready.value && !adding.value,
 );
 
 function ok(): void {
@@ -79,6 +82,9 @@ function ok(): void {
         <div v-else-if="queryTooShort" class="os-listbox-empty">
           Type at least {{ MIN_GROUP_QUERY }} characters of a group name.
         </div>
+        <div v-else-if="searchError" class="os-listbox-empty">
+          The search failed: {{ searchError }}
+        </div>
         <div v-else-if="results.length === 0" class="os-listbox-empty">No matches.</div>
         <div
           v-for="g in results"
@@ -91,12 +97,18 @@ function ok(): void {
           <WinIcon name="group" :size="14" />
           <span style="flex: 1">
             {{ g.name ?? g.samAccountName ?? '(unnamed)' }}
-            <template v-if="isMember(g.id)"> (already a member)</template>
+            <template v-if="existing(g.id) === 'direct'"> (already a member)</template>
+            <template v-else-if="existing(g.id) === 'nested'">
+              (member via a nested group)</template
+            >
           </span>
           <span style="color: var(--os-window-text-muted)">{{ g.description ?? '' }}</span>
         </div>
       </div>
 
+      <div v-if="truncated && !searching" class="os-info" style="margin-top: 6px">
+        Showing {{ results.length }} — refine your search.
+      </div>
       <div v-if="loadError ?? addError" class="os-error" style="margin-top: 10px">
         {{ loadError ?? addError }}
       </div>
