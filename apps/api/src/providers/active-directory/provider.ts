@@ -861,7 +861,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return this.modifyGroupMembership(userId, groupId, ctx, 'add');
+    return this.modifyGroupMembership({ kind: 'user', id: userId }, groupId, ctx, 'add');
   }
 
   removeUserFromGroup(
@@ -869,30 +869,54 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return this.modifyGroupMembership(userId, groupId, ctx, 'delete');
+    return this.modifyGroupMembership({ kind: 'user', id: userId }, groupId, ctx, 'delete');
+  }
+
+  addGroupToGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.modifyGroupMembership({ kind: 'group', id: memberGroupId }, groupId, ctx, 'add');
+  }
+
+  removeGroupFromGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.modifyGroupMembership({ kind: 'group', id: memberGroupId }, groupId, ctx, 'delete');
   }
 
   /**
-   * Add or remove a user's DN from a group's `member` attribute. Same write-
-   * as-user pattern as the other writes; idempotent (no-op if already in the
-   * desired state).
+   * Add or remove a user's or group's DN from a group's `member` attribute.
+   * Same write-as-user pattern as the other writes; idempotent (no-op if
+   * already in the desired state).
    */
   private async modifyGroupMembership(
-    userId: DirectoryObjectIdentifier,
+    member: { kind: 'user' | 'group'; id: DirectoryObjectIdentifier },
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
     op: 'add' | 'delete',
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const userEntry = await this.findUserEntry(client, userId);
-        if (!userEntry) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
+        const memberEntry =
+          member.kind === 'user'
+            ? await this.findUserEntry(client, member.id)
+            : await this.findGroupEntry(client, member.id);
+        if (!memberEntry) {
+          return { ok: false, reason: 'not_found', errorMessage: `${member.kind} not found` };
+        }
         const groupEntry = await this.findGroupEntry(client, groupId);
         if (!groupEntry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
-        const user = normalizeUser(userEntry);
+        const memberDn =
+          member.kind === 'user'
+            ? normalizeUser(memberEntry).distinguishedName
+            : normalizeGroup(memberEntry).distinguishedName;
         const group = normalizeGroup(groupEntry);
-        const userDnLc = user.distinguishedName.toLowerCase();
-        const isMember = group.memberDns.some((dn) => dn.toLowerCase() === userDnLc);
+        const memberDnLc = memberDn.toLowerCase();
+        const isMember = group.memberDns.some((dn) => dn.toLowerCase() === memberDnLc);
 
         if (op === 'add' && isMember) {
           return {
@@ -915,18 +939,18 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             operation: op,
             modification: new Attribute({
               type: 'member',
-              values: [user.distinguishedName],
+              values: [memberDn],
             }),
           }),
         );
 
         return {
           ok: true,
-          before: { isMember, group: group.distinguishedName, user: user.distinguishedName },
+          before: { isMember, group: group.distinguishedName, [member.kind]: memberDn },
           after: {
             isMember: op === 'add',
             group: group.distinguishedName,
-            user: user.distinguishedName,
+            [member.kind]: memberDn,
           },
         };
       } catch (err) {

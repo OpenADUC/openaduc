@@ -13,6 +13,7 @@ import {
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { changeMembership } from './groupMembership.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -284,5 +285,18 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
 
       return { group: groupDetailSchema.parse(detail) };
     },
+  });
+
+  // ---- POST /api/groups/:id/groups (nest) + DELETE (take out) ----------
+  // Body: { groupId }, the group that :id joins or leaves. The same change
+  // as /api/users/:id/groups, for a group.
+  app.post('/api/groups/:id/groups', {
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
+    handler: async (req) => changeMembership(app, req, 'group', 'add'),
+  });
+
+  app.delete('/api/groups/:id/groups', {
+    config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
+    handler: async (req) => changeMembership(app, req, 'group', 'remove'),
   });
 }
