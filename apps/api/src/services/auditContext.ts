@@ -92,6 +92,7 @@ export async function withAudit<T extends WriteOpResult>(
 
   await audit.recordEvent({
     ...base,
+    ...(opResult?.targetId ? { targetId: opResult.targetId } : {}),
     ...(errorMessage ? { metadata: { ...base.metadata, errorMessage } } : {}),
     result,
     errorCode,
@@ -113,4 +114,6 @@ export interface WriteOpResult {
   errorCode?: string | null;
   /** Why the directory refused, recorded with a failed row. */
   errorMessage?: string | null;
+  /** The target's id when only the operation learns it, as a create does. */
+  targetId?: string | null;
 }

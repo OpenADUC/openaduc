@@ -1,19 +1,31 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import { z } from 'zod';
 import {
+  groupCreateRequestSchema,
+  groupDeletePreflightResponseSchema,
+  groupDeleteRequestSchema,
   groupDetailSchema,
+  groupNameCheckQuerySchema,
   groupSearchQuerySchema,
   groupSearchResponseSchema,
+  type GroupDeletePreflightResponse,
   type GroupDetail,
   type GroupMember,
+  type GroupNameCheckResponse,
   type GroupSearchResponse,
+  type GroupSummary,
 } from '@openaduc/shared';
-import { NotFound } from '../plugins/errorHandler.js';
-import { auditContextFromRequest } from '../services/auditContext.js';
+import type { DB } from '../db/types.js';
+import { describeGroupDeleteBlock, groupDeleteBlockReason } from '../lib/groupDeletion.js';
+import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { leafRdnValue } from '../providers/active-directory/normalize.js';
+import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { upsertGroup } from '../services/groupCache.js';
 import { listFreshness } from '../services/listFreshness.js';
 import { changeMembership } from './groupMembership.js';
+import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -287,6 +299,250 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
+  // ---- GET /api/groups/name-check --------------------------------------
+  // Whether a new group's names are free, so the create dialog can say so
+  // before the operator submits. The create checks again.
+  app.get('/api/groups/name-check', {
+    config: { policy: { capability: 'write:group.create', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<GroupNameCheckResponse> => {
+      const q = groupNameCheckQuerySchema.parse(req.query);
+      const provider = await app.services.providers.buildForRequest(req);
+      const parentDn = await cachedOuDn(app.db, provider.id, q.parentDn);
+      if (!parentDn) throw app.httpErrors.badRequest('OU not found in directory cache');
+      const holders = await provider.findNameHolders({
+        parentDn,
+        cn: q.name,
+        samAccountName: q.samAccountName,
+      });
+      return { nameTakenBy: holders.cn, samAccountNameTakenBy: holders.samAccountName };
+    },
+  });
+
+  // ---- POST /api/groups (create in an OU) ------------------------------
+  app.post('/api/groups', {
+    config: { policy: { capability: 'write:group.create', stepUp: true, directory: 'caller' } },
+    handler: async (req): Promise<{ ok: true; group: GroupSummary }> => {
+      const body = groupCreateRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+      const parentDn = await cachedOuDn(app.db, provider.id, body.parentDn);
+      if (!parentDn) throw app.httpErrors.badRequest('OU not found in directory cache');
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'group.create',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'group',
+          targetDn: `CN=${body.name},${parentDn}`,
+          metadata: {
+            parentDn,
+            name: body.name,
+            samAccountName: body.samAccountName,
+            scope: body.scope,
+            type: body.type,
+          },
+        },
+        async () => {
+          const r = await provider.createGroup(
+            {
+              parentDn,
+              cn: body.name,
+              samAccountName: body.samAccountName,
+              description: body.description || null,
+              scope: body.scope,
+              type: body.type,
+            },
+            ctx(actor, req),
+          );
+          return {
+            ok: r.ok,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+            errorMessage: r.errorMessage ?? null,
+            targetId: r.group?.objectGuid ?? null,
+            group: r.group ?? null,
+          };
+        },
+      );
+
+      if (!result.ok || !result.group) {
+        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+        switch (result.errorCode) {
+          case 'conflict':
+            throw app.httpErrors.conflict(result.errorMessage ?? 'name already in use');
+          case 'permission_denied':
+            throw app.httpErrors.forbidden(`directory rejected the create${detail}`);
+          case 'policy_violation':
+            throw app.httpErrors.unprocessableEntity(`directory refused the create${detail}`);
+          default:
+            throw app.httpErrors.badGateway(`create failed${detail}`);
+        }
+      }
+
+      const g = result.group;
+      await upsertGroup(app.db, provider.id, g);
+      return {
+        ok: true,
+        group: {
+          id: g.objectGuid,
+          name: g.name,
+          samAccountName: g.samAccountName,
+          distinguishedName: g.distinguishedName,
+          description: g.description,
+          groupType: g.groupType,
+          groupScope: g.groupScope,
+          memberCount: 0,
+        },
+      };
+    },
+  });
+
+  // ---- GET /api/groups/:id/delete-preflight ----------------------------
+  // What the delete confirmation shows: how many members the group has,
+  // which groups it's in, and why it can't be deleted if it can't. Read
+  // live; the delete checks again.
+  app.get('/api/groups/:id/delete-preflight', {
+    config: { policy: { capability: 'write:group.delete', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<GroupDeletePreflightResponse> => {
+      const { id } = idParamSchema.parse(req.params);
+      const provider = await app.services.providers.buildForRequest(req);
+      const live = await provider.getGroup({ kind: 'objectGuid', value: id });
+      if (!live) throw NotFound('group not found');
+
+      const dnsLower = live.memberOfDns.map((d) => d.toLowerCase());
+      const cached =
+        dnsLower.length === 0
+          ? []
+          : await app.db
+              .selectFrom('group_cache_records')
+              .select(['object_guid', 'name', 'distinguished_name'])
+              .where('provider_id', '=', provider.id)
+              .where('deleted_at', 'is', null)
+              .where(sql<string>`lower(distinguished_name)`, 'in', dnsLower)
+              .execute();
+      const byDn = new Map(cached.map((r) => [r.distinguished_name.toLowerCase(), r]));
+
+      return groupDeletePreflightResponseSchema.parse({
+        id: live.objectGuid,
+        name: live.name,
+        samAccountName: live.samAccountName,
+        distinguishedName: live.distinguishedName,
+        memberCount: live.memberDns.length,
+        memberOf: live.memberOfDns.map((dn) => {
+          const hit = byDn.get(dn.toLowerCase());
+          return {
+            id: hit?.object_guid ?? null,
+            name: hit?.name ?? leafRdnValue(dn),
+            distinguishedName: dn,
+          };
+        }),
+        blockedReason: groupDeleteBlockReason(live),
+      });
+    },
+  });
+
+  // ---- DELETE /api/groups/:id ------------------------------------------
+  // Body: { confirmSamAccountName }.
+  app.delete('/api/groups/:id', {
+    config: { policy: { capability: 'write:group.delete', stepUp: true, directory: 'caller' } },
+    handler: async (req) => {
+      const { id } = idParamSchema.parse(req.params);
+      const body = groupDeleteRequestSchema.parse(req.body);
+      const actor = req.actor!;
+      if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
+      const provider = await app.services.providers.buildForRequest(req);
+
+      const live = await provider.getGroup({ kind: 'objectGuid', value: id });
+      if (!live) throw NotFound('group not found');
+      if (
+        !live.samAccountName ||
+        live.samAccountName.toLowerCase() !== body.confirmSamAccountName.trim().toLowerCase()
+      ) {
+        throw app.httpErrors.badRequest(
+          'confirmation does not match the group’s pre-Windows 2000 name',
+        );
+      }
+      // Refuse before writing an audit row: nothing was attempted. The
+      // provider repeats this check on its own read right before the delete.
+      const blocked = groupDeleteBlockReason(live);
+      if (blocked) {
+        throw app.httpErrors.conflict(`cannot delete: ${describeGroupDeleteBlock(blocked)}`);
+      }
+
+      const result = await withAudit(
+        app.services.audit,
+        {
+          ...auditContextFromRequest(req),
+          action: 'group.delete',
+          actorAuthMethod: 'ad-password',
+          providerId: provider.id,
+          targetType: 'group',
+          targetId: live.objectGuid,
+          targetDn: live.distinguishedName,
+          metadata: { samAccountName: live.samAccountName, memberCount: live.memberDns.length },
+        },
+        async () => {
+          const r = await provider.deleteGroup({ kind: 'objectGuid', value: id }, ctx(actor, req));
+          return {
+            ok: r.ok,
+            before: r.before ?? null,
+            after: r.after ?? null,
+            errorCode: r.reason ?? null,
+            errorMessage: r.errorMessage ?? null,
+          };
+        },
+      );
+
+      if (!result.ok) {
+        const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+        switch (result.errorCode) {
+          case 'permission_denied':
+            throw app.httpErrors.forbidden(
+              `directory refused the delete — you may lack the Delete right, or the group is protected from accidental deletion${detail}`,
+            );
+          case 'policy_violation':
+            throw app.httpErrors.conflict(`cannot delete${detail}`);
+          case 'not_found':
+            throw NotFound('group not found');
+          default:
+            throw app.httpErrors.badGateway(`delete failed${detail}`);
+        }
+      }
+
+      // Drop the group, its members and its own memberships from the cache
+      // now rather than at the next sync.
+      await app.db.transaction().execute(async (trx) => {
+        await trx
+          .updateTable('group_cache_records')
+          .set({ deleted_at: new Date().toISOString() })
+          .where('provider_id', '=', provider.id)
+          .where('object_guid', '=', live.objectGuid)
+          .execute();
+        await trx
+          .deleteFrom('user_group_memberships')
+          .where('provider_id', '=', provider.id)
+          .where('group_object_guid', '=', live.objectGuid)
+          .execute();
+        await trx
+          .deleteFrom('group_group_memberships')
+          .where('provider_id', '=', provider.id)
+          .where((eb) =>
+            eb.or([
+              eb('group_object_guid', '=', live.objectGuid),
+              eb('member_group_object_guid', '=', live.objectGuid),
+            ]),
+          )
+          .execute();
+      });
+
+      return { ok: true };
+    },
+  });
+
   // ---- POST /api/groups/:id/groups (nest) + DELETE (take out) ----------
   // Body: { groupId }, the group that :id joins or leaves. The same change
   // as /api/users/:id/groups, for a group.
@@ -299,4 +555,16 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
     config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
     handler: async (req) => changeMembership(app, req, 'group', 'remove'),
   });
+}
+
+/** The cached OU's DN as AD spells it, or null when OpenADUC doesn't know it. */
+async function cachedOuDn(db: Kysely<DB>, providerId: number, dn: string): Promise<string | null> {
+  const row = await db
+    .selectFrom('directory_ous')
+    .select('distinguished_name')
+    .where('provider_id', '=', providerId)
+    .where('deleted_at', 'is', null)
+    .where(sql<string>`lower(distinguished_name)`, '=', dn.toLowerCase())
+    .executeTakeFirst();
+  return row?.distinguished_name ?? null;
 }
