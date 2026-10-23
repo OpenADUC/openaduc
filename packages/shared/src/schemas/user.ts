@@ -276,8 +276,11 @@ export type UnlockUserRequest = z.infer<typeof unlockUserRequestSchema>;
 
 export const confirmPasswordSchema = z.object({}).strict();
 
+// The API's floor for a new password, whatever the domain's policy allows.
+export const RESET_PASSWORD_MIN_LENGTH = 8;
+
 export const resetPasswordRequestSchema = z.object({
-  newPassword: z.string().min(8).max(1024),
+  newPassword: z.string().min(RESET_PASSWORD_MIN_LENGTH).max(1024),
   forceChangeAtNextLogin: z.boolean().default(true),
   // Also clear a lockout, in the same directory modify as the password.
   unlock: z.boolean().default(false),
