@@ -11,12 +11,6 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 // empties this list. Don't add to it to get a new route past the test.
 const ALLOWLIST: Record<string, string> = {
   // Writes without step-up.
-  // Setup wizard steps. Setup/initialize opens an elevated session, so
-  // requiring step-up here shouldn't prompt the admin again.
-  'POST /api/setup/service-account': 'stores the sync service account credentials',
-  'POST /api/setup/policy': 'writes view settings',
-  'POST /api/setup/run-initial-sync': 'starts the initial sync',
-  'POST /api/setup/retry-task': 're-runs a failed initial sync task',
 };
 
 // Signed-in writes exempt from step-up by design: they open and close the
