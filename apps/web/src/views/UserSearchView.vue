@@ -685,7 +685,7 @@ onMounted(() => {
             size="small"
             :loading="bulkRunning && pendingBulkAction === 'disable'"
             :disabled="bulkRunning"
-            @click="auth.requireStepUp(() => requestBulk('disable'))"
+            @click="requestBulk('disable')"
           />
           <Button
             v-if="canBulkDisable"
@@ -708,7 +708,7 @@ onMounted(() => {
             :title="
               selectedDisabledCount === 0 ? 'Only disabled accounts can be deleted' : undefined
             "
-            @click="auth.requireStepUp(openBulkDelete)"
+            @click="openBulkDelete"
           />
           <Button
             label="Clear"
@@ -746,7 +746,7 @@ onMounted(() => {
           "
           icon="pi pi-ban"
           severity="danger"
-          @click="startBulk('disable')"
+          @click="auth.requireStepUp(() => startBulk('disable'))"
         />
       </template>
     </Dialog>

@@ -334,7 +334,7 @@ const bannerBody = computed(() => {
               severity="primary"
               :disabled="restoring || data.recycled"
               :title="data.recycled ? 'Recycled entries cannot be restored' : undefined"
-              @click="auth.requireStepUp(() => askRestore(data))"
+              @click="askRestore(data)"
             />
           </template>
         </Column>

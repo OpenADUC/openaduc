@@ -340,8 +340,6 @@ const rawFilter = ref('');
 const { setHero, compact: heroCompact, heroHeight } = useStickyHeader();
 const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
 
-// Capability flags decide whether each action surface is offered at all;
-// a write without an elevated session prompts step-up first.
 const canUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 const canEdit = computed(() => auth.hasCapability('write:user.attributes'));
 const canEnableDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
@@ -620,6 +618,7 @@ async function doUnlock(): Promise<void> {
     });
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, doUnlock)) return;
     toast.add({
       severity: 'error',
       summary: 'Unlock failed',
@@ -644,6 +643,7 @@ async function doToggleEnabled(disable: boolean): Promise<void> {
     });
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, () => doToggleEnabled(disable))) return;
     toast.add({
       severity: 'error',
       summary: disable ? 'Disable failed' : 'Enable failed',
@@ -692,6 +692,7 @@ async function onResetSubmit(): Promise<void> {
     resetDialogOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, onResetSubmit)) return;
     resetError.value = err instanceof ApiError ? err.message : 'reset failed';
   } finally {
     resetSubmitting.value = false;
@@ -822,6 +823,7 @@ async function onMoveSubmit(): Promise<void> {
     moveDialogOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, onMoveSubmit)) return;
     moveError.value = err instanceof ApiError ? err.message : 'move failed';
   } finally {
     moveSubmitting.value = false;
@@ -857,6 +859,7 @@ async function confirmRemoveGroup(): Promise<void> {
     removeConfirm.value = null;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, confirmRemoveGroup)) return;
     toast.add({
       severity: 'error',
       summary: 'Remove failed',
@@ -908,6 +911,7 @@ async function doAddGroup(group: GroupSummary): Promise<void> {
     addGroupOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, () => doAddGroup(group))) return;
     toast.add({
       severity: 'error',
       summary: 'Add failed',
@@ -1005,7 +1009,7 @@ const dnPath = computed(() => {
 });
 
 // Actions dropdown — replaces the row of action buttons that used to live
-// under the hero. Only actions the operator's capabilities allow are listed.
+// under the hero.
 const actionsMenu = ref<InstanceType<typeof Menu> | null>(null);
 
 function toggleActionsMenu(event: Event): void {
@@ -1016,10 +1020,8 @@ const actionItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
   const u = user.value;
   if (!u) return items;
-  // Buttons stay clickable without an elevated session — `auth.requireStepUp`
-  // prompts step-up and runs the action after it. The only disable case is
-  // "an action of this kind is already running" so the operator can't
-  // double-fire.
+  // The only disable case is "an action of this kind is already running" so
+  // the operator can't double-fire.
   const busy = actionRunning.value !== null;
 
   if (canUnlock.value && u.locked) {
@@ -1035,7 +1037,7 @@ const actionItems = computed<MenuItem[]>(() => {
       label: 'Reset password…',
       icon: 'pi pi-key',
       class: 'menu-item-danger',
-      command: () => auth.requireStepUp(openResetDialog),
+      command: openResetDialog,
     });
   }
   if (canEnableDisable.value) {
@@ -1061,7 +1063,7 @@ const actionItems = computed<MenuItem[]>(() => {
       label: actionRunning.value === 'move' ? 'Moving…' : 'Move to OU…',
       icon: 'pi pi-folder-open',
       disabled: busy,
-      command: () => auth.requireStepUp(openMoveDialog),
+      command: openMoveDialog,
     });
   }
   if (canRename.value) {
@@ -1069,10 +1071,9 @@ const actionItems = computed<MenuItem[]>(() => {
       label: 'Rename…',
       icon: 'pi pi-id-card',
       disabled: busy,
-      command: () =>
-        auth.requireStepUp(() => {
-          renameDialogOpen.value = true;
-        }),
+      command: () => {
+        renameDialogOpen.value = true;
+      },
     });
   }
   // Delete is offered only once the account is disabled, which is also
@@ -1083,10 +1084,9 @@ const actionItems = computed<MenuItem[]>(() => {
       icon: 'pi pi-trash',
       class: 'menu-item-danger',
       disabled: busy,
-      command: () =>
-        auth.requireStepUp(() => {
-          deleteDialogOpen.value = true;
-        }),
+      command: () => {
+        deleteDialogOpen.value = true;
+      },
     });
   }
   return items;
@@ -1793,7 +1793,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
             label="Add group"
             icon="pi pi-plus"
             size="small"
-            @click="auth.requireStepUp(openAddGroupDialog)"
+            @click="openAddGroupDialog"
           />
         </div>
 
@@ -1824,9 +1824,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :nested="false"
                 :removable="canManageGroups && groupBusy !== g.id"
                 :to="{ name: 'group-detail', params: { id: g.id } }"
-                @remove="
-                  auth.requireStepUp(() => requestRemoveGroup(g.id, g.name || g.distinguishedName))
-                "
+                @remove="requestRemoveGroup(g.id, g.name || g.distinguishedName)"
               />
             </div>
           </section>
@@ -1913,7 +1911,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               severity="danger"
               outlined
               size="small"
-              @click="auth.requireStepUp(openResetDialog)"
+              @click="openResetDialog"
             />
           </div>
         </Card>

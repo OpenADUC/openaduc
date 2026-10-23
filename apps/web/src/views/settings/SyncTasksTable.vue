@@ -458,6 +458,7 @@ async function saveEdit(): Promise<void> {
     editOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, saveEdit)) return;
     editError.value = err instanceof ApiError ? err.message : 'Save failed';
   } finally {
     editSaving.value = false;

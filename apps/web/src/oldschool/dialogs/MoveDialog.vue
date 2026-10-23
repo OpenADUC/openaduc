@@ -85,16 +85,18 @@ async function ok(): Promise<void> {
   if (props.objectKind !== 'user') return;
   if (!selected.value) return;
   err.value = null;
-  auth.requireStepUp(async () => {
+  const apply = async (): Promise<void> => {
     try {
       await api.users.move(props.id, { targetOuDn: selected.value! });
       toast.add({ severity: 'success', summary: `${props.label} moved.`, life: 3000 });
       store.bumpData();
       emit('close');
     } catch (e) {
+      if (auth.retryAfterStepUp(e, apply)) return;
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
     }
-  }, 'Moving an object requires step-up authentication.');
+  };
+  auth.requireStepUp(apply, 'Moving an object requires step-up authentication.');
 }
 </script>
 

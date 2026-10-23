@@ -5,12 +5,15 @@ import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ElevatedSessionState } from '@openaduc/shared';
 import { aUserDetail } from '../../test/userDetail.js';
+import { ApiError } from '../../api/client.js';
 
 const api = {
   users: {
     get: vi.fn(async () => ({ user: aUserDetail({ title: 'Analyst', locked: true }) })),
     update: vi.fn(async () => ({})),
+    unlock: vi.fn(async () => ({})),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -23,18 +26,31 @@ const api = {
   },
 };
 vi.mock('../../api/index.js', () => ({ api }));
+const toast = { add: vi.fn() };
+vi.mock('primevue/usetoast', () => ({ useToast: () => toast }));
 
 const { default: UserPropertiesDialog } = await import('./UserPropertiesDialog.vue');
 const { useAuthStore } = await import('../../stores/auth.js');
 const { useOldSchool } = await import('../stores/useOldSchool.js');
 
-async function openProperties(capabilities: string[]) {
+const ELEVATED: ElevatedSessionState = {
+  active: true,
+  idleExpiresAt: '2999-01-01T00:15:00.000Z',
+  absoluteExpiresAt: '2999-01-01T04:00:00.000Z',
+};
+const NOT_ELEVATED: ElevatedSessionState = {
+  active: false,
+  idleExpiresAt: null,
+  absoluteExpiresAt: null,
+};
+
+async function openProperties(capabilities: string[], elevated = NOT_ELEVATED) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const auth = useAuthStore();
   auth.actor = {
     capabilities,
-    elevated: { active: false, idleExpiresAt: null, absoluteExpiresAt: null },
+    elevated,
   } as never; // only these fields matter
   const oldSchool = useOldSchool();
   oldSchool.openDialog({ kind: 'user-properties', id: 'u1' });
@@ -78,6 +94,36 @@ describe('the Old School user properties', () => {
     expect(api.users.update).toHaveBeenCalledWith('u1', {
       patch: { displayName: 'Jane Q. Doe' },
     });
+  });
+
+  it('apply again after step-up when the server says the elevated session is gone', async () => {
+    const { dialog, auth } = await openProperties(['read:user', 'write:user.attributes'], ELEVATED);
+    api.users.update.mockRejectedValueOnce(
+      new ApiError(403, 'step_up_required', 'step-up required'),
+    );
+
+    await dialog.get('#displayName').setValue('Jane Q. Doe');
+    await button(dialog, 'Apply').trigger('click');
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledOnce();
+
+    await auth.stepUp('pw');
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('say when the account could not be unlocked', async () => {
+    const { dialog } = await openProperties(['read:user', 'write:user.unlock'], ELEVATED);
+    api.users.unlock.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    await openTab(dialog, 'Account');
+    await dialog.get('input[type="checkbox"]').setValue(true);
+    await button(dialog, 'Apply').trigger('click');
+    await flushPromises();
+    expect(api.users.unlock).toHaveBeenCalledOnce();
+    expect(toast.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'error', detail: 'DC unreachable' }),
+    );
   });
 
   it('show a read-only operator nothing they can change', async () => {

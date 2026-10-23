@@ -8,6 +8,7 @@ import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { aUserDetail } from '../test/userDetail.js';
+import { ApiError } from '../api/client.js';
 
 const inFifteenMinutes = () => new Date(Date.now() + 15 * 60_000).toISOString();
 
@@ -18,6 +19,7 @@ const api = {
     get: vi.fn(async () => ({ user })),
     activity: vi.fn(async () => ({ rows: [] })),
     update: vi.fn(async () => ({ user })),
+    resetPassword: vi.fn(async () => ({})),
   },
   auth: {
     stepUp: vi.fn(async () => ({
@@ -34,7 +36,7 @@ vi.mock('../api/index.js', () => ({ api }));
 const { default: UserDetailView } = await import('./UserDetailView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
 
-async function openOrganizationTab(capabilities: string[], elevated: boolean) {
+async function openTab(tab: string, capabilities: string[], elevated: boolean) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const auth = useAuthStore();
@@ -48,23 +50,33 @@ async function openOrganizationTab(capabilities: string[], elevated: boolean) {
     history: createMemoryHistory(),
     routes: [{ path: '/users/:id', name: 'user-detail', component: UserDetailView, props: true }],
   });
-  await router.push('/users/u1?tab=organization');
+  await router.push(`/users/u1?tab=${tab}`);
   const page = mount(RouterView, {
-    global: { plugins: [pinia, router, PrimeVue, ToastService], directives: { tooltip: Tooltip } },
+    global: {
+      plugins: [pinia, router, PrimeVue, ToastService],
+      directives: { tooltip: Tooltip },
+      stubs: { teleport: true },
+    },
   });
   await flushPromises();
   return { page, auth };
 }
 
-const titleField = (page: Awaited<ReturnType<typeof openOrganizationTab>>['page']) =>
-  page.find('input[placeholder="Title"]');
+const openOrganizationTab = (capabilities: string[], elevated: boolean) =>
+  openTab('organization', capabilities, elevated);
 
-async function clickSave(page: Awaited<ReturnType<typeof openOrganizationTab>>['page']) {
-  const save = page.findAll('button').find((b) => b.text() === 'Save changes');
-  expect(save).toBeDefined();
-  await save!.trigger('click');
+type Page = Awaited<ReturnType<typeof openTab>>['page'];
+
+const titleField = (page: Page) => page.find('input[placeholder="Title"]');
+
+async function click(page: Page, label: string) {
+  const button = page.findAll('button').find((b) => b.text() === label);
+  expect(button).toBeDefined();
+  await button!.trigger('click');
   await flushPromises();
 }
+
+const clickSave = (page: Page) => click(page, 'Save changes');
 
 describe('editing a user without an elevated session', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -113,5 +125,35 @@ describe('unsaved edits when the elevated session ends', () => {
     await auth.stepUp('pw');
     await flushPromises();
     expect(api.users.update).toHaveBeenCalledWith('u1', { patch: { title: 'Engineer' } });
+  });
+});
+
+describe('a dialog write without an elevated session', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('opens without step-up, then completes after the step-up its submit prompts', async () => {
+    const { page, auth } = await openTab(
+      'account',
+      ['read:user', 'write:user.resetPassword'],
+      false,
+    );
+
+    await click(page, 'Reset password');
+    expect(auth.stepUpRequested).toBe(false);
+    await page.get('#reset-new-password').setValue('N3w-passw0rd!');
+    api.users.resetPassword.mockRejectedValueOnce(
+      new ApiError(403, 'step_up_required', 'step-up required'),
+    );
+    await click(page, 'Reset');
+    expect(page.text()).not.toContain('step-up required');
+
+    await auth.stepUp('pw');
+    await flushPromises();
+    expect(api.users.resetPassword).toHaveBeenCalledTimes(2);
+    expect(api.users.resetPassword).toHaveBeenLastCalledWith('u1', {
+      newPassword: 'N3w-passw0rd!',
+      forceChangeAtNextLogin: true,
+    });
+    expect(page.find('#reset-new-password').exists()).toBe(false);
   });
 });

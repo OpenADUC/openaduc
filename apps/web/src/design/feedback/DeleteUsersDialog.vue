@@ -54,7 +54,8 @@ watch(
 
 async function runDeletes(): Promise<void> {
   if (!confirmed.value) return;
-  emit('done', await run());
+  const deleted = await run(runDeletes);
+  if (deleted) emit('done', deleted);
 }
 
 function close(): void {
