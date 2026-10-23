@@ -3,7 +3,7 @@ import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryOu } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
-import { memberOfArray } from './userCache.js';
+import { memberOfArray, rawValuesArray } from './userCache.js';
 
 /**
  * Upsert an OU into the cache. The unique key is
@@ -55,10 +55,11 @@ export async function markOusStale(
 }
 
 /**
- * Wipe and rebuild the user_group_memberships join table from
- * `memberOf` arrays in user cache rows. Volumes here are small enough
- * (low tens of thousands) that this is simpler than incremental
- * patching and always correct.
+ * Wipe and rebuild the membership join tables: user_group_memberships from
+ * `memberOf` arrays in user cache rows, group_group_memberships from
+ * `member` arrays in group cache rows. Volumes here are small enough (low
+ * tens of thousands) that this is simpler than incremental patching and
+ * always correct.
  */
 export async function rebuildMemberships(
   db: Kysely<DB>,
@@ -68,7 +69,8 @@ export async function rebuildMemberships(
   // never an empty table between the delete and the insert.
   return db.transaction().execute(async (trx) => {
     await trx.deleteFrom('user_group_memberships').where('provider_id', '=', providerId).execute();
-    const result = await sql<{ count: string }>`
+    await trx.deleteFrom('group_group_memberships').where('provider_id', '=', providerId).execute();
+    const users = await sql<{ count: string }>`
     WITH inserted AS (
       INSERT INTO user_group_memberships (provider_id, user_object_guid, group_object_guid, direct, synced_at)
       SELECT
@@ -90,7 +92,23 @@ export async function rebuildMemberships(
     )
     SELECT COUNT(*)::text AS count FROM inserted
   `.execute(trx);
-    const row = result.rows[0];
-    return { count: row ? Number(row.count) : 0 };
+    const groups = await sql<{ count: string }>`
+    WITH inserted AS (
+      INSERT INTO group_group_memberships (provider_id, group_object_guid, member_group_object_guid, synced_at)
+      SELECT g.provider_id, g.object_guid, m.object_guid, now()
+      FROM group_cache_records g
+      CROSS JOIN LATERAL jsonb_array_elements_text(${rawValuesArray('g.raw_attributes_json', 'member')}) AS member_dn
+      JOIN group_cache_records m
+        ON m.provider_id = g.provider_id
+        AND lower(m.distinguished_name) = lower(member_dn)
+      WHERE g.provider_id = ${providerId}
+        AND g.deleted_at IS NULL
+        AND m.deleted_at IS NULL
+      ON CONFLICT DO NOTHING
+      RETURNING 1
+    )
+    SELECT COUNT(*)::text AS count FROM inserted
+  `.execute(trx);
+    return { count: Number(users.rows[0]?.count ?? 0) + Number(groups.rows[0]?.count ?? 0) };
   });
 }

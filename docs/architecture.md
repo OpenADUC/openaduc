@@ -57,6 +57,7 @@ Key tables:
 | `audit_events`                                                        | Append-only. Database triggers reject `UPDATE`, `DELETE`, `TRUNCATE`. Indexed on timestamp, actor, target, correlation id. |
 | `user_cache_records`, `group_cache_records`, `computer_cache_records` | Local cache of LDAP objects, refreshed by sync tasks. Search/list endpoints read from these for speed.                     |
 | `user_group_memberships`                                              | Materialized user→group edges for fast membership queries.                                                                 |
+| `group_group_memberships`                                             | Materialized group→group edges (groups nested directly in other groups), rebuilt alongside `user_group_memberships`.       |
 | `directory_ous`                                                       | OU hierarchy cache.                                                                                                        |
 | `directory_sync_tasks`                                                | One row per (directory, task type). Schedule, last run, last status, cursor for delta syncs.                               |
 | `app_settings`                                                        | Operational key/value config (timeouts, schedules, branding).                                                              |

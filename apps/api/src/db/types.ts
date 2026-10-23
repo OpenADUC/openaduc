@@ -165,6 +165,13 @@ export interface UserGroupMembershipsTable {
   synced_at: TimestampDefault;
 }
 
+export interface GroupGroupMembershipsTable {
+  provider_id: number;
+  group_object_guid: string;
+  member_group_object_guid: string;
+  synced_at: TimestampDefault;
+}
+
 export interface AuditEventsTable {
   id: Generated<number>;
   timestamp: TimestampDefault;
@@ -388,6 +395,7 @@ export interface DB {
   directory_group_policies: DirectoryGroupPoliciesTable;
   directory_group_policy_links: DirectoryGroupPolicyLinksTable;
   user_group_memberships: UserGroupMembershipsTable;
+  group_group_memberships: GroupGroupMembershipsTable;
   audit_events: AuditEventsTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;
