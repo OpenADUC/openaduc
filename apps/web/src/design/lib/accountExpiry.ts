@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // An account expiry as the operator thinks of it: the last day it works.
+import { fmtAbsolute } from './format.js';
 
 /**
  * The expiry that lets the account work through `day` (a local calendar
@@ -15,8 +16,20 @@ export function lastDayOf(expiresAt: string): Date {
   return new Date(last.getFullYear(), last.getMonth(), last.getDate());
 }
 
-export function expiryText(expiresAt: string | null): string {
-  return expiresAt
-    ? `expires at the end of ${lastDayOf(expiresAt).toLocaleDateString()}`
-    : 'never expires';
+/**
+ * When an account with this expiry stops working, to follow "at": the end
+ * of its last day when it expires at local midnight (as ADUC and OpenADUC
+ * write it), else the exact time another tool set.
+ */
+export function expiryMoment(expiresAt: string): string {
+  const d = new Date(expiresAt);
+  const midnight =
+    d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
+  return midnight ? `the end of ${lastDayOf(expiresAt).toLocaleDateString()}` : fmtAbsolute(d);
+}
+
+/** "expires at …" or "never expires"; `capital` starts it with a capital. */
+export function expiryText(expiresAt: string | null, capital = false): string {
+  const text = expiresAt ? `expires at ${expiryMoment(expiresAt)}` : 'never expires';
+  return capital ? text[0]!.toUpperCase() + text.slice(1) : text;
 }
