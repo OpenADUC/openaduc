@@ -9,7 +9,10 @@ import { computed, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
-import { useDirectorySearch } from '../../design/composables/useDirectorySearch.js';
+import {
+  useDirectorySearch,
+  type SearchKind,
+} from '../../design/composables/useDirectorySearch.js';
 
 defineProps<{ windowId: number }>();
 defineEmits<{ (e: 'close'): void }>();
@@ -17,16 +20,20 @@ const store = useOldSchool();
 const finder = useDirectorySearch({ pageSize: 100 });
 const { loading } = finder;
 
-type Kind = 'user' | 'group' | 'computer';
-const KINDS = (
-  [
-    { kind: 'user', label: 'Users' },
-    { kind: 'group', label: 'Groups' },
-    { kind: 'computer', label: 'Computers' },
-  ] as const
-).filter((k) => finder.canSearch(k.kind));
+type Kind = Exclude<SearchKind, 'ou'>;
+const ALL_KINDS: { kind: Kind; label: string }[] = [
+  { kind: 'user', label: 'Users' },
+  { kind: 'group', label: 'Groups' },
+  { kind: 'computer', label: 'Computers' },
+];
+const kinds = computed(() => ALL_KINDS.filter((k) => finder.canSearch(k.kind)));
 
-const kind = ref<Kind>(KINDS[0]?.kind ?? 'user');
+const kind = ref<Kind>(kinds.value[0]?.kind ?? 'user');
+watch(kinds, (readable) => {
+  if (readable.length > 0 && !readable.some((k) => k.kind === kind.value)) {
+    kind.value = readable[0]!.kind;
+  }
+});
 const q = ref('');
 
 interface Hit {
@@ -100,7 +107,7 @@ function openHit(h: Hit): void {
       <div class="os-form" style="grid-template-columns: 110px minmax(0, 1fr)">
         <label class="label" for="findKind">Find:</label>
         <select id="findKind" class="os-select" v-model="kind">
-          <option v-for="k in KINDS" :key="k.kind" :value="k.kind">{{ k.label }}</option>
+          <option v-for="k in kinds" :key="k.kind" :value="k.kind">{{ k.label }}</option>
         </select>
         <label class="label" for="findName">Name:</label>
         <input id="findName" class="os-input" v-model="q" placeholder="Start typing…" />

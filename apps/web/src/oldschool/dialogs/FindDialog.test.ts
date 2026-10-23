@@ -57,8 +57,14 @@ describe('the Old School Find dialog', () => {
     expect(dialog.text()).not.toContain('No matches');
   });
 
-  it('offers only what the operator can read', async () => {
+  it('offers only what the operator can read, as that changes', async () => {
     const { dialog } = await find('sam', ['read:user', 'read:computer']);
-    expect(dialog.findAll('#findKind option').map((o) => o.text())).toEqual(['Users', 'Computers']);
+    const offered = () => dialog.findAll('#findKind option').map((o) => o.text());
+    expect(offered()).toEqual(['Users', 'Computers']);
+
+    useAuthStore().actor = { capabilities: ['read:computer'] } as never;
+    await flushPromises();
+    expect(offered()).toEqual(['Computers']);
+    expect((dialog.get('#findKind').element as HTMLSelectElement).value).toBe('computer');
   });
 });
