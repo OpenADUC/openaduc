@@ -15,12 +15,12 @@ import { useToast } from 'primevue/usetoast';
 import { api } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
 import type { GroupMember, UserSummary } from '@openaduc/shared';
-import LiveBadge from '../design/primitives/LiveBadge.vue';
 import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
-import { useStickyHeader } from './_detail/useStickyHeader';
+import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
+import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { membershipOf, useGroupMembership } from '../design/composables/useGroupMembership.js';
 
@@ -28,12 +28,6 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
-
-// Drives the compact-on-scroll hero. `setHero` is bound to the hero
-// section's :ref. `compact` flips on scroll; `heroHeight` tracks the
-// rendered height so the Members card's sticky head pins flush with
-// the hero's current bottom edge.
-const { setHero, compact, heroHeight } = useStickyHeader();
 
 // Member-add dialog state — opens on "Add member", searches the user
 // directory, and applies the selected user via the group-membership endpoint.
@@ -161,226 +155,227 @@ function memberInitials(m: GroupMember): string {
 }
 void memberInitials;
 
-// Render the DN with the leading CN= segment stripped so the chip doesn't
-// repeat the heading. Falls back to the full DN when the CN doesn't match
-// the visible group name. Mirrors the User detail page's `dnPath`.
-const dnPath = computed(() => {
-  const dn = group.value?.distinguishedName ?? '';
-  if (!dn) return '';
-  const m = /^CN=([^,]+),(.*)$/i.exec(dn);
-  if (!m) return dn;
-  const cn = m[1]!.replace(/\\,/g, ',');
-  const rest = m[2]!;
-  const heading = (group.value?.name ?? group.value?.samAccountName ?? '').trim();
-  return cn === heading ? rest : dn;
+// ---- Header and tabs -------------------------------------------------------
+
+// The email when there is one, else the pre-Windows 2000 name.
+const identifier = computed(() => {
+  const g = group.value;
+  if (g?.email) return { text: g.email, copyLabel: 'email' };
+  return g?.samAccountName ? { text: g.samAccountName } : null;
 });
 
-const mailtoHref = computed(() => (group.value?.email ? `mailto:${group.value.email}` : null));
+const links = computed<ObjectLink[]>(() =>
+  group.value?.email
+    ? [
+        {
+          label: 'Email',
+          icon: 'pi-envelope',
+          href: `mailto:${group.value.email}`,
+          title: 'Send email',
+        },
+      ]
+    : [],
+);
 
-const copied = ref<{ email: boolean; dn: boolean }>({ email: false, dn: false });
-async function copy(kind: 'email' | 'dn'): Promise<void> {
-  const g = group.value;
-  if (!g) return;
-  const text = kind === 'email' ? (g.email ?? '') : g.distinguishedName;
-  if (!text) return;
-  try {
-    await navigator.clipboard.writeText(text);
-    copied.value = { ...copied.value, [kind]: true };
-    setTimeout(() => {
-      copied.value = { ...copied.value, [kind]: false };
-    }, 1800);
-  } catch {
-    toast.add({ severity: 'warn', summary: 'Clipboard unavailable', life: 2500 });
-  }
-}
+type TabId = 'overview' | 'members';
+const tabs = computed<ObjectPageTab<TabId>[]>(() => [
+  { id: 'overview', label: 'Overview', icon: 'pi-th-large', visible: true, iconOnly: true },
+  { id: 'members', label: 'Members', icon: 'pi-users', count: memberCount.value, visible: true },
+]);
+
+const actions = computed<ObjectAction[]>(() => [
+  {
+    label: 'Add member…',
+    icon: 'pi pi-user-plus',
+    capability: 'write:group.membership',
+    disabled: pending.value !== null,
+    run: openAdd,
+  },
+]);
+
+const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
 </script>
 
 <template>
   <Toast />
-  <div
-    class="page-inner group-detail-page"
-    :style="{ '--detail-sticky-offset': `${heroHeight}px` }"
-  >
+  <div class="page-inner group-detail-page">
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
 
     <DetailLoading v-if="!group && loading">Loading group…</DetailLoading>
-    <div v-if="group" class="detail-stack">
-      <!-- Hero. Mirrors the User detail layout: avatar (rounded square so
-           a group reads as a different class of thing than a person at a
-           glance) + name/badges + email copy line + DN copy chip + email
-           launcher. The aside on the right keeps LiveBadge + refresh
-           since this view has no tab bar to host them. -->
-      <section :ref="setHero" class="detail-hero" :class="{ 'is-compact': compact }">
-        <Avatar
-          :name="group.name ?? group.samAccountName"
-          :seed="group.samAccountName ?? group.distinguishedName"
-          :size="compact ? 28 : 64"
-          shape="rounded"
-        />
+    <ObjectPageLayout
+      v-if="group"
+      kind="group"
+      :name="group.name ?? group.distinguishedName"
+      :avatar="{
+        name: group.name ?? group.samAccountName,
+        seed: group.samAccountName ?? group.distinguishedName,
+        shape: 'rounded',
+      }"
+      :subtitle="group.description !== group.name ? group.description : null"
+      :identifier="identifier"
+      :dn="group.distinguishedName"
+      :links="links"
+      :tabs="tabs"
+      fallback-tab="overview"
+      :actions="actions"
+      :actions-busy="adding"
+      :refreshing="refreshing"
+      :freshness="group.freshness"
+      @refresh="refreshFromAd"
+    >
+      <template #badges>
+        <span v-if="group.groupType === 'security'" class="badge badge-blue badge-lg">
+          <i class="pi pi-shield" /> security
+        </span>
+        <span v-else-if="group.groupType === 'distribution'" class="badge badge-violet badge-lg">
+          <i class="pi pi-envelope" /> distribution
+        </span>
+        <span v-if="group.groupScope" class="badge badge-muted badge-lg mono">{{
+          group.groupScope
+        }}</span>
+      </template>
 
-        <div class="detail-hero-main">
-          <div class="detail-hero-row">
-            <h1 class="detail-hero-name">{{ group.name ?? group.distinguishedName }}</h1>
-            <span v-if="group.groupType === 'security'" class="badge badge-blue">
-              <i class="pi pi-shield" /> security
-            </span>
-            <span v-else-if="group.groupType === 'distribution'" class="badge badge-violet">
-              <i class="pi pi-envelope" /> distribution
-            </span>
-            <span v-if="group.groupScope" class="badge badge-muted mono">{{
-              group.groupScope
-            }}</span>
-          </div>
+      <template #default="{ tab: activeTab, select: selectTab }">
+        <div v-if="activeTab === 'overview'" class="detail-grid">
+          <Card title="Group">
+            <dl class="kv-grid">
+              <dt class="fld-label">Name</dt>
+              <dd>{{ group.name ?? '—' }}</dd>
+              <dt class="fld-label">Pre-Windows 2000 name</dt>
+              <dd class="mono">{{ group.samAccountName ?? '—' }}</dd>
+              <dt class="fld-label">Type</dt>
+              <dd>{{ group.groupType ?? '—' }}</dd>
+              <dt class="fld-label">Scope</dt>
+              <dd>{{ group.groupScope ?? '—' }}</dd>
+              <dt class="fld-label">Email</dt>
+              <dd class="mono">{{ group.email ?? '—' }}</dd>
+              <dt class="fld-label">Description</dt>
+              <dd>{{ group.description ?? '—' }}</dd>
+            </dl>
+          </Card>
 
-          <div
-            v-if="group.description && group.description !== group.name"
-            class="detail-hero-title"
-          >
-            {{ group.description }}
-          </div>
-
-          <!-- Primary identifier line. Prefers the email; falls back to
-               the sAMAccountName so there's always one copy-able line. -->
-          <button
-            v-if="group.email"
-            type="button"
-            class="copybtn copybtn-inline"
-            :title="copied.email ? 'Copied!' : 'Copy email'"
-            @click="copy('email')"
-          >
-            <i :class="copied.email ? 'pi pi-check' : 'pi pi-copy'" />
-            <span class="mono">{{ group.email }}</span>
-          </button>
-          <div v-else-if="group.samAccountName" class="detail-hero-upn mono">
-            {{ group.samAccountName }}
-          </div>
-
-          <div class="detail-hero-actions-row">
-            <a v-if="mailtoHref" class="copybtn launcher" :href="mailtoHref" title="Send email">
-              <i class="pi pi-envelope" />
-              <span>Email</span>
-            </a>
-            <button
-              type="button"
-              class="copybtn launcher hero-path"
-              :title="copied.dn ? 'Copied!' : 'Copy distinguished name'"
-              @click="copy('dn')"
-            >
-              <i :class="copied.dn ? 'pi pi-check' : 'pi pi-sitemap'" />
-              <span class="mono hero-path-text">{{ dnPath }}</span>
-            </button>
-          </div>
-        </div>
-
-        <aside class="detail-hero-aside">
-          <div class="freshness-row">
-            <LiveBadge
-              :live-at="group.freshness.liveRefreshedAt"
-              :cached-at="group.freshness.cachedAt"
-              variant="pill"
-            />
-            <Button
-              icon="pi pi-refresh"
-              text
-              severity="secondary"
-              size="small"
-              :loading="refreshing"
-              title="Refresh from directory"
-              @click="refreshFromAd"
-            />
-          </div>
-        </aside>
-      </section>
-
-      <!-- Members title bar. Sibling of the hero rather than the Card's
-           own header so it pins cleanly via the same pattern as the User
-           page's tab bar — sticky-inside-Card was getting clipped by the
-           card's layout. -->
-      <nav class="members-bar" aria-label="Members section">
-        <div class="members-bar-title">
-          <h3>Members ({{ memberCount }})</h3>
-          <span class="members-bar-sub">from cache · sync rebuilds memberships nightly</span>
-        </div>
-        <div class="members-bar-spacer" />
-        <Button
-          v-if="canManage"
-          label="Add member"
-          icon="pi pi-user-plus"
-          size="small"
-          @click="openAdd"
-        />
-      </nav>
-
-      <Card flush>
-        <EmptyState
-          v-if="memberCount === 0"
-          icon="pi pi-users"
-          title="No members in cache"
-          message="Run a sync if this seems wrong, or add a member to get started."
-        >
-          <template #actions>
-            <Button v-if="canManage" label="Add member" icon="pi pi-user-plus" @click="openAdd" />
-          </template>
-        </EmptyState>
-        <DataTable
-          v-else
-          :value="group.members"
-          data-key="id"
-          @row-click="openMember"
-          class="members-table"
-        >
-          <Column header="Member" :style="{ minWidth: '260px' }">
-            <template #body="{ data }">
-              <div class="user-cell">
-                <Avatar
-                  :name="data.displayName ?? data.samAccountName"
-                  :seed="data.samAccountName"
-                  :size="26"
-                />
-                <div class="user-cell-stack">
-                  <div class="user-name">
-                    {{ data.displayName ?? data.samAccountName }}
-                    <span
-                      v-if="data.passwordNeverExpires"
-                      class="badge badge-violet name-flag"
-                      title="never expires"
-                    >
-                      <i class="pi pi-shield" /> never expires
-                    </span>
-                  </div>
-                  <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
-                </div>
-              </div>
+          <Card>
+            <template #head>
+              <h3 class="dc-card-title">
+                Members
+                <span class="ds-tab-count mono">{{ memberCount }}</span>
+              </h3>
             </template>
-          </Column>
-          <Column header="Status" :style="{ width: '140px' }">
-            <template #body="{ data }">
-              <StatusBadge :user="data" />
-            </template>
-          </Column>
-          <Column header="Email" :style="{ minWidth: '220px' }">
-            <template #body="{ data }">
-              <span class="cell-mono">{{ data.email ?? '—' }}</span>
-            </template>
-          </Column>
-          <Column :style="{ width: '110px' }" header-style="text-align: right">
-            <template #body="{ data }">
+            <template #actions>
               <Button
-                v-if="canManage"
-                label="Remove"
-                icon="pi pi-times"
-                severity="danger"
-                size="small"
+                label="View all"
                 text
-                :loading="removingMemberId === (data as GroupMember).id"
-                :disabled="pending !== null"
-                @click.stop="startRemove(data as GroupMember)"
+                size="small"
+                severity="secondary"
+                @click="selectTab('members')"
               />
             </template>
-          </Column>
-        </DataTable>
-      </Card>
-    </div>
+            <EmptyState
+              v-if="memberCount === 0"
+              icon="pi pi-users"
+              title="No members in cache"
+              compact
+            />
+            <ul v-else class="member-list">
+              <li v-for="m in membersTop" :key="m.id">
+                <router-link
+                  :to="{ name: 'user-detail', params: { id: m.id } }"
+                  class="member-link"
+                >
+                  <Avatar
+                    :name="m.displayName ?? m.samAccountName"
+                    :seed="m.samAccountName"
+                    :size="22"
+                  />
+                  <span>{{ m.displayName ?? m.samAccountName }}</span>
+                </router-link>
+              </li>
+              <li v-if="memberCount > membersTop.length" class="hint">
+                + {{ memberCount - membersTop.length }} more
+              </li>
+            </ul>
+          </Card>
+        </div>
+
+        <Card
+          v-else-if="activeTab === 'members'"
+          title="Members"
+          sub="From cache · sync rebuilds memberships nightly"
+          flush
+        >
+          <template v-if="canManage" #actions>
+            <Button label="Add member" icon="pi pi-user-plus" size="small" @click="openAdd" />
+          </template>
+          <EmptyState
+            v-if="memberCount === 0"
+            icon="pi pi-users"
+            title="No members in cache"
+            message="Run a sync if this seems wrong, or add a member to get started."
+          >
+            <template #actions>
+              <Button v-if="canManage" label="Add member" icon="pi pi-user-plus" @click="openAdd" />
+            </template>
+          </EmptyState>
+          <DataTable
+            v-else
+            :value="group.members"
+            data-key="id"
+            @row-click="openMember"
+            class="members-table"
+          >
+            <Column header="Member" :style="{ minWidth: '260px' }">
+              <template #body="{ data }">
+                <div class="user-cell">
+                  <Avatar
+                    :name="data.displayName ?? data.samAccountName"
+                    :seed="data.samAccountName"
+                    :size="26"
+                  />
+                  <div class="user-cell-stack">
+                    <div class="user-name">
+                      {{ data.displayName ?? data.samAccountName }}
+                      <span
+                        v-if="data.passwordNeverExpires"
+                        class="badge badge-violet name-flag"
+                        title="never expires"
+                      >
+                        <i class="pi pi-shield" /> never expires
+                      </span>
+                    </div>
+                    <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
+                  </div>
+                </div>
+              </template>
+            </Column>
+            <Column header="Status" :style="{ width: '140px' }">
+              <template #body="{ data }">
+                <StatusBadge :user="data" />
+              </template>
+            </Column>
+            <Column header="Email" :style="{ minWidth: '220px' }">
+              <template #body="{ data }">
+                <span class="cell-mono">{{ data.email ?? '—' }}</span>
+              </template>
+            </Column>
+            <Column :style="{ width: '110px' }" header-style="text-align: right">
+              <template #body="{ data }">
+                <Button
+                  v-if="canManage"
+                  label="Remove"
+                  icon="pi pi-times"
+                  severity="danger"
+                  size="small"
+                  text
+                  :loading="removingMemberId === (data as GroupMember).id"
+                  :disabled="pending !== null"
+                  @click.stop="startRemove(data as GroupMember)"
+                />
+              </template>
+            </Column>
+          </DataTable>
+        </Card>
+      </template>
+    </ObjectPageLayout>
 
     <!-- Add-member dialog -->
     <Dialog
@@ -444,277 +439,74 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* --detail-sticky-offset is set inline (reactive to hero height) so
-     the Members card's sticky head pins flush with the hero's current
-     bottom edge, even mid-shrink-animation. */
   /* Disable browser scroll anchoring inside the detail page — see the
      User detail page for rationale. */
   overflow-anchor: none;
 }
 
-.detail-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-/* Hero — mirrors UserDetailView: 3-column grid (avatar | main | aside)
-   so the layout is consistent across people / groups / computers. */
-.detail-hero {
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--accent) 5%, var(--surface)),
-    var(--surface)
-  );
+.detail-grid {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
   align-items: start;
-  gap: 16px;
-  min-width: 0;
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  transition:
-    padding 200ms ease,
-    gap 200ms ease,
-    border-radius 200ms ease,
-    box-shadow 200ms ease;
 }
 
-/* Compact: padding tightens, avatar shrinks via reactive :size prop,
-   secondary rows collapse, aside collapses to zero. Corners square off
-   so the pinned hero merges with the Members bar below. */
-.detail-hero.is-compact {
-  padding: 6px 14px;
+@media (max-width: 1100px) {
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
   align-items: center;
-  gap: 10px;
-  border-radius: 0;
-  border-bottom: 0;
-  box-shadow: none;
 }
 
-.detail-hero-main {
+.kv-grid dt {
+  color: var(--text-3);
+}
+
+.kv-grid dd {
+  margin: 0;
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Counts beside card titles, styled like the tab bar's. */
+.ds-tab-count {
+  font-size: 11px;
+  margin-left: 6px;
+  color: var(--text-3);
+  background: var(--surface-3);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.detail-hero-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.detail-hero-name {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  color: var(--text);
-  transition: font-size 200ms ease;
-}
-
-.detail-hero.is-compact .detail-hero-name {
-  font-size: 14px;
-}
-
-/* Secondary rows fold to zero in compact. */
-.detail-hero-title,
-.detail-hero-upn,
-.detail-hero-actions-row,
-.copybtn-inline {
-  overflow: hidden;
-  max-height: 60px;
-  opacity: 1;
-  transition:
-    max-height 200ms ease,
-    opacity 150ms ease,
-    margin 200ms ease;
-}
-
-.detail-hero.is-compact .detail-hero-title,
-.detail-hero.is-compact .detail-hero-upn,
-.detail-hero.is-compact .detail-hero-actions-row,
-.detail-hero.is-compact .copybtn-inline {
-  max-height: 0;
-  opacity: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
-.detail-hero-title {
-  color: var(--text-2);
-  font-size: 13px;
-  margin-top: 4px;
-}
-
-.detail-hero-upn {
-  color: var(--text-3);
-  font-size: 12.5px;
-  margin-top: 2px;
-}
-
-.detail-hero-actions-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: 6px;
-  margin-top: 8px;
+  font-size: 13px;
 }
 
-/* Copy / launcher chips — mirror UserDetailView. */
-.copybtn {
+.member-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
-  font-size: 12px;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  text-decoration: none;
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.copybtn:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--surface-3);
-}
-
-.copybtn .mono {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.hero-path {
-  flex: 1 1 auto;
-  min-width: 120px;
-  max-width: 100%;
-  justify-content: flex-start;
-}
-
-.hero-path .hero-path-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  flex: 1 1 auto;
-}
-
-.copybtn-inline {
-  height: auto;
-  padding: 2px 0;
-  margin-top: 2px;
-  border: 0;
-  background: transparent;
-  color: var(--text-3);
-  font-size: 12.5px;
-}
-
-.copybtn-inline:hover {
-  background: transparent;
-  color: var(--text);
-  border-color: transparent;
-}
-
-.copybtn-inline .mono {
-  font-size: 12.5px;
-}
-
-.detail-hero-aside {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
   gap: 8px;
-  overflow: hidden;
-  max-width: 280px;
-  opacity: 1;
-  transition:
-    max-width 200ms ease,
-    opacity 150ms ease;
-}
-
-.detail-hero.is-compact .detail-hero-aside {
-  max-width: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-@media (max-width: 767.98px) {
-  .detail-hero {
-    grid-template-columns: auto 1fr;
-  }
-  .detail-hero-aside {
-    grid-column: 1 / -1;
-    align-items: flex-start;
-  }
-}
-
-/* Members title bar. Side + bottom border (no top, no rounded
-   corners) so the bar reads as a continuation of the cards above
-   and below: at full hero, the hero's and data card's left/right
-   borders line up with the bar's; once the compact hero pins above,
-   the no-top-border bar merges into it as one banner. The
-   pronounced drop shadow makes it clear that the member list
-   scrolls beneath the pinned unit. */
-.members-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: var(--detail-sticky-offset, 40px);
-  z-index: 5;
-  box-shadow: 0 10px 18px -10px rgba(0, 0, 0, 0.28);
-}
-
-.members-bar-title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.members-bar-title h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
   color: var(--text);
-  letter-spacing: -0.01em;
+  text-decoration: none;
 }
 
-.members-bar-sub {
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-
-.members-bar-spacer {
-  flex: 1 1 auto;
-}
-
-.freshness-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.member-link:hover {
+  color: var(--accent);
 }
 
 .user-cell {
@@ -758,10 +550,6 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-2);
-}
-
-:deep(.members-table) {
-  border: 1px solid var(--border);
 }
 
 /* Add-member dialog ------------------------------------------------------- */
