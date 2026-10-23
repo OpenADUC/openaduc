@@ -96,8 +96,10 @@ import {
 } from './normalize.js';
 import {
   adDurationToMs,
+  dateToFiletime,
   defaultComputerPassword,
   encodeUnicodePassword,
+  FILETIME_NEVER,
   escapeLdapFilter,
   isLocked,
   objectGuidFromString,
@@ -746,6 +748,41 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 
   enableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult> {
     return this.toggleAccountDisable('user', userId, ctx, false);
+  }
+
+  async setAccountExpiry(
+    userId: DirectoryObjectIdentifier,
+    expiresAt: Date | null,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const target = await this.findUserEntry(client, userId);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
+        const before = normalizeUser(target);
+        await client.modify(
+          before.distinguishedName,
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({
+              type: 'accountExpires',
+              values: [expiresAt ? dateToFiletime(expiresAt) : FILETIME_NEVER],
+            }),
+          }),
+        );
+        const afterEntry = await this.findUserEntry(client, userId);
+        const after = afterEntry ? normalizeUser(afterEntry) : null;
+        return {
+          ok: true,
+          before: { accountExpiresAt: before.accountExpiresAt?.toISOString() ?? null },
+          after: after ? { accountExpiresAt: after.accountExpiresAt?.toISOString() ?? null } : {},
+        };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
   }
 
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult> {
@@ -2589,9 +2626,8 @@ function buildAttributeChanges(patch: UserAttributePatch): Change[] {
       );
     }
   }
-  // managerDn / accountExpiresAt are typed on UserAttributePatch but not in the
-  // MVP edit allowlist — they need extra validation (cycle check for manager;
-  // FILETIME conversion for account expiry). Excluded here intentionally.
+  // managerDn is typed on UserAttributePatch but not in the MVP edit
+  // allowlist: it needs a cycle check. Excluded here intentionally.
   return changes;
 }
 

@@ -144,6 +144,14 @@ export function filetimeToDate(value: string | number | null | undefined): Date 
   return new Date(ms);
 }
 
+/** A Date as a Windows FILETIME string, for writing attributes like accountExpires. */
+export function dateToFiletime(date: Date): string {
+  return ((BigInt(date.getTime()) + FILETIME_TO_UNIX_EPOCH_DIFF_MS) * 10000n).toString();
+}
+
+/** What AD writes to accountExpires for an account that never expires. */
+export const FILETIME_NEVER = FILETIME_MAX.toString();
+
 // ---- userAccountControl ----------------------------------------------------
 
 // Subset of UAC flags we care about for the MVP. Full table at MS-ADTS §2.2.16.

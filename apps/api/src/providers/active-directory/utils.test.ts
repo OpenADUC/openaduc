@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   adDurationToMs,
+  dateToFiletime,
   encodeUnicodePassword,
   escapeDnValue,
   escapeLdapFilter,
@@ -88,6 +89,14 @@ describe('filetimeToDate', () => {
 
   it('returns null for malformed input', () => {
     expect(filetimeToDate('not-a-number')).toBeNull();
+  });
+});
+
+describe('dateToFiletime', () => {
+  it('is the inverse of filetimeToDate', () => {
+    const date = new Date('2031-03-01T05:00:00.000Z');
+    expect(filetimeToDate(dateToFiletime(date))?.toISOString()).toBe(date.toISOString());
+    expect(dateToFiletime(new Date(0))).toBe('116444736000000000');
   });
 });
 
