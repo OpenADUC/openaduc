@@ -66,6 +66,7 @@ import {
   type RoleGroup,
 } from '../../lib/groupDeletion.js';
 import { ridOf } from '../../lib/sid.js';
+import { computerWriteBlock, describeComputerWriteBlock } from '../../lib/computerWrites.js';
 import {
   BINARY_ATTRS,
   COMPUTER_ATTRS,
@@ -790,6 +791,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       try {
         const target = await this.findAccountEntry(client, kind, id);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: `${kind} not found` };
+        const refused = kind === 'computer' && disable ? protectedComputer(target) : null;
+        if (refused) return refused;
         const dn = asString(target.distinguishedName) ?? target.dn;
         const uacNum = userAccountControlOf(target);
         if (!Number.isFinite(uacNum)) {
@@ -854,6 +857,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       try {
         const target = await this.findComputerEntry(client, computerId);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'computer not found' };
+        const refused = protectedComputer(target);
+        if (refused) return refused;
         const before = normalizeComputer(target);
         if (!before.samAccountName) {
           return {
@@ -1079,6 +1084,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       try {
         const target = await this.findAccountEntry(client, kind, id);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: `${kind} not found` };
+        const refused = kind === 'computer' ? protectedComputer(target) : null;
+        if (refused) return refused;
         const dn = asString(target.distinguishedName) ?? target.dn;
         const currentParent = parentDn(dn);
         // Compare case-insensitively — AD treats DN components as case-
@@ -2685,6 +2692,14 @@ function groupSnapshot(group: DirectoryGroup): Record<string, unknown> {
 }
 
 type AccountKind = 'user' | 'computer';
+
+/** The refusal for a domain controller or critical computer, or null. */
+function protectedComputer(entry: Entry): MutationResult | null {
+  const block = computerWriteBlock(entry);
+  return block
+    ? { ok: false, reason: 'policy_violation', errorMessage: describeComputerWriteBlock(block) }
+    : null;
+}
 
 /** An entry's userAccountControl as a number; NaN when unparseable. */
 function userAccountControlOf(entry: Entry): number {

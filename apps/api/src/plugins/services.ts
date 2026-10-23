@@ -16,6 +16,7 @@ import { SyncTaskScheduler } from '../services/syncTasks/scheduler.js';
 import { SyncTaskService } from '../services/syncTasks/service.js';
 import { LoggingNotificationDispatcher } from '../services/syncTasks/notifications.js';
 import { TeamsNotifierService } from '../services/teamsNotifier.js';
+import { ComputerLiveRefreshService } from '../services/computerLiveRefresh.js';
 import { UserLiveRefreshService } from '../services/userLiveRefresh.js';
 import { ProviderFactory } from '../providers/registry.js';
 
@@ -38,6 +39,7 @@ declare module 'fastify' {
       syncTasks: SyncTaskService;
       teams: TeamsNotifierService;
       userLiveRefresh: UserLiveRefreshService;
+      computerLiveRefresh: ComputerLiveRefreshService;
     };
   }
 }
@@ -53,6 +55,7 @@ export default fp(async (app) => {
   const directoryConfig = new DirectoryConfigService(app.db, env);
   const providers = new ProviderFactory(directoryConfig, env);
   const userLiveRefresh = new UserLiveRefreshService(app.db);
+  const computerLiveRefresh = new ComputerLiveRefreshService(app.db);
   const syncTasks = new SyncTaskService(app.db);
   const notifier = new LoggingNotificationDispatcher(app.log);
 
@@ -97,6 +100,7 @@ export default fp(async (app) => {
     syncTasks,
     teams,
     userLiveRefresh,
+    computerLiveRefresh,
   });
 
   // Start the sync scheduler once the API is ready (after listen). Doing

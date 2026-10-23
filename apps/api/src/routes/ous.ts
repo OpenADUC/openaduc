@@ -13,6 +13,7 @@ import {
   type OuContentsResponse,
   type OuListResponse,
 } from '@openaduc/shared';
+import { computerWriteBlock } from '../lib/computerWrites.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
 import { Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdn, parentDn } from '../providers/active-directory/normalize.js';
@@ -161,6 +162,8 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
             'dns_host_name',
             'operating_system',
             'enabled',
+            sql<unknown>`raw_attributes_json->'userAccountControl'`.as('uac'),
+            sql<unknown>`raw_attributes_json->'isCriticalSystemObject'`.as('critical'),
           ])
           .orderBy('name', 'asc')
           .limit(2000)
@@ -258,6 +261,10 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
           dnsHostName: c.dns_host_name,
           operatingSystem: c.operating_system,
           enabled: c.enabled,
+          writeBlock: computerWriteBlock({
+            userAccountControl: c.uac,
+            isCriticalSystemObject: c.critical,
+          }),
         })),
         linkedGroupPolicies: linkedRows.map((r) => ({
           id: r.id,

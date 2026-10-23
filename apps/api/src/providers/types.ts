@@ -463,7 +463,6 @@ export interface DirectoryProvider {
     targetOuDn: string,
     ctx: WriteContext,
   ): Promise<MutationResult>;
-  // Computer accounts: the same disable, enable and move as a user's.
   enableComputer(computerId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
   disableComputer(
     computerId: DirectoryObjectIdentifier,
@@ -476,6 +475,8 @@ export interface DirectoryProvider {
   ): Promise<MutationResult>;
   // ADUC's Reset Account: set the computer's password to its default (see
   // defaultComputerPassword) so the machine can rejoin under the same name.
+  // Disable, move and reset refuse a domain controller or critical computer
+  // (computerWriteBlock) with `policy_violation`, checked on this bind.
   resetComputerAccount(
     computerId: DirectoryObjectIdentifier,
     ctx: WriteContext,
