@@ -36,7 +36,6 @@ export function useUserMove(options: {
 
   // Reads the account even when the caller has it, so the current OU is
   // where it is now rather than where it was when the caller read it.
-  // Starts at the current OU, so the operator sees where the account is.
   async function load(id: string): Promise<void> {
     const isCurrent = loads.begin();
     user.value = null;
