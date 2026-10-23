@@ -96,7 +96,7 @@ function onCancel(): void {
       :disabled="submitting"
       autocomplete="current-password"
       autofocus
-      @keyup.enter="onConfirm"
+      @keydown.enter="onConfirm"
     />
     <Message v-if="error" severity="error" :closable="false" class="dialog-error">{{
       error
