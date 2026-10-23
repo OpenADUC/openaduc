@@ -4,6 +4,7 @@ import type { DB } from '../db/types.js';
 import type { DirectoryGroup } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
 import { uuidNotIn } from '../lib/sqlSets.js';
+import { rawValuesArray } from './userCache.js';
 
 /**
  * Upsert a group into the cache. Mirrors the user-cache helper. Used by
@@ -124,15 +125,26 @@ export async function reconcileNestedGroups(
 
 /**
  * Drop a group just deleted in AD from list views, with its members and its
- * own memberships, rather than waiting for the next sync. A restore or
- * sync upserts the row, which clears deleted_at again.
+ * own memberships, rather than waiting for the next sync. Its DN also goes
+ * from cached objects' raw memberOf (and parent groups' member), which
+ * membership rebuilds read. A restore or sync upserts the row, which
+ * clears deleted_at again.
  */
 export async function forgetDeletedGroup(
   db: Kysely<DB>,
   providerId: number,
-  objectGuid: string,
+  group: { objectGuid: string; distinguishedName: string },
 ): Promise<void> {
+  const objectGuid = group.objectGuid;
   await db.transaction().execute(async (trx) => {
+    for (const [table, attribute] of [
+      ['user_cache_records', 'memberOf'],
+      ['computer_cache_records', 'memberOf'],
+      ['group_cache_records', 'memberOf'],
+      ['group_cache_records', 'member'],
+    ] as const) {
+      await dropRawValue(trx, table, attribute, providerId, group.distinguishedName);
+    }
     await trx
       .updateTable('group_cache_records')
       .set({ deleted_at: new Date().toISOString() })
@@ -155,4 +167,29 @@ export async function forgetDeletedGroup(
       )
       .execute();
   });
+}
+
+/** Remove `dn` (case-insensitively) from every cached row's raw `attribute`. */
+async function dropRawValue(
+  db: Kysely<DB>,
+  table: 'user_cache_records' | 'computer_cache_records' | 'group_cache_records',
+  attribute: string,
+  providerId: number,
+  dn: string,
+): Promise<void> {
+  const values = rawValuesArray('raw_attributes_json', attribute);
+  await sql`
+    UPDATE ${sql.table(table)}
+    SET raw_attributes_json = jsonb_set(
+      raw_attributes_json,
+      ARRAY[${attribute}]::text[],
+      (SELECT coalesce(jsonb_agg(v), '[]'::jsonb)
+         FROM jsonb_array_elements(${values}) AS v
+        WHERE lower(v #>> '{}') <> lower(${dn}))
+    )
+    WHERE provider_id = ${providerId}
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(${values}) AS e WHERE lower(e) = lower(${dn})
+      )
+  `.execute(db);
 }

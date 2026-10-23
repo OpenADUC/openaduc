@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { GroupScope, GroupType } from '@openaduc/shared';
+import type { GroupDeleteFacts, RoleGroup } from '../lib/groupDeletion.js';
 
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
 // Directory implementation, but routes/services depend on this interface so
@@ -494,10 +495,18 @@ export interface DirectoryProvider {
     input: GroupCreateInput,
     ctx: WriteContext,
   ): Promise<MutationResult & { group?: DirectoryGroup }>;
-  // Delete a group. Re-checks against the live entry that it isn't one AD
-  // relies on (see groupDeleteBlockReason) and returns `policy_violation`
-  // if it is.
-  deleteGroup(groupId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
+  // What decides whether a group may be deleted besides its own entry:
+  // its parent groups and how many accounts have it as primary group.
+  // Reads with the service account.
+  getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts>;
+  // Delete a group. Re-checks against the live entry, on the operator's
+  // bind, that nothing blocks it (see groupDeleteBlock) and returns
+  // `policy_violation` with the reason if something does.
+  deleteGroup(
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+    roleGroups: readonly RoleGroup[],
+  ): Promise<MutationResult>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.

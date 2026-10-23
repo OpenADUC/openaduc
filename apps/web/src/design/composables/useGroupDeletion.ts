@@ -8,16 +8,34 @@
 // pre-Windows 2000 name. A failed delete stays in the dialog.
 
 import { computed, ref } from 'vue';
-import type { GroupDeleteBlockReason, GroupDeletePreflightResponse } from '@openaduc/shared';
+import type { GroupDeletePreflightResponse } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
 
-export const GROUP_BLOCK_TEXT: Record<GroupDeleteBlockReason, string> = {
-  critical_system_object: 'AD marks it as a critical system object.',
-  builtin_group: 'It’s one of the built-in groups AD creates for itself.',
-  protected_group: 'It’s a protected administrative group (adminCount=1).',
-};
+/** Why the group can't be deleted, for the operator; null when it can. */
+export function groupBlockText(p: GroupDeletePreflightResponse): string | null {
+  switch (p.blockedReason) {
+    case null:
+      return null;
+    case 'critical_system_object':
+      return 'AD marks it as a critical system object.';
+    case 'builtin_group':
+      return 'It’s one of the built-in groups AD creates for itself.';
+    case 'protected_group':
+      return 'It’s a protected administrative group (adminCount=1).';
+    case 'role_group':
+      return `This group grants OpenADUC’s ${p.role ?? ''} role. Map the role to another group first.`;
+    case 'member_of_protected_group': {
+      const names = p.memberOf.filter((g) => g.protected).map((g) => g.name ?? g.distinguishedName);
+      return `It’s a member of ${names.join(', ')}, a protected group. Take it out first.`;
+    }
+    case 'primary_group': {
+      const n = p.primaryGroupMembers ?? 0;
+      return `It’s the primary group of ${n} ${n === 1 ? 'account' : 'accounts'}. Give ${n === 1 ? 'it' : 'them'} another primary group first.`;
+    }
+  }
+}
 
 export function useGroupDeletion(options: { onDeleted: () => void | Promise<void> }) {
   const auth = useAuthStore();
@@ -28,10 +46,7 @@ export function useGroupDeletion(options: { onDeleted: () => void | Promise<void
   const deleting = ref(false);
   const error = ref<string | null>(null);
 
-  const blockedText = computed(() => {
-    const reason = preflight.value?.blockedReason;
-    return reason ? GROUP_BLOCK_TEXT[reason] : null;
-  });
+  const blockedText = computed(() => (preflight.value ? groupBlockText(preflight.value) : null));
   const confirmWord = computed(() => preflight.value?.samAccountName ?? '');
   const confirmed = computed(
     () =>

@@ -17,7 +17,11 @@ import {
   type GroupSearchResponse,
   type GroupSummary,
 } from '@openaduc/shared';
-import { describeGroupDeleteBlock, groupDeleteBlockReason } from '../lib/groupDeletion.js';
+import {
+  describeGroupDeleteBlock,
+  groupDeleteBlock,
+  isProtectedGroup,
+} from '../lib/groupDeletion.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
@@ -404,6 +408,11 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
       const live = await provider.getGroup({ kind: 'objectGuid', value: id });
       if (!live) throw NotFound('group not found');
 
+      const facts = await provider.getGroupDeleteFacts(live);
+      const block = groupDeleteBlock(live, facts, await app.services.authorization.roleGroups());
+      const protectedDns = new Set(
+        facts.parents.filter(isProtectedGroup).map((p) => p.distinguishedName.toLowerCase()),
+      );
       const dnsLower = live.memberOfDns.map((d) => d.toLowerCase());
       const cached =
         dnsLower.length === 0
@@ -429,9 +438,12 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
             id: hit?.object_guid ?? null,
             name: hit?.name ?? leafRdnValue(dn),
             distinguishedName: dn,
+            protected: protectedDns.has(dn.toLowerCase()),
           };
         }),
-        blockedReason: groupDeleteBlockReason(live),
+        primaryGroupMembers: facts.primaryGroupMembers,
+        blockedReason: block?.reason ?? null,
+        role: block?.role ?? null,
       });
     },
   });
@@ -457,12 +469,10 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
           'confirmation does not match the group’s pre-Windows 2000 name',
         );
       }
-      // Refuse before writing an audit row: nothing was attempted. The
-      // provider repeats this check on its own read right before the delete.
-      const blocked = groupDeleteBlockReason(live);
-      if (blocked) {
-        throw app.httpErrors.conflict(`cannot delete: ${describeGroupDeleteBlock(blocked)}`);
-      }
+      // A refusal is audited like a failed delete, with the reason. The
+      // provider repeats the check on its own reads right before deleting.
+      const roleGroups = await app.services.authorization.roleGroups();
+      const block = groupDeleteBlock(live, await provider.getGroupDeleteFacts(live), roleGroups);
 
       const result = await withAudit(
         app.services.audit,
@@ -474,10 +484,25 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
           targetType: 'group',
           targetId: live.objectGuid,
           targetDn: live.distinguishedName,
-          metadata: { samAccountName: live.samAccountName, memberCount: live.memberDns.length },
+          metadata: {
+            samAccountName: live.samAccountName,
+            memberCount: live.memberDns.length,
+            ...(block ? { blockedReason: block.reason } : {}),
+          },
         },
         async () => {
-          const r = await provider.deleteGroup({ kind: 'objectGuid', value: id }, ctx(actor, req));
+          if (block) {
+            return {
+              ok: false,
+              errorCode: 'policy_violation',
+              errorMessage: describeGroupDeleteBlock(block),
+            };
+          }
+          const r = await provider.deleteGroup(
+            { kind: 'objectGuid', value: id },
+            ctx(actor, req),
+            roleGroups,
+          );
           return {
             ok: r.ok,
             before: r.before ?? null,
@@ -497,7 +522,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      await forgetDeletedGroup(app.db, provider.id, live.objectGuid);
+      await forgetDeletedGroup(app.db, provider.id, live);
       return { ok: true };
     },
   });

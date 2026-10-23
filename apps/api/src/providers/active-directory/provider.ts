@@ -59,7 +59,13 @@ import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './
 import { withAllMembers } from './memberRange.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
-import { describeGroupDeleteBlock, groupDeleteBlockReason } from '../../lib/groupDeletion.js';
+import {
+  describeGroupDeleteBlock,
+  groupDeleteBlock,
+  type GroupDeleteFacts,
+  type RoleGroup,
+} from '../../lib/groupDeletion.js';
+import { ridOf } from '../../lib/sid.js';
 import {
   BINARY_ATTRS,
   COMPUTER_ATTRS,
@@ -1330,13 +1336,59 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
+  async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {
+    return this.withServiceBind((client) => this.groupDeleteFacts(client, group));
+  }
+
+  private async groupDeleteFacts(client: Client, group: DirectoryGroup): Promise<GroupDeleteFacts> {
+    const parents: DirectoryGroup[] = [];
+    for (const dn of group.memberOfDns) {
+      // A parent this bind can't read can't be judged; it's left out.
+      const parent = await client
+        .search(dn, {
+          scope: 'base',
+          filter: GROUP_FILTER_BASE,
+          attributes: ['objectGUID', 'objectSid', 'distinguishedName', 'adminCount'],
+          explicitBufferAttributes: BINARY_ATTRS,
+        })
+        .then((r) => r.searchEntries[0])
+        .catch(() => undefined);
+      if (parent) parents.push(normalizeGroup(parent));
+    }
+    return { parents, primaryGroupMembers: await this.countPrimaryGroupMembers(client, group) };
+  }
+
+  /** Accounts whose primaryGroupID is this group's RID; null if AD wouldn't say. */
+  private async countPrimaryGroupMembers(
+    client: Client,
+    group: DirectoryGroup,
+  ): Promise<number | null> {
+    const rid = ridOf(group.sid);
+    // Only a group of the account's own domain can be its primary group.
+    if (rid === null || !group.sid?.startsWith('S-1-5-21-')) return 0;
+    try {
+      const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
+      const { searchEntries } = await client.search(domainRoot, {
+        scope: 'sub',
+        filter: `(primaryGroupID=${rid})`,
+        attributes: ['distinguishedName'],
+        paged: { pageSize: 500 },
+      });
+      return searchEntries.length;
+    } catch {
+      return null;
+    }
+  }
+
   /**
-   * Delete a group. The guard runs against the entry read on the operator's
-   * own bind, immediately before the delete.
+   * Delete a group. The guard runs against the entry, its parents and its
+   * primary-group count read on the operator's own bind, immediately
+   * before the delete.
    */
   async deleteGroup(
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
+    roleGroups: readonly RoleGroup[],
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
@@ -1344,12 +1396,16 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (!entry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
         const group = normalizeGroup(entry);
         const before = groupSnapshot(group);
-        const blocked = groupDeleteBlockReason(group);
-        if (blocked) {
+        const block = groupDeleteBlock(
+          group,
+          await this.groupDeleteFacts(client, group),
+          roleGroups,
+        );
+        if (block) {
           return {
             ok: false,
             reason: 'policy_violation',
-            errorMessage: describeGroupDeleteBlock(blocked),
+            errorMessage: describeGroupDeleteBlock(block),
             before,
           };
         }

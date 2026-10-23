@@ -25,30 +25,31 @@ export class AuthorizationService {
    * is not in the bootstrap admin group.
    */
   async resolveCapabilities(memberOfDns: readonly string[]): Promise<Capability[]> {
-    const groups = memberOfDns.map((dn) => dn.toLowerCase());
-    const assignments = await this.loadAssignments();
-
+    const groups = new Set(memberOfDns.map((dn) => dn.toLowerCase()));
     const matchedRoles = new Set<Role>();
-    for (const a of assignments) {
-      if (!a.groupDn) continue;
-      if (groups.includes(a.groupDn.toLowerCase())) {
-        matchedRoles.add(a.role);
-      }
+    for (const g of await this.roleGroups()) {
+      if (groups.has(g.dn.toLowerCase())) matchedRoles.add(g.role);
     }
-    // Bootstrap fallback: if no admin group is configured in settings, treat
-    // BOOTSTRAP_ADMIN_GROUP_DN env as the admin group. This lets a fresh
-    // deployment log in before any in-app config exists.
-    const adminAssigned = assignments.find((a) => a.role === 'admin')?.groupDn;
-    if (!adminAssigned && this.env.BOOTSTRAP_ADMIN_GROUP_DN) {
-      const bootstrap = this.env.BOOTSTRAP_ADMIN_GROUP_DN.toLowerCase();
-      if (groups.includes(bootstrap)) matchedRoles.add('admin');
-    }
-
     const caps = new Set<Capability>();
     for (const role of matchedRoles) {
       for (const cap of ROLE_CAPABILITIES[role]) caps.add(cap);
     }
     return Array.from(caps);
+  }
+
+  /**
+   * The AD groups that grant an OpenADUC role. Bootstrap fallback: if no
+   * admin group is configured in settings, BOOTSTRAP_ADMIN_GROUP_DN is the
+   * admin group, so a fresh deployment can sign in before any in-app
+   * config exists.
+   */
+  async roleGroups(): Promise<{ dn: string; role: Role }[]> {
+    const assignments = await this.loadAssignments();
+    const out = assignments.flatMap((a) => (a.groupDn ? [{ dn: a.groupDn, role: a.role }] : []));
+    if (!out.some((g) => g.role === 'admin') && this.env.BOOTSTRAP_ADMIN_GROUP_DN) {
+      out.push({ dn: this.env.BOOTSTRAP_ADMIN_GROUP_DN, role: 'admin' });
+    }
+    return out;
   }
 
   /**
