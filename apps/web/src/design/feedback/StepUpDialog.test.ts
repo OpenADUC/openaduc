@@ -10,11 +10,11 @@ vi.mock('../../api/index.js', () => ({ api }));
 
 const { default: StepUpDialog } = await import('./StepUpDialog.vue');
 
-async function prompt() {
+async function prompt(reason: string | null = null) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const dialog = mount(StepUpDialog, {
-    props: { visible: true, reason: null },
+    props: { visible: true, reason },
     global: { plugins: [pinia, PrimeVue], stubs: { teleport: true } },
   });
   await flushPromises();
@@ -43,5 +43,29 @@ describe('the step-up prompt', () => {
     await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
     await flushPromises();
     expect(dialog.text()).not.toContain('Password required');
+  });
+
+  // The prompt's own explainer already says to confirm the password.
+  it('doesn’t repeat the server’s generic refusal', async () => {
+    const { dialog } = await prompt('step-up required — confirm your password to continue');
+
+    expect(dialog.find('.dialog-reason').exists()).toBe(false);
+    expect(dialog.text()).not.toContain('step-up required');
+  });
+
+  it('says why when the server gives a reason of its own, as a sentence', async () => {
+    const { dialog } = await prompt('the directory rejected your step-up password — step up again');
+
+    expect(dialog.get('.dialog-reason').text()).toBe(
+      'The directory rejected your step-up password — step up again.',
+    );
+  });
+
+  it('keeps a reason a write gave as it is', async () => {
+    const { dialog } = await prompt('Deleting a group requires step-up authentication.');
+
+    expect(dialog.get('.dialog-reason').text()).toBe(
+      'Deleting a group requires step-up authentication.',
+    );
   });
 });
