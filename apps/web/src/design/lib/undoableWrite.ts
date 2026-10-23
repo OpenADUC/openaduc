@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { shallowRef } from 'vue';
+import { computed, shallowRef } from 'vue';
 import { useAuthStore } from '../../stores/auth.js';
 
 /**
@@ -32,6 +32,10 @@ export const UNDO_CANCELLED = 'Step-up was cancelled, so it wasn’t undone.';
  * undoes) rather than being dropped. The last failure stays in `failure`
  * until it's retried, dismissed or another write starts; an Undo whose
  * step-up prompt is cancelled counts as a failure, so it isn't lost unseen.
+ *
+ * With `failuresPerKey`, for a list of records, each key keeps its own
+ * failure (`failureOn`) until it's retried (`retryOn`), dismissed
+ * (`dismissOn`) or another write on that key starts.
  */
 export function useUndoableWrite<Op extends object>(options: {
   write: (op: Op) => Promise<unknown>;
@@ -40,14 +44,19 @@ export function useUndoableWrite<Op extends object>(options: {
   key?: ((op: Op) => string) | undefined;
   onDone: (op: Op, offer: UndoOffer) => void | Promise<void>;
   onFailed?: ((failure: WriteFailure<Op>) => void | Promise<void>) | undefined;
+  failuresPerKey?: boolean | undefined;
 }) {
   const auth = useAuthStore();
   const keyOf = options.key ?? (() => '');
   // Shallow, so the caller's objects come back as they were passed.
   const running = shallowRef(new Map<string, Op>());
   const settled = new Map<string, Promise<void>>();
-  const failure = shallowRef<WriteFailure<Op> | null>(null);
-  let retryFailed: (() => void) | null = null;
+  // In the order they failed, so the last is the latest.
+  const failures = shallowRef(new Map<string, { failure: WriteFailure<Op>; retry: () => void }>());
+  const last = () => [...failures.value.values()].at(-1) ?? null;
+  const failure = computed(() => last()?.failure ?? null);
+  const failureOn = (key: string): WriteFailure<Op> | null =>
+    failures.value.get(key)?.failure ?? null;
 
   const runningOn = (key = ''): Op | null => running.value.get(key) ?? null;
 
@@ -75,7 +84,7 @@ export function useUndoableWrite<Op extends object>(options: {
     let finished!: () => void;
     settled.set(key, new Promise<void>((r) => (finished = r)));
     running.value = new Map(running.value).set(key, attempt.op);
-    dismiss();
+    clear(key);
     try {
       try {
         await options.write(attempt.op);
@@ -113,21 +122,48 @@ export function useUndoableWrite<Op extends object>(options: {
 
   async function fail(attempt: Attempt<Op>, message: string): Promise<void> {
     const f = { op: attempt.op, message, undo: attempt.undo };
-    failure.value = f;
-    retryFailed = () => start(attempt);
+    const key = keyOf(attempt.op);
+    const next = options.failuresPerKey ? new Map(failures.value) : new Map();
+    next.delete(key);
+    failures.value = next.set(key, { failure: f, retry: () => start(attempt) });
     await options.onFailed?.(f);
   }
 
+  /** Forget the failure on `key`; with one slot, the failure. */
+  function clear(key: string): void {
+    if (!options.failuresPerKey) {
+      if (failures.value.size > 0) failures.value = new Map();
+    } else if (failures.value.has(key)) {
+      const next = new Map(failures.value);
+      next.delete(key);
+      failures.value = next;
+    }
+  }
+
   function retry(): void {
-    retryFailed?.();
+    last()?.retry();
   }
 
   function dismiss(): void {
-    failure.value = null;
-    retryFailed = null;
+    const f = failure.value;
+    if (f) clear(keyOf(f.op));
   }
 
-  return { running, runningOn, run, failure, retry, dismiss };
+  function retryOn(key: string): void {
+    failures.value.get(key)?.retry();
+  }
+
+  return {
+    running,
+    runningOn,
+    run,
+    failure,
+    failureOn,
+    retry,
+    dismiss,
+    retryOn,
+    dismissOn: clear,
+  };
 }
 
 function isCannotUndo(x: object): x is { cannotUndo: string } {
