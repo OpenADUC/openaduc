@@ -14,8 +14,8 @@ and pass:
 - `tabs` (`ObjectPageTab`: label, icon, count, visibility, icon-only) and a
   `fallbackTab`;
 - `actions` (`ObjectAction`): each names the capability it needs, and may be
-  unavailable for this object (Unlock on an account that isn't locked,
-  with `whyUnavailable` saying so) or disabled while something runs. The
+  `unavailable` for this object, saying why (Unlock on an account that
+  isn't locked: "account isn't locked"), or disabled while something runs. The
   layout drops what the operator can't do and hides the Actions button
   when nothing is left. An action with a `shortcut` key runs on that key
   (see `design/composables/useShortcuts.ts`) whenever its menu item could

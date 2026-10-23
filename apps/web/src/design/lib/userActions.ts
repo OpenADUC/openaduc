@@ -58,7 +58,7 @@ export const USER_ACTION_ORDER: readonly UserAction[] = [
 type AccountState = { enabled: boolean; locked: boolean };
 
 /** Why the account's state doesn't fit the action, e.g. Unlock an account that isn't locked. */
-export function unfitReason(action: UserAction, u: AccountState): string | null {
+export function userActionUnavailable(action: UserAction, u: AccountState): string | null {
   switch (action) {
     case 'unlock':
       return u.locked ? null : 'account isn’t locked';
@@ -73,7 +73,7 @@ export function unfitReason(action: UserAction, u: AccountState): string | null 
 
 /** Whether the account's state fits the action, e.g. Unlock only a locked account. */
 export function fitsUser(action: UserAction, u: AccountState): boolean {
-  return unfitReason(action, u) === null;
+  return userActionUnavailable(action, u) === null;
 }
 
 /** The label, or what it says while `running` is this action. */
