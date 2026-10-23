@@ -260,6 +260,7 @@ async function runTest(): Promise<void> {
     const r = await api.directories.entra.test(editTarget.value.directory.id);
     editTestResult.value = { ok: r.ok, message: r.message };
   } catch (err) {
+    if (auth.retryAfterStepUp(err, runTest)) return;
     editTestResult.value = {
       ok: false,
       message: err instanceof ApiError ? err.message : 'Test failed',
