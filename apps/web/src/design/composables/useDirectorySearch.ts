@@ -79,13 +79,12 @@ export function useDirectorySearch(options: { pageSize: number }) {
     }
     loading.value = true;
     const searched = kinds.filter(canSearch);
-    const settled = await Promise.allSettled(searched.map((k) => searchers[k](q)));
-    if (!isCurrent()) return;
     const next = none();
-    searched.forEach((k, i) => {
-      const outcome = settled[i]!;
-      if (outcome.status === 'fulfilled') (next[k] as unknown) = outcome.value;
-    });
+    const searchInto = async <K extends SearchKind>(kind: K): Promise<void> => {
+      next[kind] = await searchers[kind](q);
+    };
+    const settled = await Promise.allSettled(searched.map(searchInto));
+    if (!isCurrent()) return;
     results.value = next;
     failed.value = searched.filter((_, i) => settled[i]!.status === 'rejected');
     loading.value = false;
