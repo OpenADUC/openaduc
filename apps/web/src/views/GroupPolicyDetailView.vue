@@ -556,12 +556,6 @@ function formatAttr(v: unknown): string {
   }
 }
 
-@media (max-width: 639.98px) {
-  .detail-hero-row {
-    row-gap: 6px;
-  }
-}
-
 .kv-grid {
   display: grid;
   gap: 6px;
