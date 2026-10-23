@@ -9,8 +9,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
+import { useOuContents } from '../../design/composables/useOuContents.js';
 import { useOldSchool, type SelectedRow } from '../stores/useOldSchool.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useToast } from 'primevue/usetoast';
@@ -20,36 +19,18 @@ import {
   useAccountActions,
   type AccountAction,
 } from '../../design/composables/useAccountActions.js';
-import type { OuContentsResponse } from '@openaduc/shared';
 
 const store = useOldSchool();
 const auth = useAuthStore();
 const toast = useToast();
 
-const emptyContents: OuContentsResponse = {
-  users: [],
-  groups: [],
-  computers: [],
-  linkedGroupPolicies: [],
-  inheritedGroupPolicies: [],
-};
-
-const contents = ref<OuContentsResponse>({ ...emptyContents });
-const loading = ref(false);
-const errorMsg = ref<string | null>(null);
-
-async function loadContents(dn: string): Promise<void> {
-  loading.value = true;
-  errorMsg.value = null;
-  try {
-    contents.value = await api.ous.contents(dn);
-  } catch (err) {
-    contents.value = { ...emptyContents };
-    errorMsg.value = err instanceof ApiError ? err.message : 'failed to load contents';
-  } finally {
-    loading.value = false;
-  }
-}
+const {
+  contents,
+  loading,
+  error: errorMsg,
+  load: loadContents,
+  clear: clearContents,
+} = useOuContents();
 
 // Rebuild the row set whenever the selected container changes or a
 // mutation bumps the data version (so changes made from a Properties
@@ -58,7 +39,7 @@ watch(
   () => [store.selectedNode.dn, store.dataVersion] as const,
   ([dn]) => {
     if (typeof dn === 'string' && dn.length > 0) loadContents(dn);
-    else contents.value = { ...emptyContents };
+    else clearContents();
   },
   { immediate: true },
 );
