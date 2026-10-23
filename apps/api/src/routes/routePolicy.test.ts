@@ -7,12 +7,6 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 
-// Known gaps, keyed by route. Each breaks a rule today; #72 closes them and
-// empties this list. Don't add to it to get a new route past the test.
-const ALLOWLIST: Record<string, string> = {
-  // Writes without step-up.
-};
-
 // Signed-in writes exempt from step-up by design: they open and close the
 // elevated session itself.
 const STEP_UP_EXEMPT = new Set(['POST /api/auth/step-up', 'DELETE /api/auth/step-up']);
@@ -95,18 +89,8 @@ describe('route policies', () => {
   });
 
   it('every route declares a policy that follows the rules', () => {
-    const broken = routes
-      .filter((r) => !(keyOf(r) in ALLOWLIST))
-      .flatMap((r) => problems(r).map((p) => `${keyOf(r)} ${p}`));
+    const broken = routes.flatMap((r) => problems(r).map((p) => `${keyOf(r)} ${p}`));
     expect(broken).toEqual([]);
-  });
-
-  it('allowlists only routes that still break a rule', () => {
-    const stale = Object.keys(ALLOWLIST).filter((key) => {
-      const route = routes.find((r) => keyOf(r) === key);
-      return !route || problems(route).length === 0;
-    });
-    expect(stale).toEqual([]);
   });
 
   it('exempts only routes that exist', () => {
