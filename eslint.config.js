@@ -4,6 +4,11 @@ import tseslint from 'typescript-eslint';
 import vue from 'eslint-plugin-vue';
 import globals from 'globals';
 
+// The SPA's own API client (apps/web/src/api), by relative path or the @ alias.
+const API_CLIENT = String.raw`^(?:(?:\.{1,2}\/)+|@\/)api(?:\/|$)`;
+const OLD_SCHOOL_IS_A_SKIN =
+  'The Old School view is a skin: call the API through a shared workflow in apps/web/src/design/composables/. See docs/adr/0002-old-school-view-is-a-skin.md.';
+
 export default [
   {
     ignores: [
@@ -58,15 +63,13 @@ export default [
     rules: {
       'no-restricted-imports': [
         'error',
+        { patterns: [{ regex: API_CLIENT, message: OLD_SCHOOL_IS_A_SKIN }] },
+      ],
+      'no-restricted-syntax': [
+        'error',
         {
-          patterns: [
-            {
-              // The SPA's own API client (src/api), by relative path or the @ alias.
-              regex: '^(?:(?:\\.{1,2}/)+|@/)api(?:/|$)',
-              message:
-                'The Old School view is a skin: call the API through a shared workflow in apps/web/src/design/composables/. See docs/adr/0002-old-school-view-is-a-skin.md.',
-            },
-          ],
+          selector: `ImportExpression[source.value=/${API_CLIENT}/]`,
+          message: OLD_SCHOOL_IS_A_SKIN,
         },
       ],
     },
