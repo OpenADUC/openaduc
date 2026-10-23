@@ -22,7 +22,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
-import { useGroupMembership, type Membership } from '../design/composables/useGroupMembership.js';
+import { membershipOf, useGroupMembership } from '../design/composables/useGroupMembership.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -50,6 +50,7 @@ const {
   remove: removeMembership,
 } = useGroupMembership({
   onChanged: async (change, m) => {
+    if (change === 'add') closeAdd();
     toast.add({
       severity: 'success',
       summary: change === 'add' ? 'Added to group' : 'Removed from group',
@@ -71,18 +72,6 @@ const adding = computed(() => pending.value?.change === 'add');
 const removingMemberId = computed(() =>
   pending.value?.change === 'remove' ? pending.value.membership.userId : null,
 );
-
-function membershipOf(
-  u: Pick<UserSummary, 'id' | 'displayName' | 'samAccountName'>,
-  g: GroupDetail,
-): Membership {
-  return {
-    userId: u.id,
-    userLabel: u.displayName ?? u.samAccountName,
-    groupId: g.id,
-    groupLabel: g.name ?? g.samAccountName ?? g.distinguishedName,
-  };
-}
 
 const canManage = computed(() => auth.hasCapability('write:group.membership'));
 const memberCount = computed(() => group.value?.members.length ?? 0);
@@ -151,12 +140,14 @@ function selectAddCandidate(u: UserSummary): void {
 function confirmAdd(): void {
   const u = addSelected.value;
   if (!u || !group.value) return;
-  addMembership(membershipOf(u, group.value), () => {
-    addOpen.value = false;
-    addSelected.value = null;
-    addQuery.value = '';
-    addResults.value = [];
-  });
+  addMembership(membershipOf(u, group.value));
+}
+
+function closeAdd(): void {
+  addOpen.value = false;
+  addSelected.value = null;
+  addQuery.value = '';
+  addResults.value = [];
 }
 
 function startRemove(member: GroupMember): void {
