@@ -134,7 +134,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           ...auditContextFromRequest(req),
           action: existing ? 'directory.entra.update' : 'directory.entra.create',
           result: 'success',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),
@@ -171,7 +171,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           // 'success' even when no row existed — the operator-facing
           // intent (no integration after this call) was achieved.
           result: 'success',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),
@@ -224,7 +224,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           ...auditContextFromRequest(req),
           action: 'directory.entra.test',
           result: result.ok ? 'success' : 'failure',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),

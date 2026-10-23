@@ -506,7 +506,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             ...auditContextFromRequest(req),
             action: 'settings.update',
             result: 'success',
-            actorAuthMethod: 'step-up',
+            actorAuthMethod: 'ad-password',
             providerId: null,
             targetType: 'config',
             targetId: u.key,
