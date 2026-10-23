@@ -96,6 +96,8 @@ export interface DirectoryGroup {
   groupScope: string | null;
   // Direct member DNs.
   memberDns: string[];
+  // The groups it is directly a member of.
+  memberOfDns: string[];
   rawAttributes: Record<string, unknown>;
 }
 
@@ -479,6 +481,21 @@ export interface DirectoryProvider {
   ): Promise<MutationResult & { treeDelete?: boolean }>;
   /** How many objects sit anywhere under each DN (null where unreadable). */
   countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
+  // Who already holds a new object's names: `cn` among the direct children
+  // of `parentDn`, `samAccountName` anywhere in the domain. Each is the
+  // holder's DN, or null when free. Reads with the service account.
+  findNameHolders(input: NewObjectNames): Promise<NameHolders>;
+  // Create a group directly under `parentDn`. Checks both names are free
+  // on the operator's bind first and returns `conflict` naming the holder
+  // otherwise. Returns the new group so the cache can show it at once.
+  createGroup(
+    input: GroupCreateInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { group?: DirectoryGroup }>;
+  // Delete a group. Re-checks against the live entry that it isn't one AD
+  // relies on (see groupDeleteBlockReason) and returns `policy_violation`
+  // if it is.
+  deleteGroup(groupId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.
@@ -549,6 +566,26 @@ export interface UserRenameInput {
   userPrincipalName?: string | undefined;
   email?: string | null | undefined;
   keepOldEmailAsAlias: boolean;
+}
+
+export interface NewObjectNames {
+  parentDn: string;
+  cn?: string | undefined;
+  samAccountName?: string | undefined;
+}
+
+export interface NameHolders {
+  cn: string | null;
+  samAccountName: string | null;
+}
+
+export interface GroupCreateInput {
+  parentDn: string;
+  cn: string;
+  samAccountName: string;
+  description: string | null;
+  scope: 'domain-local' | 'global' | 'universal';
+  type: 'security' | 'distribution';
 }
 
 export interface OuAttributePatch {

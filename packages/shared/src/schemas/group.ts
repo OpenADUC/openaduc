@@ -78,3 +78,113 @@ export const groupDetailSchema = groupSummarySchema.extend({
   }),
 });
 export type GroupDetail = z.infer<typeof groupDetailSchema>;
+
+// ---- Create ------------------------------------------------------------
+
+export const GROUP_SCOPES = ['domain-local', 'global', 'universal'] as const;
+export type GroupScope = (typeof GROUP_SCOPES)[number];
+export const GROUP_TYPES = ['security', 'distribution'] as const;
+export type GroupType = (typeof GROUP_TYPES)[number];
+
+// The group's cn, which AD also shows as its name. AD caps cn at 64
+// characters; DN-special characters are refused rather than escaped so the
+// name reads the same everywhere it appears.
+export const groupNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'name is required')
+  .max(64, 'name is too long')
+  .regex(/^[^,=+<>;\\"]+$/, 'name can’t contain , = + < > ; \\ "')
+  .refine((v) => !v.startsWith('#'), 'name can’t start with #');
+
+// AD's rules for a pre-Windows 2000 name, as for a user's logon name, but
+// a group's may be up to 256 characters.
+const SAM_FORBIDDEN = /["/\\[\]:;|=,+*?<>@]/;
+export const groupSamAccountNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'pre-Windows 2000 name is required')
+  .max(256, 'pre-Windows 2000 name is too long')
+  .refine((v) => !SAM_FORBIDDEN.test(v), {
+    message: 'pre-Windows 2000 name can’t contain " / \\ [ ] : ; | = , + * ? < > @',
+  })
+  .refine((v) => !/^[. ]+$/.test(v), {
+    message: 'pre-Windows 2000 name can’t be only dots and spaces',
+  })
+  .refine((v) => !v.endsWith('.'), { message: 'pre-Windows 2000 name can’t end with a dot' });
+
+export const groupCreateRequestSchema = z
+  .object({
+    // An OU from the cache; the group is created directly under it.
+    parentDn: z.string().min(1).max(1024),
+    name: groupNameSchema,
+    samAccountName: groupSamAccountNameSchema,
+    description: z.string().trim().max(1024).nullable().optional(),
+    scope: z.enum(GROUP_SCOPES),
+    type: z.enum(GROUP_TYPES),
+  })
+  .strict();
+export type GroupCreateRequest = z.input<typeof groupCreateRequestSchema>;
+
+// Whether a new group's names are free: its name among the OU's direct
+// children, its pre-Windows 2000 name across the whole domain (users and
+// computers included). Either may be omitted to check only the other.
+export const groupNameCheckQuerySchema = z.object({
+  parentDn: z.string().min(1).max(1024),
+  name: z.string().trim().max(256).optional(),
+  samAccountName: z.string().trim().max(256).optional(),
+});
+export type GroupNameCheckQuery = z.infer<typeof groupNameCheckQuerySchema>;
+
+export const groupNameCheckResponseSchema = z.object({
+  // The DN of the object already holding each name, or null when free.
+  nameTakenBy: z.string().nullable(),
+  samAccountNameTakenBy: z.string().nullable(),
+});
+export type GroupNameCheckResponse = z.infer<typeof groupNameCheckResponseSchema>;
+
+// ---- Delete ------------------------------------------------------------
+//
+// Groups AD or Windows rely on can't be deleted. The server checks the live
+// entry immediately before the delete.
+
+export const groupDeleteBlockReasonSchema = z.enum([
+  // isCriticalSystemObject=TRUE (Domain Admins, Domain Users, …).
+  'critical_system_object',
+  // A built-in group: in CN=Builtin, flagged builtin in groupType, or a
+  // well-known RID below 1000.
+  'builtin_group',
+  // adminCount=1: AdminSDHolder protects it as an administrative group.
+  'protected_group',
+]);
+export type GroupDeleteBlockReason = z.infer<typeof groupDeleteBlockReasonSchema>;
+
+export const groupDeleteRequestSchema = z
+  .object({
+    // Must match the group's current pre-Windows 2000 name
+    // (case-insensitive), so a wrong id fails instead of deleting another
+    // group.
+    confirmSamAccountName: z.string().min(1).max(256),
+  })
+  .strict();
+export type GroupDeleteRequest = z.infer<typeof groupDeleteRequestSchema>;
+
+export const groupDeletePreflightResponseSchema = z.object({
+  id: z.string(),
+  name: z.string().nullable(),
+  samAccountName: z.string().nullable(),
+  distinguishedName: z.string(),
+  // Direct members (users, groups, computers, contacts) the group holds.
+  memberCount: z.number().int(),
+  // The groups this one is directly a member of. `id` is null for a group
+  // OpenADUC hasn't cached (outside the base DN, or not synced yet).
+  memberOf: z.array(
+    z.object({
+      id: z.string().nullable(),
+      name: z.string().nullable(),
+      distinguishedName: z.string(),
+    }),
+  ),
+  blockedReason: groupDeleteBlockReasonSchema.nullable(),
+});
+export type GroupDeletePreflightResponse = z.infer<typeof groupDeletePreflightResponseSchema>;

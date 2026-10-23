@@ -33,7 +33,10 @@ import type {
   DirectoryGroupSearchQuery,
   DirectoryUser,
   DirectoryUserSearchQuery,
+  GroupCreateInput,
   MutationResult,
+  NameHolders,
+  NewObjectNames,
   OuAttributePatch,
   RecycleBinStatus,
   ResetPasswordInput,
@@ -56,6 +59,7 @@ import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './
 import { withAllMembers } from './memberRange.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
+import { describeGroupDeleteBlock, groupDeleteBlockReason } from '../../lib/groupDeletion.js';
 import {
   BINARY_ATTRS,
   COMPUTER_ATTRS,
@@ -70,6 +74,7 @@ import {
   USER_ATTRS_FULL,
   asString,
   asStringArray,
+  groupTypeValue,
   leafRdn,
   normalizeComputer,
   normalizeDeletedComputer,
@@ -1236,6 +1241,126 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       if (other) return `the ${check.label} is already used by ${other.dn}`;
     }
     return null;
+  }
+
+  async findNameHolders(input: NewObjectNames): Promise<NameHolders> {
+    return this.withServiceBind((client) => this.nameHolders(client, input));
+  }
+
+  private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
+    const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
+      const { searchEntries } = await client.search(base, {
+        scope,
+        filter,
+        attributes: ['distinguishedName'],
+        sizeLimit: 1,
+      });
+      return searchEntries[0]?.dn ?? null;
+    };
+    const cn = input.cn?.trim();
+    const sam = input.samAccountName?.trim();
+    // sAMAccountName is unique across the domain, not just the base DN.
+    const domainRoot = sam
+      ? ((await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn)
+      : null;
+    return {
+      cn: cn ? await holder(input.parentDn, 'one', `(cn=${escapeLdapFilter(cn)})`) : null,
+      samAccountName:
+        sam && domainRoot
+          ? await holder(domainRoot, 'sub', `(sAMAccountName=${escapeLdapFilter(sam)})`)
+          : null,
+    };
+  }
+
+  /**
+   * Create a group under `parentDn`, bound as the operator. The names are
+   * checked again on this bind: the preflight the dialog ran may be stale.
+   */
+  async createGroup(
+    input: GroupCreateInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { group?: DirectoryGroup }> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const holders = await this.nameHolders(client, {
+          parentDn: input.parentDn,
+          cn: input.cn,
+          samAccountName: input.samAccountName,
+        });
+        if (holders.cn) {
+          return {
+            ok: false,
+            reason: 'conflict',
+            errorMessage: `the name "${input.cn}" is already used in this OU by ${holders.cn}`,
+          };
+        }
+        if (holders.samAccountName) {
+          return {
+            ok: false,
+            reason: 'conflict',
+            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is already used by ${holders.samAccountName}`,
+          };
+        }
+
+        const dn = `CN=${escapeRdnValueRfc(input.cn)},${input.parentDn}`;
+        const attrs: Record<string, string | string[]> = {
+          objectClass: ['top', 'group'],
+          cn: input.cn,
+          sAMAccountName: input.samAccountName,
+          groupType: String(groupTypeValue(input.scope, input.type)),
+        };
+        if (input.description) attrs.description = input.description;
+        await client.add(dn, attrs);
+
+        const entry = await this.findGroupEntry(client, { kind: 'distinguishedName', value: dn });
+        if (!entry) {
+          return {
+            ok: false,
+            reason: 'directory_error',
+            errorMessage: `the group was created at ${dn} but couldn’t be read back`,
+          };
+        }
+        const group = normalizeGroup(entry);
+        return { ok: true, after: groupSnapshot(group), group };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  /**
+   * Delete a group. The guard runs against the entry read on the operator's
+   * own bind, immediately before the delete.
+   */
+  async deleteGroup(
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const entry = await this.findGroupEntry(client, groupId);
+        if (!entry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
+        const group = normalizeGroup(entry);
+        const before = groupSnapshot(group);
+        const blocked = groupDeleteBlockReason(group);
+        if (blocked) {
+          return {
+            ok: false,
+            reason: 'policy_violation',
+            errorMessage: describeGroupDeleteBlock(blocked),
+            before,
+          };
+        }
+        await client.del(group.distinguishedName);
+        return { ok: true, before, after: { deleted: true } };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
   }
 
   private async resolveDefaultNamingContext(client: Client): Promise<string | null> {
@@ -2420,6 +2545,24 @@ function deletionSnapshot(user: DirectoryUser): Record<string, unknown> {
     sid: user.sid,
     enabled: user.enabled,
     memberOf: user.memberOfDns,
+  };
+}
+
+/**
+ * A group as the audit trail keeps it. Its members and parent groups are
+ * here because a deleted group's tombstone doesn't keep them.
+ */
+function groupSnapshot(group: DirectoryGroup): Record<string, unknown> {
+  return {
+    distinguishedName: group.distinguishedName,
+    name: group.name,
+    samAccountName: group.samAccountName,
+    sid: group.sid,
+    description: group.description,
+    groupScope: group.groupScope,
+    groupType: group.groupType,
+    members: group.memberDns,
+    memberOf: group.memberOfDns,
   };
 }
 
