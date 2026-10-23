@@ -398,8 +398,9 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       };
       const orderDir = q.sortDir === 'desc' ? 'desc' : 'asc';
 
-      // `status` is a derived sort: order by a priority CASE so locked
-      // accounts come first, disabled second, etc. The literal numbers are
+      // `status` is a derived sort: order by a priority CASE in the order
+      // the SPA ranks what stops sign-in (design/lib/signIn.ts), so the list
+      // and each user's badge agree. The literal numbers are
       // safe (no user input reaches the SQL), and the rest of the search
       // remains parameterized.
       let orderedQuery;
@@ -407,13 +408,14 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         orderedQuery = baseQuery.selectAll().orderBy(
           sql<number>`
               case
-                when locked then 1
-                when not enabled then 2
-                when account_expires_at is not null and account_expires_at < now() then 3
-                when password_never_expires then 6
-                when password_must_change then 4
-                when ${expiry} < now() then 4
-                when ${expiry} < now() + interval '14 days' then 5
+                when not enabled then 1
+                when locked then 2
+                when not password_never_expires and not password_must_change
+                  and ${expiry} <= now() then 3
+                when account_expires_at <= now() then 4
+                when password_must_change then 5
+                when not password_never_expires
+                  and ${expiry} <= now() + interval '14 days' then 6
                 else 7
               end
             `,

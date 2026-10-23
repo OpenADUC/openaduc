@@ -74,45 +74,6 @@ export function avatarGradientFor(seed: string | null | undefined): string {
   return AVATAR_GRADIENTS[idx]!;
 }
 
-export type UserStatusKind =
-  'active' | 'disabled' | 'locked' | 'pwd-must-change' | 'pwd-expired' | 'pwd-expiring' | 'expired';
-
-export interface UserStatusInput {
-  enabled?: boolean | null;
-  locked?: boolean | null;
-  accountExpiresAt?: string | null;
-  passwordExpiresAt?: string | null;
-  passwordNeverExpires?: boolean | null;
-  passwordMustChange?: boolean | null;
-}
-
-export function userStatus(u: UserStatusInput, now: Date = new Date()): UserStatusKind {
-  if (u.locked) return 'locked';
-  if (u.enabled === false) return 'disabled';
-  if (u.accountExpiresAt && new Date(u.accountExpiresAt).getTime() < now.getTime())
-    return 'expired';
-  if (u.passwordMustChange) return 'pwd-must-change';
-  if (!u.passwordNeverExpires && u.passwordExpiresAt) {
-    const expiresMs = new Date(u.passwordExpiresAt).getTime() - now.getTime();
-    const days = expiresMs / (24 * 60 * 60 * 1000);
-    if (days <= 0) return 'pwd-expired';
-    if (days <= 14) return 'pwd-expiring';
-  }
-  return 'active';
-}
-
-export function userStatusLabel(kind: UserStatusKind): string {
-  return {
-    active: 'Active',
-    disabled: 'Disabled',
-    locked: 'Locked',
-    'pwd-must-change': 'Must change password',
-    'pwd-expired': 'Password expired',
-    'pwd-expiring': 'Expires soon',
-    expired: 'Expired',
-  }[kind];
-}
-
 // Truncate a long string in the middle, keeping head and tail. Useful for DNs.
 export function truncMid(input: string, head = 24, tail = 18): string {
   if (input.length <= head + tail + 1) return input;

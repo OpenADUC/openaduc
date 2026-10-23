@@ -1,23 +1,29 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Why a user can't sign in, from the account as the API last read it, and
 // the write that fixes it.
-import type { Capability, UserDetail } from '@openaduc/shared';
-import { fmtAbsolute, fmtRelative, type UserStatusKind } from './format.js';
+import type { Capability } from '@openaduc/shared';
+import { fmtAbsolute, fmtRelative } from './format.js';
 
-export type SignInInput = Pick<
-  UserDetail,
-  | 'enabled'
-  | 'modifiedAtSource'
-  | 'locked'
-  | 'lockedAt'
-  | 'autoUnlockAt'
-  | 'lockedUntilUnlocked'
-  | 'badPasswordCount'
-  | 'passwordNeverExpires'
-  | 'passwordExpiresAt'
-  | 'passwordMustChange'
-  | 'accountExpiresAt'
->;
+/**
+ * The account as far as signing in goes. A list row has the summary
+ * fields; a user's page also has the lockout details.
+ */
+export interface SignInInput {
+  enabled?: boolean | null;
+  locked?: boolean | null;
+  passwordNeverExpires?: boolean | null;
+  passwordExpiresAt?: string | null;
+  passwordMustChange?: boolean | null;
+  accountExpiresAt?: string | null;
+  modifiedAtSource?: string | null;
+  lockedAt?: string | null;
+  autoUnlockAt?: string | null;
+  lockedUntilUnlocked?: boolean | null;
+  badPasswordCount?: number | null;
+}
+
+export type UserStatusKind =
+  'active' | 'disabled' | 'locked' | 'pwd-must-change' | 'pwd-expired' | 'pwd-expiring' | 'expired';
 
 export type LockoutEnd = { at: string } | 'when-unlocked' | 'unknown';
 
@@ -41,8 +47,8 @@ export interface SignInFix {
   capability: Capability;
 }
 
-const past = (iso: string | null, now: Date): iso is string =>
-  iso !== null && new Date(iso).getTime() <= now.getTime();
+const past = (iso: string | null | undefined, now: Date): iso is string =>
+  !!iso && new Date(iso).getTime() <= now.getTime();
 
 /**
  * What keeps the account from signing in, most severe first: fixing a
@@ -50,12 +56,13 @@ const past = (iso: string | null, now: Date): iso is string =>
  */
 export function signInBlockers(u: SignInInput, now: Date = new Date()): SignInBlocker[] {
   const blockers: SignInBlocker[] = [];
-  if (!u.enabled) blockers.push({ kind: 'disabled', changedAt: u.modifiedAtSource });
+  if (u.enabled === false)
+    blockers.push({ kind: 'disabled', changedAt: u.modifiedAtSource ?? null });
   if (u.locked) {
     blockers.push({
       kind: 'locked',
-      since: u.lockedAt,
-      badPasswords: u.badPasswordCount,
+      since: u.lockedAt ?? null,
+      badPasswords: u.badPasswordCount ?? null,
       ends: u.autoUnlockAt
         ? { at: u.autoUnlockAt }
         : u.lockedUntilUnlocked
@@ -168,9 +175,40 @@ export function signInFix(b: SignInBlocker): SignInFix {
 export function describeBlocker(
   b: SignInBlocker,
   now: Date = new Date(),
-): { title: string; icon: string; badge: UserStatusKind; details: string[] } {
-  const { title, icon, badge, details } = CONDITIONS[b.kind];
+): { title: string; icon: string; details: string[] } {
+  const { title, icon, details } = CONDITIONS[b.kind];
   // TypeScript can't pair the row's `details` with this blocker's kind.
   const describe = details as (b: SignInBlocker, now: Date) => string[];
-  return { title, icon, badge, details: describe(b, now) };
+  return { title, icon, details: describe(b, now) };
+}
+
+const EXPIRING_SOON_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The one word for an account's state, wherever it's shown: the most severe
+ * condition stopping sign-in, else a password expiring within two weeks.
+ */
+export function userStatus(u: SignInInput, now: Date = new Date()): UserStatusKind {
+  const top = signInBlockers(u, now)[0];
+  if (top) return CONDITIONS[top.kind].badge;
+  if (
+    !u.passwordNeverExpires &&
+    u.passwordExpiresAt &&
+    Date.parse(u.passwordExpiresAt) - now.getTime() <= EXPIRING_SOON_MS
+  ) {
+    return 'pwd-expiring';
+  }
+  return 'active';
+}
+
+export function userStatusLabel(kind: UserStatusKind): string {
+  return {
+    active: 'Active',
+    disabled: 'Disabled',
+    locked: 'Locked',
+    'pwd-must-change': 'Must change password',
+    'pwd-expired': 'Password expired',
+    'pwd-expiring': 'Expires soon',
+    expired: 'Expired',
+  }[kind];
 }

@@ -18,7 +18,7 @@ import StatusBadge from '../design/primitives/StatusBadge.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
-import { userStatus } from '../design/lib/format.js';
+import { userStatus } from '../design/lib/signIn.js';
 import type { UserSummary } from '@openaduc/shared';
 
 const router = useRouter();
