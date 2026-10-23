@@ -27,7 +27,6 @@ onMounted(() => load(props.id));
 
 const expanded = ref<Set<string>>(new Set());
 
-// Open the root level and the path down to where the user is now.
 watch(ous, (list) => {
   const byDn = new Map(list.map((o) => [o.distinguishedName.toLowerCase(), o]));
   const open = new Set(list.filter((o) => !o.parentDn).map((o) => o.distinguishedName));
