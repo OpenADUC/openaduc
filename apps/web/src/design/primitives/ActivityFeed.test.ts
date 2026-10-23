@@ -60,4 +60,24 @@ describe('ActivityFeed', () => {
       'Computer account reset',
     ]);
   });
+
+  it('says when an account was set to expire, or that it never will', () => {
+    const page = feed([
+      anEvent({
+        id: '1',
+        action: 'user.accountExpiry.set',
+        metadata: { expiresAt: '2031-03-01T05:00:00.000Z' },
+      }),
+      anEvent({ id: '2', action: 'user.accountExpiry.set', metadata: { expiresAt: null } }),
+    ]);
+
+    expect(page.findAll('.af-title').map((t) => t.text())).toEqual([
+      'Account expiry changed',
+      'Account expiry changed',
+    ]);
+    expect(page.findAll('.af-detail').map((d) => d.text())).toEqual([
+      `Expires ${new Date('2031-03-01T05:00:00.000Z').toLocaleString()}`,
+      'Never expires',
+    ]);
+  });
 });
