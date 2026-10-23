@@ -340,8 +340,6 @@ const rawFilter = ref('');
 const { setHero, compact: heroCompact, heroHeight } = useStickyHeader();
 const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
 
-// Capability flags. The Edit toggle handles "are you elevated"; the
-// capability flags decide whether each action surface is offered at all.
 const canUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 const canEdit = computed(() => auth.hasCapability('write:user.attributes'));
 const canEnableDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
@@ -540,36 +538,6 @@ function onBeforeUnload(ev: BeforeUnloadEvent): void {
 onMounted(() => window.addEventListener('beforeunload', onBeforeUnload));
 onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload));
 
-// When edit mode flips off (manually or via TTL expiry), discard any
-// unsaved drafts. Without this, fields that no longer have a save button
-// would still display stale draft text. We pop a quiet toast only if we
-// actually had to throw something away.
-//
-// One important exception: when the server signals step_up_required during
-// a save, the auth store flips elevated → false to drive the prompt. That
-// looks like "edit mode ended" to this watcher, but the operator's intent
-// is mid-flight — they clicked Save, are about to re-enter their password,
-// and expect the edits to still be there when the dialog clears. Skipping
-// reset+toast on that path keeps the form populated so the queued retry
-// (in saveAttributes' catch) submits the same patch.
-watch(
-  () => auth.editMode,
-  (now, prev) => {
-    if (prev && !now) {
-      if (auth.stepUpRequested) return;
-      if (isDirty.value) {
-        toast.add({
-          severity: 'info',
-          summary: 'Unsaved changes discarded',
-          detail: 'Edit mode ended before you saved.',
-          life: 3500,
-        });
-      }
-      resetForm();
-    }
-  },
-);
-
 // ---- Attribute save / discard --------------------------------------------
 
 async function saveAttributes(): Promise<void> {
@@ -650,6 +618,7 @@ async function doUnlock(): Promise<void> {
     });
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, doUnlock)) return;
     toast.add({
       severity: 'error',
       summary: 'Unlock failed',
@@ -674,6 +643,7 @@ async function doToggleEnabled(disable: boolean): Promise<void> {
     });
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, () => doToggleEnabled(disable))) return;
     toast.add({
       severity: 'error',
       summary: disable ? 'Disable failed' : 'Enable failed',
@@ -722,6 +692,7 @@ async function onResetSubmit(): Promise<void> {
     resetDialogOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, onResetSubmit)) return;
     resetError.value = err instanceof ApiError ? err.message : 'reset failed';
   } finally {
     resetSubmitting.value = false;
@@ -852,6 +823,7 @@ async function onMoveSubmit(): Promise<void> {
     moveDialogOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, onMoveSubmit)) return;
     moveError.value = err instanceof ApiError ? err.message : 'move failed';
   } finally {
     moveSubmitting.value = false;
@@ -887,6 +859,7 @@ async function confirmRemoveGroup(): Promise<void> {
     removeConfirm.value = null;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, confirmRemoveGroup)) return;
     toast.add({
       severity: 'error',
       summary: 'Remove failed',
@@ -938,6 +911,7 @@ async function doAddGroup(group: GroupSummary): Promise<void> {
     addGroupOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, () => doAddGroup(group))) return;
     toast.add({
       severity: 'error',
       summary: 'Add failed',
@@ -1035,9 +1009,7 @@ const dnPath = computed(() => {
 });
 
 // Actions dropdown — replaces the row of action buttons that used to live
-// under the hero. Items are still rendered when edit mode is off so the
-// operator can see what's available, but they're disabled until editing
-// is unlocked (matching the previous button behavior).
+// under the hero.
 const actionsMenu = ref<InstanceType<typeof Menu> | null>(null);
 
 function toggleActionsMenu(event: Event): void {
@@ -1048,10 +1020,8 @@ const actionItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [];
   const u = user.value;
   if (!u) return items;
-  // Buttons stay clickable whether or not edit mode is on — `auth.requireEdit`
-  // pops the StepUpDialog for an unauthenticated operator and auto-fires the
-  // action after they authenticate. The only disable case is "an action of
-  // this kind is already running" so the operator can't double-fire.
+  // The only disable case is "an action of this kind is already running" so
+  // the operator can't double-fire.
   const busy = actionRunning.value !== null;
 
   if (canUnlock.value && u.locked) {
@@ -1059,7 +1029,7 @@ const actionItems = computed<MenuItem[]>(() => {
       label: actionRunning.value === 'unlock' ? 'Unlocking…' : 'Unlock account',
       icon: 'pi pi-unlock',
       disabled: busy,
-      command: () => auth.requireEdit(doUnlock),
+      command: () => auth.requireStepUp(doUnlock),
     });
   }
   if (canResetPassword.value) {
@@ -1067,7 +1037,7 @@ const actionItems = computed<MenuItem[]>(() => {
       label: 'Reset password…',
       icon: 'pi pi-key',
       class: 'menu-item-danger',
-      command: () => auth.requireEdit(openResetDialog),
+      command: openResetDialog,
     });
   }
   if (canEnableDisable.value) {
@@ -1077,14 +1047,14 @@ const actionItems = computed<MenuItem[]>(() => {
         icon: 'pi pi-ban',
         class: 'menu-item-danger',
         disabled: busy,
-        command: () => auth.requireEdit(() => doToggleEnabled(true)),
+        command: () => auth.requireStepUp(() => doToggleEnabled(true)),
       });
     } else {
       items.push({
         label: actionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
         icon: 'pi pi-check',
         disabled: busy,
-        command: () => auth.requireEdit(() => doToggleEnabled(false)),
+        command: () => auth.requireStepUp(() => doToggleEnabled(false)),
       });
     }
   }
@@ -1093,7 +1063,7 @@ const actionItems = computed<MenuItem[]>(() => {
       label: actionRunning.value === 'move' ? 'Moving…' : 'Move to OU…',
       icon: 'pi pi-folder-open',
       disabled: busy,
-      command: () => auth.requireEdit(openMoveDialog),
+      command: openMoveDialog,
     });
   }
   if (canRename.value) {
@@ -1101,10 +1071,9 @@ const actionItems = computed<MenuItem[]>(() => {
       label: 'Rename…',
       icon: 'pi pi-id-card',
       disabled: busy,
-      command: () =>
-        auth.requireEdit(() => {
-          renameDialogOpen.value = true;
-        }),
+      command: () => {
+        renameDialogOpen.value = true;
+      },
     });
   }
   // Delete is offered only once the account is disabled, which is also
@@ -1115,10 +1084,9 @@ const actionItems = computed<MenuItem[]>(() => {
       icon: 'pi pi-trash',
       class: 'menu-item-danger',
       disabled: busy,
-      command: () =>
-        auth.requireEdit(() => {
-          deleteDialogOpen.value = true;
-        }),
+      command: () => {
+        deleteDialogOpen.value = true;
+      },
     });
   }
   return items;
@@ -1336,10 +1304,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       </section>
 
       <!-- Tabs. Actions menu lives at the right end of the bar so it's
-           always one click away regardless of which tab is active. The
-           menu items themselves stay disabled until edit mode is on,
-           which provides the "you need to enable editing" affordance
-           without an extra hint chip. -->
+           always one click away regardless of which tab is active. -->
       <nav
         :ref="setTabsNav"
         class="ds-tabs ds-tabs-with-actions"
@@ -1375,7 +1340,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           class="ds-tabs-refresh"
           @click="refreshFromAd"
         />
-        <div v-if="auth.canEverWrite && actionItems.length > 0" class="ds-tabs-actions">
+        <div v-if="actionItems.length > 0" class="ds-tabs-actions">
           <Button
             label="Actions"
             icon="pi pi-chevron-down"
@@ -1616,7 +1581,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 ></span>
               </div>
               <Textarea
-                v-if="auth.editMode && canEdit && f.multiline"
+                v-if="canEdit && f.multiline"
                 v-model="form[f.key]"
                 :placeholder="f.label"
                 :disabled="saving"
@@ -1625,7 +1590,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :class="['attr-input', { mono: f.mono }]"
               />
               <InputText
-                v-else-if="auth.editMode && canEdit"
+                v-else-if="canEdit"
                 v-model="form[f.key]"
                 :type="f.type ?? 'text'"
                 :class="['attr-input', { mono: f.mono }]"
@@ -1704,7 +1669,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 ></span>
               </div>
               <Textarea
-                v-if="auth.editMode && canEdit && f.multiline"
+                v-if="canEdit && f.multiline"
                 v-model="form[f.key]"
                 :placeholder="f.label"
                 :disabled="saving"
@@ -1713,7 +1678,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :class="['attr-input', { mono: f.mono }]"
               />
               <InputText
-                v-else-if="auth.editMode && canEdit"
+                v-else-if="canEdit"
                 v-model="form[f.key]"
                 :type="f.type ?? 'text'"
                 :class="['attr-input', { mono: f.mono }]"
@@ -1751,7 +1716,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 ></span>
               </div>
               <Textarea
-                v-if="auth.editMode && canEdit"
+                v-if="canEdit"
                 v-model="form[f.key]"
                 :placeholder="f.placeholder"
                 :disabled="saving"
@@ -1828,7 +1793,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
             label="Add group"
             icon="pi pi-plus"
             size="small"
-            @click="auth.requireEdit(openAddGroupDialog)"
+            @click="openAddGroupDialog"
           />
         </div>
 
@@ -1859,9 +1824,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 :nested="false"
                 :removable="canManageGroups && groupBusy !== g.id"
                 :to="{ name: 'group-detail', params: { id: g.id } }"
-                @remove="
-                  auth.requireEdit(() => requestRemoveGroup(g.id, g.name || g.distinguishedName))
-                "
+                @remove="requestRemoveGroup(g.id, g.name || g.distinguishedName)"
               />
             </div>
           </section>
@@ -1922,7 +1885,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               :outlined="!user.locked"
               size="small"
               :loading="actionRunning === 'unlock'"
-              @click="auth.requireEdit(doUnlock)"
+              @click="auth.requireStepUp(doUnlock)"
             />
           </div>
         </Card>
@@ -1948,7 +1911,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               severity="danger"
               outlined
               size="small"
-              @click="auth.requireEdit(openResetDialog)"
+              @click="openResetDialog"
             />
           </div>
         </Card>
@@ -2096,7 +2059,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
            the viewport while scrolling so it's always reachable on tall
            attribute lists. -->
       <transition name="save-bar">
-        <div v-if="auth.editMode && canEdit && isDirty" class="save-bar save-bar-floating">
+        <div v-if="canEdit && isDirty" class="save-bar save-bar-floating">
           <span class="save-bar-summary">
             <i class="pi pi-pencil" />
             <strong>{{ dirtyFields.length }}</strong>
@@ -2121,7 +2084,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               icon="pi pi-check"
               size="small"
               :loading="saving"
-              @click="saveAttributes"
+              @click="auth.requireStepUp(saveAttributes)"
             />
           </span>
         </div>

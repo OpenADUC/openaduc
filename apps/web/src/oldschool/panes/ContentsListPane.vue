@@ -201,88 +201,105 @@ function buildItems(r: Row): CtxItem[] {
   return [];
 }
 
+const can = (capability: string): boolean => auth.hasCapability(capability);
+
+function runWrite(call: () => Promise<unknown>, success: string, reason: string): void {
+  const apply = async (): Promise<void> => {
+    try {
+      await call();
+      showToastSuccess(success);
+      store.bumpData();
+    } catch (err) {
+      if (auth.retryAfterStepUp(err, apply)) return;
+      showToastError(err);
+    }
+  };
+  auth.requireStepUp(apply, reason);
+}
+
 function userItems(r: Row): CtxItem[] {
-  return [
-    {
-      label: 'Copy…',
-      disabled: true,
-      onSelect: () => undefined,
-    },
-    {
+  const items: CtxItem[] = [{ label: 'Copy…', disabled: true, onSelect: () => undefined }];
+  if (can('write:group.membership')) {
+    items.push({
       label: 'Add to a group…',
       onSelect: () => store.openDialog({ kind: 'add-to-group', userId: r.id, userLabel: r.name }),
-    },
-    r.disabled
-      ? {
-          label: 'Enable Account',
-          onSelect: () =>
-            auth.requireEdit(async () => {
-              try {
-                await api.users.enable(r.id);
-                showToastSuccess(`Object "${r.name}" has been enabled.`);
-                store.bumpData();
-              } catch (err) {
-                showToastError(err);
-              }
-            }, 'Enabling a user account requires step-up authentication.'),
-        }
-      : {
-          label: 'Disable Account',
-          onSelect: () =>
-            auth.requireEdit(async () => {
-              try {
-                await api.users.disable(r.id);
-                showToastSuccess(`Object "${r.name}" has been disabled.`);
-                store.bumpData();
-              } catch (err) {
-                showToastError(err);
-              }
-            }, 'Disabling a user account requires step-up authentication.'),
-        },
-    {
+    });
+  }
+  if (can('write:user.enableDisable')) {
+    items.push(
+      r.disabled
+        ? {
+            label: 'Enable Account',
+            onSelect: () =>
+              runWrite(
+                () => api.users.enable(r.id),
+                `Object "${r.name}" has been enabled.`,
+                'Enabling a user account requires step-up authentication.',
+              ),
+          }
+        : {
+            label: 'Disable Account',
+            onSelect: () =>
+              runWrite(
+                () => api.users.disable(r.id),
+                `Object "${r.name}" has been disabled.`,
+                'Disabling a user account requires step-up authentication.',
+              ),
+          },
+    );
+  }
+  if (can('write:user.resetPassword')) {
+    items.push({
       label: 'Reset Password…',
       onSelect: () =>
         store.openDialog({ kind: 'reset-password', id: r.id, samAccountName: r.name }),
-    },
-    r.locked
-      ? {
-          label: 'Unlock Account',
-          onSelect: () =>
-            auth.requireEdit(async () => {
-              try {
-                await api.users.unlock(r.id);
-                showToastSuccess(`${r.name} unlocked.`);
-                store.bumpData();
-              } catch (err) {
-                showToastError(err);
-              }
-            }, 'Unlocking a user account requires step-up authentication.'),
-        }
-      : { label: 'Unlock Account', disabled: true },
-    {
+    });
+  }
+  if (can('write:user.unlock')) {
+    items.push(
+      r.locked
+        ? {
+            label: 'Unlock Account',
+            onSelect: () =>
+              runWrite(
+                () => api.users.unlock(r.id),
+                `${r.name} unlocked.`,
+                'Unlocking a user account requires step-up authentication.',
+              ),
+          }
+        : { label: 'Unlock Account', disabled: true },
+    );
+  }
+  if (can('write:user.move')) {
+    items.push({
       label: 'Move…',
       onSelect: () =>
         store.openDialog({ kind: 'move', objectKind: 'user', id: r.id, label: r.name }),
-    },
-    { kind: 'separator' },
+    });
+  }
+  const canDelete = can('write:user.delete');
+  const canRename = can('write:user.rename');
+  if (canDelete || canRename) items.push({ kind: 'separator' });
+  if (canDelete) {
     // Delete is only offered for disabled accounts, which is also what the
     // server enforces.
-    auth.hasCapability('write:user.delete') && r.disabled
-      ? {
-          label: 'Delete',
-          onSelect: () =>
-            auth.requireEdit(
-              () => store.openDialog({ kind: 'delete-user', id: r.id, label: r.name }),
-              'Deleting a user requires step-up authentication.',
-            ),
-        }
-      : { label: 'Delete', disabled: true },
-    auth.hasCapability('write:user.rename')
-      ? {
-          label: 'Rename',
-          onSelect: () => store.openDialog({ kind: 'rename-user', id: r.id }),
-        }
-      : { label: 'Rename', disabled: true },
+    items.push(
+      r.disabled
+        ? {
+            label: 'Delete',
+            onSelect: () => store.openDialog({ kind: 'delete-user', id: r.id, label: r.name }),
+          }
+        : { label: 'Delete', disabled: true },
+    );
+  }
+  if (canRename) {
+    items.push({
+      label: 'Rename',
+      onSelect: () => store.openDialog({ kind: 'rename-user', id: r.id }),
+    });
+  }
+  return [
+    ...items,
     { kind: 'separator' },
     {
       label: 'Properties',

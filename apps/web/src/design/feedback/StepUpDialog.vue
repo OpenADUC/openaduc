@@ -7,12 +7,12 @@ import Password from 'primevue/password';
 import Message from 'primevue/message';
 import { useAuthStore } from '../../stores/auth.js';
 import { ApiError } from '../../api/client.js';
+import { ELEVATED_SESSION_LIMITS } from '@openaduc/shared';
 
 const props = defineProps<{
   visible: boolean;
   // Optional context shown above the password field — populated when
-  // the dialog opened automatically (e.g. "your editing session
-  // expired") rather than from a click on the editing toggle.
+  // the server refused a write because the elevated session was gone.
   reason?: string | null;
 }>();
 const emit = defineEmits<{
@@ -22,6 +22,10 @@ const emit = defineEmits<{
 }>();
 
 const auth = useAuthStore();
+const defaultIdle = ELEVATED_SESSION_LIMITS.idleTimeout.default;
+const lifetimeMinutes = ELEVATED_SESSION_LIMITS.absoluteLifetime.default;
+const defaultLifetime =
+  lifetimeMinutes % 60 === 0 ? `${lifetimeMinutes / 60} hours` : `${lifetimeMinutes} minutes`;
 const password = ref('');
 const submitting = ref(false);
 const error = ref<string | null>(null);
@@ -73,8 +77,9 @@ function onCancel(): void {
       {{ reason }}
     </Message>
     <p class="dialog-prose">
-      Re-enter your AD password to authorize sensitive actions for the next session. The server uses
-      this to bind as you when applying changes.
+      Re-enter your AD password to unlock writes. The server uses it to bind as you when applying
+      changes. Writes stay unlocked until you've been idle a while or reach a time limit (by default
+      {{ defaultIdle }} minutes idle, {{ defaultLifetime }} at most).
     </p>
     <!-- PrimeVue Dialog's onAfterEnter calls focus() which only finds
          elements with the [autofocus] attribute. Without one, it falls

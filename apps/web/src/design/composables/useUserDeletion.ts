@@ -12,6 +12,7 @@ import { computed, ref } from 'vue';
 import type { UserDeleteBlockReason, UserDeletePreflightResponse } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { useAuthStore } from '../../stores/auth.js';
 
 export type PreflightUser = UserDeletePreflightResponse['users'][number];
 export type DeletionPhase = 'loading' | 'review' | 'running' | 'finished' | 'error';
@@ -24,6 +25,7 @@ export const BLOCK_TEXT: Record<UserDeleteBlockReason, string> = {
 };
 
 export function useUserDeletion() {
+  const auth = useAuthStore();
   const phase = ref<DeletionPhase>('loading');
   const loadError = ref<string | null>(null);
   const preflight = ref<UserDeletePreflightResponse | null>(null);
@@ -73,16 +75,29 @@ export function useUserDeletion() {
       preflight.value = await api.users.deletePreflight(ids);
       phase.value = 'review';
     } catch (err) {
-      loadError.value = err instanceof ApiError ? err.message : String(err);
+      // The preflight binds as the operator, so it needs step-up too.
+      const needsStepUp = auth.retryAfterStepUp(err, () => load(ids));
+      loadError.value = needsStepUp
+        ? 'Step up to check these accounts.'
+        : err instanceof ApiError
+          ? err.message
+          : String(err);
       phase.value = 'error';
     }
   }
 
-  /** Delete every eligible account; resolves with the ids that are gone. */
-  async function run(): Promise<string[]> {
+  /**
+   * Delete every eligible account; resolves with the ids that are gone, or
+   * null when the elevated session ran out: `retry` then runs after the
+   * operator steps up, skipping accounts already deleted.
+   */
+  async function run(retry: () => void | Promise<void>): Promise<string[] | null> {
     if (!confirmed.value || phase.value !== 'review') return [];
     phase.value = 'running';
+    failures.value = [];
+    progress.value = deletedIds.value.length;
     for (const u of eligible.value) {
+      if (deletedIds.value.includes(u.id)) continue;
       try {
         await api.users.remove(u.id, {
           confirmSamAccountName: u.samAccountName ?? '',
@@ -90,6 +105,10 @@ export function useUserDeletion() {
         });
         deletedIds.value.push(u.id);
       } catch (err) {
+        if (auth.retryAfterStepUp(err, retry)) {
+          phase.value = 'review';
+          return null;
+        }
         failures.value.push({
           user: u,
           message: err instanceof ApiError ? err.message : String(err),

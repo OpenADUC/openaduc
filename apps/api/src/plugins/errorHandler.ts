@@ -30,11 +30,10 @@ export const Forbidden = (msg = 'Forbidden') =>
   new AppError({ statusCode: 403, code: 'forbidden', message: msg });
 /**
  * 403 with a specific `step_up_required` code. The web client treats
- * this distinctly: it auto-clears stale local edit-mode state and
- * re-opens the step-up dialog, so the operator can re-authenticate in
- * one click rather than manually toggling editing off and on.
+ * this distinctly: it clears stale local elevated state and opens the
+ * step-up dialog, then retries the write once the operator steps up.
  */
-export const StepUpRequired = (msg = 'editing session expired — please re-authenticate') =>
+export const StepUpRequired = (msg = 'step-up required — confirm your password to continue') =>
   new AppError({ statusCode: 403, code: 'step_up_required', message: msg });
 export const NotFound = (msg = 'Not found') =>
   new AppError({ statusCode: 404, code: 'not_found', message: msg });

@@ -14,6 +14,7 @@ import type { RenameField, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useRenameForm } from '../composables/useRenameForm.js';
+import { useAuthStore } from '../../stores/auth.js';
 
 const props = defineProps<{
   visible: boolean;
@@ -52,6 +53,7 @@ const {
   offerKeepAlias,
   buildRequest,
 } = useRenameForm();
+const auth = useAuthStore();
 const submitting = ref(false);
 const error = ref<string | null>(null);
 
@@ -74,6 +76,7 @@ async function submit(): Promise<void> {
     emit('renamed');
     emit('update:visible', false);
   } catch (err) {
+    if (auth.retryAfterStepUp(err, submit)) return;
     error.value = err instanceof ApiError ? err.message : String(err);
   } finally {
     submitting.value = false;

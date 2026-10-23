@@ -12,13 +12,12 @@ const NOT_ELEVATED: ElevatedSessionState = {
 };
 
 /**
- * Auth store. Owns:
- *   - the current actor (capabilities, identity, elevated state)
- *   - "edit mode" — a UI concept that mirrors the server's elevated session.
- *     When edit mode is on, the server has cached the user's bind password
- *     and writes commit without re-prompting. The store ticks `nowMs` once
- *     a second so views can derive a live countdown and auto-revert when
- *     the elevated session expires.
+ * Auth store. Owns the current actor (capabilities, identity, elevated
+ * state) and the step-up prompt. While the elevated session lives, the
+ * server has cached the operator's bind password and writes commit without
+ * re-prompting; a write without one prompts step-up and then runs. The
+ * store ticks `nowMs` once a second so `elevated` turns false by itself
+ * when the idle end passes.
  */
 export const useAuthStore = defineStore('auth', () => {
   const actor = ref<MeResponse | null>(null);
@@ -26,7 +25,7 @@ export const useAuthStore = defineStore('auth', () => {
   const loading = ref(false);
   const error = ref<string | null>(null);
   // Drives the global StepUpDialog mounted in AppShell. Set true by
-  // `requestStepUp()`, which is called from the EditModeFab or
+  // `requestStepUp()`, which is called by a write that needs step-up or
   // automatically when an API response says the cached step-up password
   // is gone (code: 'step_up_required'). The dialog watches this and
   // clears it via v-model when closed.
@@ -40,7 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
   // work. Cleared on cancel by AppShell's dialog visibility handler.
   const stepUpPendingAction = ref<(() => void | Promise<void>) | null>(null);
 
-  // Reactive clock used to drive the edit-mode countdown. We store a single
+  // Reactive clock that ends `elevated` at the idle end. We store a single
   // number rather than re-creating Date instances so dependent computeds only
   // recompute once per tick.
   const nowMs = ref(Date.now());
@@ -58,38 +57,18 @@ export const useAuthStore = defineStore('auth', () => {
     return iso ? new Date(iso).getTime() : null;
   });
 
-  // Live derivation: we treat the actor as elevated only while the expiry is
-  // still in the future. This way the toggle flips off automatically when
-  // the server-side TTL lapses — no separate watcher needed.
+  // Live derivation: we treat the actor as elevated only while the idle end
+  // is still in the future, so it turns false when the server's elevated
+  // session lapses — no separate watcher needed.
   const elevated = computed(() => {
     if (actor.value?.elevated.active !== true) return false;
     const exp = elevatedIdleEndsAtMs.value;
     return exp === null || exp > nowMs.value;
   });
 
-  const editMode = elevated;
-
-  const remainingSeconds = computed(() => {
-    if (!elevated.value || elevatedIdleEndsAtMs.value === null) return null;
-    return Math.max(0, Math.floor((elevatedIdleEndsAtMs.value - nowMs.value) / 1000));
-  });
-
   function hasCapability(cap: string): boolean {
     return actor.value?.capabilities.includes(cap) === true;
   }
-
-  // Set of write capabilities the UI cares about. Used to decide whether
-  // the Edit toggle is offered at all (vs. a read-only pill).
-  const WRITE_CAPABILITIES = [
-    'write:user.unlock',
-    'write:user.resetPassword',
-    'write:user.enableDisable',
-    'write:user.attributes',
-    'write:group.membership',
-  ];
-  const canEverWrite = computed(() =>
-    WRITE_CAPABILITIES.some((c) => actor.value?.capabilities.includes(c) === true),
-  );
 
   async function refresh(): Promise<void> {
     try {
@@ -136,12 +115,11 @@ export const useAuthStore = defineStore('auth', () => {
 
   /**
    * Open the StepUpDialog. Called from:
-   *   - The EditModeFab (no `reason` — user-initiated).
+   *   - `requireStepUp`, for a write while not elevated.
    *   - The API client when a response says the cached step-up password
-   *     is missing/rejected (`reason` populated, e.g. "editing session
-   *     expired"). In that case we also clear the local `actor.elevated`
-   *     flag so the FAB visually drops to view-only rather than
-   *     continuing to imply edit mode is armed.
+   *     is missing/rejected (`reason` populated). In that case we also
+   *     clear the local `actor.elevated` flag so the UI stops showing
+   *     writes as unlocked.
    */
   function requestStepUp(reason: string | null = null): void {
     if (reason && actor.value?.elevated.active) {
@@ -192,14 +170,14 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   /**
-   * Run `action` if the operator is currently in edit mode; otherwise queue
+   * Run `action` if the operator has an elevated session; otherwise queue
    * the action as the step-up retry and open the StepUpDialog. Used by every
-   * action button across the app whose work requires a writable session, so
-   * an unauthenticated click always *does something* visible: either run
-   * immediately, or pop the password dialog and auto-fire after auth. The
-   * action is responsible for its own toast/error reporting.
+   * write across the app, so a click without one always *does something*
+   * visible: either run immediately, or pop the password dialog and run
+   * after step-up. The action is responsible for its own toast/error
+   * reporting.
    */
-  function requireEdit(action: () => void | Promise<void>, reason: string | null = null): void {
+  function requireStepUp(action: () => void | Promise<void>, reason: string | null = null): void {
     if (elevated.value) {
       void Promise.resolve()
         .then(action)
@@ -237,10 +215,6 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  // Aliases that read better at the call site for the edit-mode toggle.
-  const enableEditMode = stepUp;
-  const disableEditMode = revokeStepUp;
-
   return {
     sessionEnded,
     actor,
@@ -250,22 +224,17 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     elevated,
     elevatedIdleEndsAt,
-    editMode,
-    remainingSeconds,
-    canEverWrite,
     hasCapability,
     refresh,
     login,
     logout,
     stepUp,
     revokeStepUp,
-    enableEditMode,
-    disableEditMode,
     stepUpRequested,
     stepUpReason,
     stepUpPendingAction,
     requestStepUp,
-    requireEdit,
+    requireStepUp,
     retryAfterStepUp,
   };
 });

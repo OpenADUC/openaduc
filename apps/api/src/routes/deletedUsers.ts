@@ -78,10 +78,8 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
         if (err instanceof StepUpBindFailedError) {
           // Cached step-up password is stale (operator's AD password
           // changed, or the credential was wiped). 403 prompts the UI
-          // to drop edit mode and ask for re-elevation.
-          throw StepUpRequired(
-            'the directory rejected your editing session — please re-authenticate',
-          );
+          // to end the elevated session and ask for step-up again.
+          throw StepUpRequired('the directory rejected your step-up password — step up again');
         }
         throw err;
       }
@@ -139,9 +137,7 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
         user = await provider.getDeletedUser(guid, ctxFromReq(req));
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired(
-            'the directory rejected your editing session — please re-authenticate',
-          );
+          throw StepUpRequired('the directory rejected your step-up password — step up again');
         }
         throw err;
       }
@@ -182,9 +178,7 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
         before = await provider.getDeletedUser(guid, ctx);
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired(
-            'the directory rejected your editing session — please re-authenticate',
-          );
+          throw StepUpRequired('the directory rejected your step-up password — step up again');
         }
         throw err;
       }

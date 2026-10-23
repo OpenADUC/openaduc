@@ -36,8 +36,8 @@ const canRestore = computed(() => auth.hasCapability('write:user.restore'));
 
 async function load(): Promise<void> {
   // Step-up gates the API; bail early instead of provoking a 403 the
-  // moment the user lands on the page without edit mode on.
-  if (!auth.editMode) return;
+  // moment the operator lands on the page without an elevated session.
+  if (!auth.elevated) return;
   loading.value = true;
   error.value = null;
   try {
@@ -53,7 +53,7 @@ async function load(): Promise<void> {
   } catch (err) {
     error.value =
       err instanceof ApiError && err.status === 403
-        ? 'Your account does not have permission to view deleted users (or your editing session expired).'
+        ? 'Your account does not have permission to view deleted users (or your elevated session ended).'
         : err instanceof Error
           ? err.message
           : 'Failed to load deleted users';
@@ -62,12 +62,12 @@ async function load(): Promise<void> {
   }
 }
 
-// Re-load when edit mode flips on. When it flips off (manual or TTL
-// expiry), drop the data so the empty surface matches the locked-out
+// Re-load when the elevated session starts. When it ends (by the operator
+// or by timeout), drop the data so the empty surface matches the locked-out
 // state — the operator shouldn't keep seeing the deleted-users list
 // after their elevated session ended.
 watch(
-  () => auth.editMode,
+  () => auth.elevated,
   (now, prev) => {
     if (now && !prev) {
       void load();
@@ -95,10 +95,9 @@ function onPage(ev: DataTablePageEvent): void {
 }
 
 // ---- Restore flow ----------------------------------------------------------
-// Single-row restore via a confirmation dialog. The actual write requires
-// edit mode (step-up) — the dialog Restore button is disabled until the
-// operator turns on edit mode via the topbar toggle, with a hint explaining
-// why. v1 doesn't expose target-OU override; we rely on lastKnownParent.
+// Single-row restore via a confirmation dialog. The write needs step-up,
+// which viewing the list already required. v1 doesn't expose target-OU
+// override; we rely on lastKnownParent.
 
 const pending = ref<DeletedUserSummary | null>(null);
 const dialogOpen = ref(false);
@@ -141,11 +140,11 @@ async function confirmRestore(): Promise<void> {
   }
 }
 
-// Auto-load only when the operator already has edit mode on (e.g. they
-// turned it on elsewhere and navigated here). When off, the template
+// Auto-load only when the operator already has an elevated session (e.g.
+// they stepped up elsewhere and navigated here). Otherwise the template
 // renders the gate panel and waits for the watch above to fire.
 onMounted(() => {
-  if (auth.editMode) void load();
+  if (auth.elevated) void load();
 });
 
 // ---- Recycle-bin banner content -------------------------------------------
@@ -212,27 +211,22 @@ const bannerBody = computed(() => {
       </template>
     </PageHeader>
 
-    <!-- Edit-mode gate. The list and restore both bind to AD as the
+    <!-- Step-up gate. The list and restore both bind to AD as the
          operator (no service-account elevation), so we need the cached
-         step-up password to be present. When not elevated, the entire
-         working surface is replaced with a clear hint pointing at the
-         topbar toggle — no half-loaded UI, no confusing 403s. -->
-    <div v-if="!auth.editMode" class="gate-panel">
+         step-up password to be present. Without an elevated session the
+         entire working surface is replaced with a step-up prompt — no
+         half-loaded UI, no confusing 403s. -->
+    <div v-if="!auth.elevated" class="gate-panel">
       <i class="pi pi-lock gate-icon" />
       <div class="gate-stack">
-        <strong>Editing required to view deleted users</strong>
+        <strong>Step up to view deleted users</strong>
         <p class="gate-body">
           The deleted-users list reads Active Directory as your account, not the service account, so
-          what you see and what you can restore is governed by your AD permissions. Authenticate to
-          load the page.
+          what you see and what you can restore is governed by your AD permissions. Step up to load
+          the page.
         </p>
         <div>
-          <Button
-            label="Authenticate"
-            icon="pi pi-key"
-            size="small"
-            @click="auth.requestStepUp()"
-          />
+          <Button label="Step up" icon="pi pi-key" size="small" @click="auth.requestStepUp()" />
         </div>
       </div>
     </div>
@@ -340,7 +334,7 @@ const bannerBody = computed(() => {
               severity="primary"
               :disabled="restoring || data.recycled"
               :title="data.recycled ? 'Recycled entries cannot be restored' : undefined"
-              @click="auth.requireEdit(() => askRestore(data))"
+              @click="askRestore(data)"
             />
           </template>
         </Column>
@@ -392,7 +386,7 @@ const bannerBody = computed(() => {
           icon="pi pi-undo"
           :loading="restoring"
           :disabled="!pending"
-          @click="auth.requireEdit(confirmRestore)"
+          @click="auth.requireStepUp(confirmRestore)"
         />
       </template>
     </Dialog>

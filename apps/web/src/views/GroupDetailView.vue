@@ -44,9 +44,7 @@ const addLoading = ref(false);
 const addSelected = ref<UserSummary | null>(null);
 let addTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Action state — single bool now that step-up/password-prompt is consolidated
-// into the EditModeFab. Each membership change calls the API directly with
-// the cached step-up creds; we track which row is busy for the per-row spinner.
+// Tracks which row is busy for the per-row spinner.
 const writeRunning = ref(false);
 const busyMemberId = ref<string | null>(null);
 
@@ -327,7 +325,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           label="Add member"
           icon="pi pi-user-plus"
           size="small"
-          @click="auth.requireEdit(openAdd)"
+          @click="openAdd"
         />
       </nav>
 
@@ -339,12 +337,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           message="Run a sync if this seems wrong, or add a member to get started."
         >
           <template #actions>
-            <Button
-              v-if="canManage"
-              label="Add member"
-              icon="pi pi-user-plus"
-              @click="auth.requireEdit(openAdd)"
-            />
+            <Button v-if="canManage" label="Add member" icon="pi pi-user-plus" @click="openAdd" />
           </template>
         </EmptyState>
         <DataTable
@@ -398,7 +391,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 size="small"
                 text
                 :loading="busyMemberId === (data as GroupMember).id"
-                @click.stop="auth.requireEdit(() => startRemove(data as GroupMember))"
+                @click.stop="auth.requireStepUp(() => startRemove(data as GroupMember))"
               />
             </template>
           </Column>

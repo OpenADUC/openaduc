@@ -267,14 +267,11 @@ const ctxItems = computed<MenuItem[]>(() => {
   const ou = ctxOu.value;
   if (!ou) return [];
   const items: MenuItem[] = [];
-  // Write actions stay clickable whether or not edit mode is on —
-  // `auth.requireEdit` pops the StepUpDialog for an unauthenticated operator
-  // and auto-fires the action after they authenticate.
   if (canUpdateOu.value) {
     items.push({
       label: 'Edit description',
       icon: 'pi pi-pencil',
-      command: () => auth.requireEdit(() => openEditDialog(ou)),
+      command: () => openEditDialog(ou),
       tooltip: 'Edit this OU’s description (rename is not supported).',
     });
   }
@@ -282,7 +279,7 @@ const ctxItems = computed<MenuItem[]>(() => {
     items.push({
       label: 'Add child OU',
       icon: 'pi pi-folder-plus',
-      command: () => auth.requireEdit(() => openCreateDialog(ou)),
+      command: () => openCreateDialog(ou),
       tooltip: 'Create a new organizational unit under this one.',
     });
   }
@@ -299,9 +296,9 @@ const ctxItems = computed<MenuItem[]>(() => {
       label: 'Delete OU',
       icon: 'pi pi-trash',
       // Disabled only if children are unknown (still fetching) or children
-      // are present. Edit-mode is handled at click time by requireEdit.
+      // are present.
       disabled: ctxHasChildren.value !== false,
-      command: () => auth.requireEdit(() => openDeleteDialog(ou)),
+      command: () => openDeleteDialog(ou),
       tooltip: childTip,
     });
   }
