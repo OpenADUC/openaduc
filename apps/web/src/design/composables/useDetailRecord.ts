@@ -12,7 +12,7 @@ import type { ToastServiceMethods } from 'primevue/toastservice';
 import { ApiError } from '../../api/client.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
-export function useDetailRecord<T extends { id: string }>(opts: {
+export interface DetailRecordOptions<T> {
   id: () => string;
   fetch: (id: string) => Promise<T>;
   notFoundMessage: string;
@@ -21,7 +21,9 @@ export function useDetailRecord<T extends { id: string }>(opts: {
   beforeLoad?: () => void;
   /** Runs when the latest load lands. */
   onLoaded?: (record: T) => void;
-}) {
+}
+
+export function useDetailRecord<T extends { id: string }>(opts: DetailRecordOptions<T>) {
   const record = ref(null) as Ref<T | null>;
   const loading = ref(false);
   const error = ref<string | null>(null);

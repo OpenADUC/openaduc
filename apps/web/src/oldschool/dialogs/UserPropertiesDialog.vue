@@ -5,19 +5,17 @@
      authentic layout with disabled controls so the experience reads as
      "ADUC, but our directory doesn't expose this here". -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinTabs from '../primitives/WinTabs.vue';
 import WinIcon from '../primitives/WinIcon.vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
+import { useUserRecord } from '../../design/composables/useDirectoryRecords.js';
 import type { UserAttribute } from '../../design/composables/useUserAttributeEdit.js';
 import { useUserChangesApply } from '../../design/composables/useUserChangesApply.js';
 import { membershipOf, useGroupMembership } from '../../design/composables/useGroupMembership.js';
 import { useToast } from 'primevue/usetoast';
-import type { UserDetail } from '@openaduc/shared';
 
 const props = defineProps<{ windowId: number; id: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -30,31 +28,19 @@ const canEditAttributes = computed(() => auth.hasCapability('write:user.attribut
 const canUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 const canManageGroups = computed(() => auth.hasCapability('write:group.membership'));
 
-const user = ref<UserDetail | null>(null);
-const loading = ref(true);
-const err = ref<string | null>(null);
-
 const { draft, problems, valid, unlock, dirty, applying, reset, apply } = useUserChangesApply({
   onApplied: () => toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 }),
   onFailed: (summary, detail) => toast.add({ severity: 'error', summary, detail, life: 6000 }),
   refresh: () => store.bumpData(),
 });
 
-async function load(): Promise<void> {
-  loading.value = true;
-  err.value = null;
-  try {
-    const resp = await api.users.get(props.id);
-    user.value = resp.user;
-    reset(resp.user);
-  } catch (e) {
-    err.value = e instanceof ApiError ? e.message : (e as Error).message;
-  } finally {
-    loading.value = false;
-  }
-}
-onMounted(load);
-watch(() => store.dataVersion, load);
+const {
+  record: user,
+  loading,
+  error: err,
+  load,
+} = useUserRecord({ id: () => props.id, onLoaded: reset });
+watch(() => store.dataVersion, load, { immediate: true });
 
 // ADUC's labels for the attributes this dialog edits.
 const LABELS: Partial<Record<UserAttribute, string>> = {

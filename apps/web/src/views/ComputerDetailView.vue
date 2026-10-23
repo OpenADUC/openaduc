@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import { useComputerRecord } from '../design/composables/useDirectoryRecords.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -8,7 +8,6 @@ import Button from 'primevue/button';
 import Message from 'primevue/message';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import { api } from '../api/index.js';
 import type { ComputerDetail } from '@openaduc/shared';
 import LiveBadge from '../design/primitives/LiveBadge.vue';
 import Card from '../design/primitives/Card.vue';
@@ -29,11 +28,8 @@ const {
   load,
   refreshing,
   refresh,
-} = useDetailRecord<ComputerDetail>({
+} = useComputerRecord({
   id: () => props.id,
-  fetch: async (id) => (await api.computers.get(id)).computer,
-  notFoundMessage: 'Computer not found',
-  failedMessage: 'Failed to load computer',
 });
 useRecordCrumb(
   () => props.id,

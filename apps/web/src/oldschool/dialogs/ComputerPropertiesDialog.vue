@@ -3,37 +3,19 @@
      System, Member Of, Delegation, Location, Managed By). Read-only:
      no computer-object write endpoint in the API today. -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinTabs from '../primitives/WinTabs.vue';
 import WinIcon from '../primitives/WinIcon.vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
-import type { ComputerDetail } from '@openaduc/shared';
+import { useComputerRecord } from '../../design/composables/useDirectoryRecords.js';
 
 const props = defineProps<{ windowId: number; id: string }>();
 defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
 
-const computer = ref<ComputerDetail | null>(null);
-const loading = ref(true);
-const err = ref<string | null>(null);
-
-async function load(): Promise<void> {
-  loading.value = true;
-  err.value = null;
-  try {
-    const resp = await api.computers.get(props.id);
-    computer.value = resp.computer;
-  } catch (e) {
-    err.value = e instanceof ApiError ? e.message : (e as Error).message;
-  } finally {
-    loading.value = false;
-  }
-}
-onMounted(load);
-watch(() => store.dataVersion, load);
+const { record: computer, loading, error: err, load } = useComputerRecord({ id: () => props.id });
+watch(() => store.dataVersion, load, { immediate: true });
 
 type TabId = 'general' | 'os' | 'memberOf' | 'delegation' | 'location' | 'managedBy';
 const tabs: { id: TabId; label: string }[] = [
