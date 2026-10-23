@@ -11,8 +11,6 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 // empties this list. Don't add to it to get a new route past the test.
 const ALLOWLIST: Record<string, string> = {
   // Writes without step-up.
-  'PATCH /api/settings':
-    'can turn off view/search auditing, change retention and lengthen sessions',
   'POST /api/directories/:id/sync': 'starts a full user sync',
   'POST /api/directories/:id/sync/reset': "resets every stuck sync task's state",
   'POST /api/directories/:id/sync-tasks/:key/run': 'starts a sync task',
