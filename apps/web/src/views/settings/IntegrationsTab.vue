@@ -72,6 +72,8 @@ onMounted(load);
 
 const editOpen = ref(false);
 const editStepUpOpen = ref(false);
+// What to run once the operator passes step-up: saving or removing.
+let afterStepUp: () => Promise<void> = submitEdit;
 const editError = ref<string | null>(null);
 const editSubmitting = ref(false);
 const editTarget = ref<DirectoryEntra | null>(null);
@@ -184,6 +186,7 @@ function openEdit(row: DirectoryEntra): void {
 
 function startSave(): void {
   if (!auth.elevated) {
+    afterStepUp = submitEdit;
     editStepUpOpen.value = true;
     return;
   }
@@ -265,9 +268,15 @@ async function disableIntegration(): Promise<void> {
     return;
   }
   if (!auth.elevated) {
+    afterStepUp = removeIntegration;
     editStepUpOpen.value = true;
     return;
   }
+  await removeIntegration();
+}
+
+async function removeIntegration(): Promise<void> {
+  if (editSubmitting.value || !editTarget.value?.integration) return;
   editSubmitting.value = true;
   try {
     await api.directories.entra.remove(editTarget.value.directory.id);
@@ -523,7 +532,7 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
       </template>
     </Dialog>
 
-    <StepUpDialog v-model:visible="editStepUpOpen" @ok="submitEdit" />
+    <StepUpDialog v-model:visible="editStepUpOpen" @ok="afterStepUp()" />
   </div>
 </template>
 
