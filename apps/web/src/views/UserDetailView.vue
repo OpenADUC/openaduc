@@ -330,6 +330,9 @@ const {
   // The Overview activity card belongs to the previous user: clear it, and
   // abandon a request for it still in flight.
   beforeLoad: () => {
+    // Moving to another user drops the record; drop its edits with it, so
+    // the leave prompts never count them while the next one loads or fails.
+    if (!user.value) resetDraft(null);
     activityRequests.begin();
     activityLoading.value = false;
     activityLoaded.value = false;
