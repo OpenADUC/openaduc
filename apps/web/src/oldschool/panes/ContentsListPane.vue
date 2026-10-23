@@ -19,7 +19,9 @@ import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
 import {
   useAccountActions,
   type AccountAction,
+  type AccountActionFailure,
 } from '../../design/composables/useAccountActions.js';
+import type { UndoOffer } from '../../design/lib/undoableWrite.js';
 
 const store = useOldSchool();
 const auth = useAuthStore();
@@ -185,23 +187,19 @@ const DONE: Record<AccountAction, (name: string) => string> = {
   disable: (name) => `Object "${name}" has been disabled.`,
   unlock: (name) => `${name} unlocked.`,
 };
-const { runningOn, run: runAccountAction } = useAccountActions<Row>({
-  onDone: (action, r, offer) => {
+// Users and computers say the same things, as ADUC does.
+const feedback = {
+  onDone: (action: AccountAction, r: Row, offer: UndoOffer) => {
     toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
     store.bumpData();
   },
-  onFailed: ({ op: { action, account }, message }) =>
+  onFailed: ({ op: { action, account }, message }: AccountActionFailure<Row>) =>
     store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
-});
-
+};
+const { runningOn, run: runAccountAction } = useAccountActions<Row>(feedback);
 const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActions<Row>({
   kind: 'computer',
-  onDone: (action, r, offer) => {
-    toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
-    store.bumpData();
-  },
-  onFailed: ({ op: { action, account }, message }) =>
-    store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
+  ...feedback,
 });
 
 function userItems(r: Row): CtxItem[] {

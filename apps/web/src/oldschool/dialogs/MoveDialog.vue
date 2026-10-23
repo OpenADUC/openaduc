@@ -21,7 +21,7 @@ const toast = useToast();
 const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useAccountMove(
   {
     kind: props.account,
-    onMoved: (_user, to, offer) => {
+    onMoved: (_account, to, offer) => {
       toast.add(
         undoable(
           { severity: 'success', summary: `Moved ${props.label} to ${ouName(to)}.`, life: 3000 },
