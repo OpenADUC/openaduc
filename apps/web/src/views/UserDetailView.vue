@@ -2191,8 +2191,12 @@ watch(user, (u) => {
   gap: 6px;
 }
 
-.group-grid :deep(.gchip) {
+.group-grid :deep(.gchip-wrap) {
   width: 100%;
+}
+
+.group-grid :deep(.gchip) {
+  flex: 1 1 auto;
   min-width: 0;
 }
 

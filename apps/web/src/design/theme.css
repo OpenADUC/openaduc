@@ -661,13 +661,22 @@
 }
 
 .gchip-x {
-  width: 14px;
-  height: 14px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
   display: grid;
   place-items: center;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   color: var(--text-3);
+  font-size: 10px;
+}
+
+.gchip-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .gchip-x:hover {
