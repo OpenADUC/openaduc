@@ -338,9 +338,10 @@ const freshnessText = computed(() => {
       />
       <div v-if="offersActions" class="object-tabs-actions">
         <Button
-          label="Actions"
-          icon="pi pi-chevron-down"
+          :label="isMobile ? undefined : 'Actions'"
+          :icon="isMobile ? 'pi pi-ellipsis-v' : 'pi pi-chevron-down'"
           icon-pos="right"
+          aria-label="Actions"
           severity="secondary"
           text
           size="small"
@@ -798,18 +799,26 @@ const freshnessText = computed(() => {
   display: none;
 }
 
-/* Tabs scroll sideways rather than wrap, so labels stay readable. */
+/* On a phone the tabs are icons and scroll sideways on their own, so
+   refresh and Actions stay at the end of the bar, in reach. */
 @media (max-width: 767.98px) {
-  .object-tabs {
+  .object-tablist {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
-    flex-wrap: nowrap;
-    scrollbar-width: thin;
-    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
     scroll-snap-type: x proximity;
   }
 
-  .object-tabs > * {
+  .object-tab {
+    flex: 0 0 auto;
     scroll-snap-align: start;
+  }
+
+  .object-tab-label,
+  .object-tabs-spacer {
+    display: none;
   }
 
   .object-tabs-refresh,
