@@ -391,6 +391,13 @@ describe('class Temporary Access Passes', () => {
     expect(past.json()).toMatchObject({ error: { message: 'Class starts in the past.' } });
   });
 
+  it('stops holding a pass replaced outside the roster', async () => {
+    const [current] = graph.passes.get('entra-cara.cole')!;
+    graph.passes.set('entra-cara.cole', [{ ...current!, id: 'made-in-the-portal' }]);
+    expect(await rosterRow('cara.cole')).toMatchObject({ status: 'replaced', held: false });
+    expect(await passOf('cara.cole')).toMatchObject({ status: 'issued', pass_enc: null });
+  });
+
   it('deletes a pass’s value once it expires', async () => {
     const dev = await passOf('dev.dunn');
     await api.app.db

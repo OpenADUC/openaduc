@@ -610,6 +610,9 @@ export class ClassPassService {
 
     let statusError: string | null = null;
     const live = new Map<string, { status: ClassRosterRow['status']; message: string | null }>();
+    // Passes Entra has replaced with another. One it lists none for is
+    // kept: it may be a moment before a pass just made is listed.
+    const replaced = new Set<string>();
     const toRead = rows.filter(
       (r) =>
         r.status === 'issued' && r.entra_user_id && r.expires_at && new Date(r.expires_at) > now,
@@ -620,8 +623,11 @@ export class ClassPassService {
           const res = await graph.getJson(
             `/users/${encodeURIComponent(r.entra_user_id!)}/authentication/temporaryAccessPassMethods`,
           );
-          const passes = listOf(livePassSchema).parse(res.data).value;
-          live.set(String(r.row_id), graphPassStatus(passes[0] ?? null, r.entra_method_id));
+          const current = listOf(livePassSchema).parse(res.data).value[0] ?? null;
+          live.set(String(r.row_id), graphPassStatus(current, r.entra_method_id));
+          if (current?.id && r.entra_method_id && current.id !== r.entra_method_id) {
+            replaced.add(String(r.row_id));
+          }
         } catch (err) {
           if (!(err instanceof GraphThrottledError || err instanceof GraphPermissionError))
             throw err;
@@ -632,9 +638,9 @@ export class ClassPassService {
         }
       });
     }
-    // A pass Entra says is spent, or is no longer the one it holds, needn't be kept.
+    // A pass Entra says is spent, or has replaced, needn't be kept.
     const spent = [...live].flatMap(([rowId, s]) =>
-      s.status === 'used' || s.status === 'expired' || s.status === 'replaced' ? [rowId] : [],
+      s.status === 'used' || s.status === 'expired' || replaced.has(rowId) ? [rowId] : [],
     );
     if (spent.length > 0) {
       await db
