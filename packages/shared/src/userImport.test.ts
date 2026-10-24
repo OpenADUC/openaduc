@@ -5,12 +5,19 @@ import { NOTHING_TAKEN, resolveNames, type NamingSuggestion } from './naming.js'
 import {
   IMPORT_FIELDS,
   importRequestSchema,
+  importRowSchema,
   type ImportPerson,
   type PlacementRule,
 } from './schemas/userImport.js';
 import { approvalKey } from './userCreation.js';
 import {
   ALL_ROWS_BUCKET,
+  addressConflicts,
+  initialsOf,
+  isEmailAddress,
+  looksLikeFormula,
+  resolveManagers,
+  ruleKey,
   bucketsOf,
   existingPerson,
   guessMapping,
@@ -60,6 +67,7 @@ const ctx = (values: ImportValues, over: Partial<ImportRowContext> = {}): Import
   approved: new Set(),
   people: [],
   manager: { kind: 'none' },
+  conflicts: [],
   phoneCountry: 'GB',
   ...over,
 });
@@ -80,17 +88,23 @@ describe('guessMapping', () => {
     ['Country', 'usageLocation'],
     ['Employee No.', 'employeeId'],
     ['Known as', 'preferredFirst'],
+    ['Employee #', 'employeeId'],
+    ['Manager Email Address', 'manager'],
+    ['Manager UPN', 'manager'],
+    ['Middle name', 'middleInitial'],
   ])('reads %j as %s', (header, field) => {
     expect(guessMapping([header])).toEqual([field]);
   });
 
-  it('leaves a header it doesn’t know out, and gives each field to one column', () => {
+  it('leaves a header it doesn’t know out, and gives each field to the closest name', () => {
     expect(guessMapping(['First', 'Shoe size', 'Surname', 'Last name'])).toEqual([
       'first',
       null,
-      'last',
       null,
+      'last',
     ]);
+    expect(guessMapping(['Middle name', 'Middle initial'])).toEqual([null, 'middleInitial']);
+    expect(guessMapping(['Surname', 'Family name'])).toEqual(['last', null]);
   });
 
   it('maps every column of the template, with nothing to fix', () => {
@@ -134,6 +148,7 @@ describe('readStartDate', () => {
     ['25/12/2026', '2026-12-25'],
     ['12/25/2026', '2026-12-25'],
     ['4/4/2026', '2026-04-04'],
+    ['3-Nov-26', '2026-11-03'],
     ['', null],
   ])('reads %j', (input, value) => {
     expect(readStartDate(input)).toEqual({ value, problem: null });
@@ -155,6 +170,9 @@ describe('readUsageLocation', () => {
   it('takes a two-letter code or an English country name', () => {
     expect(readUsageLocation('gb').value).toBe('GB');
     expect(readUsageLocation('United Kingdom').value).toBe('GB');
+    expect(readUsageLocation('UK').value).toBe('GB');
+    expect(readUsageLocation('U.S.A.').value).toBe('US');
+    expect(readUsageLocation('The Netherlands').value).toBe('NL');
     expect(readUsageLocation('Narnia').problem).toMatch(/isn’t a country/);
   });
 });
@@ -179,44 +197,49 @@ describe('existingPerson', () => {
     expect(existingPerson(row({ email: 'jdoe@corp.test' }), people)?.person.id).toBe(people[0]!.id);
   });
 
-  it('asks for each row’s match key and each manager', () => {
+  it('asks who holds each row’s employee ID, email and manager', () => {
     expect(
       lookupsOf([
         row({ employeeId: 'E1', email: 'a@x.test' }),
         row({ email: 'b@x.test', manager: 'boss' }),
       ]),
-    ).toEqual({ employeeIds: ['E1'], identifiers: ['b@x.test', 'boss'] });
+    ).toEqual({ employeeIds: ['E1'], identifiers: ['a@x.test', 'b@x.test', 'boss'] });
   });
 });
 
 describe('resolveManager', () => {
-  const batch = [
+  const accounts = [
     { index: 0, email: 'ann@corp.test', upn: 'ann.ash@corp.test', samAccountName: 'ann.ash' },
     { index: 1, email: null, upn: 'bo.bell@corp.test', samAccountName: 'bo.bell' },
   ];
   const boss = person({ samAccountName: 'boss', addresses: ['boss@corp.test'] });
 
   it('finds the manager in the import first, by email, UPN or sAMAccountName', () => {
-    expect(resolveManager('ANN@corp.test', 1, batch, [])).toEqual({ kind: 'row', index: 0 });
-    expect(resolveManager('bo.bell', 0, batch, [])).toEqual({ kind: 'row', index: 1 });
+    expect(resolveManager('ANN@corp.test', 1, accounts, [])).toEqual({ kind: 'row', index: 0 });
+    expect(resolveManager('bo.bell', 0, accounts, [])).toEqual({ kind: 'row', index: 1 });
   });
 
   it('then in the directory', () => {
-    expect(resolveManager('boss', 0, batch, [boss])).toEqual({ kind: 'directory', person: boss });
-    expect(resolveManager('boss@corp.test', 0, batch, [boss])).toMatchObject({ kind: 'directory' });
+    expect(resolveManager('boss', 0, accounts, [boss])).toEqual({
+      kind: 'directory',
+      person: boss,
+    });
+    expect(resolveManager('boss@corp.test', 0, accounts, [boss])).toMatchObject({
+      kind: 'directory',
+    });
   });
 
   it('warns about a manager nobody is, or more than one person is', () => {
-    expect(resolveManager('ghost', 0, batch, [])).toMatchObject({
+    expect(resolveManager('ghost', 0, accounts, [])).toMatchObject({
       kind: 'unresolved',
       message: expect.stringMatching(/^Nobody in this import or the directory is “ghost”/),
     });
-    expect(resolveManager('boss', 0, batch, [boss, { ...boss, id: 'other' }])).toMatchObject({
+    expect(resolveManager('boss', 0, accounts, [boss, { ...boss, id: 'other' }])).toMatchObject({
       kind: 'unresolved',
       message: expect.stringMatching(/^More than one person/),
     });
-    expect(resolveManager('ann.ash', 0, batch, [])).toMatchObject({ kind: 'unresolved' });
-    expect(resolveManager('', 0, batch, [])).toEqual({ kind: 'none' });
+    expect(resolveManager('ann.ash', 0, accounts, [])).toMatchObject({ kind: 'invalid' });
+    expect(resolveManager('', 0, accounts, [])).toEqual({ kind: 'none' });
   });
 });
 
@@ -430,5 +453,151 @@ describe('namingRequestOf', () => {
     expect(namingRequestOf(row({ displayName: 'Dr Jane Doe' }), OU)?.overrides).toMatchObject({
       displayName: 'Dr Jane Doe',
     });
+  });
+});
+
+describe('initialsOf', () => {
+  it('keeps initials as typed, and takes a middle name’s first letter', () => {
+    expect(initialsOf('J.')).toBe('J.');
+    expect(initialsOf('JR')).toBe('JR');
+    expect(initialsOf('J. R.')).toBe('J. R.');
+    expect(initialsOf('Jo')).toBe('J');
+    expect(initialsOf('robert')).toBe('R');
+    expect(initialsOf('')).toBe(null);
+  });
+});
+
+describe('formulas', () => {
+  it.each(['=HYPERLINK("http://x","y")', '@SUM(A1)', '+cmd(1)', '-A1', '+$B$2*3'])(
+    'blocks %j',
+    (cell) => {
+      expect(looksLikeFormula(cell)).toBe(true);
+      const v = row({ department: cell });
+      expect(reviewImportRow(v, ctx(v)).blockers).toContainEqual(
+        expect.stringMatching(/looks like a spreadsheet formula/),
+      );
+    },
+  );
+
+  it.each(['+44 20 7946 0000', '-', 'O-Neill', 'Sales'])('leaves %j alone', (cell) => {
+    expect(looksLikeFormula(cell)).toBe(false);
+  });
+});
+
+describe('emails', () => {
+  it('checks an address as the server does', () => {
+    expect(isEmailAddress('jane@corp.test')).toBe(true);
+    for (const bad of ['jane@corp', 'jane@@corp.test', 'jane doe@corp.test', 'jane@corp..test']) {
+      expect(isEmailAddress(bad)).toBe(false);
+      expect(importRowSchema.shape.email.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  const line = (i: number) => i + 2;
+  const acct = (index: number, upn: string, email: string | null = null) => ({
+    index,
+    upn,
+    email,
+    samAccountName: upn.split('@')[0]!,
+  });
+
+  it('finds an email someone in the directory holds', () => {
+    const holder = person({ displayName: 'Bob Baker', addresses: ['shared@corp.test'] });
+    expect(
+      addressConflicts([acct(0, 'jane.doe@corp.test', 'Shared@corp.test')], [holder], line).get(0),
+    ).toEqual(['The email “Shared@corp.test” is already Bob Baker’s in the directory.']);
+  });
+
+  it('finds an email or UPN another row takes, either way round', () => {
+    const conflicts = addressConflicts(
+      [
+        acct(0, 'jane.doe@corp.test', 'jd@corp.test'),
+        acct(1, 'john.roe@corp.test', 'jane.doe@corp.test'),
+        acct(2, 'jd@corp.test'),
+        acct(3, 'ann.ash@corp.test', 'JD@corp.test'),
+      ],
+      [],
+      line,
+    );
+    expect(conflicts.get(0)).toBeUndefined();
+    expect(conflicts.get(1)).toEqual(['The email “jane.doe@corp.test” is row 2’s UPN too.']);
+    expect(conflicts.get(2)).toEqual(['The UPN “jd@corp.test” is row 2’s email.']);
+    expect(conflicts.get(3)).toEqual(['The email “JD@corp.test” is row 2’s email too.']);
+  });
+
+  it('blocks a row with a conflict', () => {
+    const v = row();
+    expect(reviewImportRow(v, ctx(v, { conflicts: ['Taken.'] }))).toMatchObject({
+      status: 'blocked',
+      blockers: ['Taken.'],
+    });
+  });
+});
+
+describe('manager loops', () => {
+  const accounts = [0, 1, 2].map((index) => ({
+    index,
+    email: null,
+    upn: `u${index}@corp.test`,
+    samAccountName: `u${index}`,
+  }));
+
+  it('blocks rows whose managers go round in a loop, and a row managing itself', () => {
+    const managers = resolveManagers(
+      [
+        { index: 0, manager: 'u1' },
+        { index: 1, manager: 'u0' },
+        { index: 2, manager: 'u2' },
+      ],
+      accounts,
+      [],
+      (i) => i + 2,
+    );
+    expect(managers.get(0)).toEqual({
+      kind: 'invalid',
+      message:
+        'Its managers go round in a loop (rows 2 → 3 → 2). Change a manager, or leave a row out.',
+    });
+    expect(managers.get(1)).toMatchObject({ kind: 'invalid' });
+    expect(managers.get(2)).toEqual({
+      kind: 'invalid',
+      message: 'The manager “u2” is this person.',
+    });
+    const v = row({ manager: 'u1' });
+    expect(reviewImportRow(v, ctx(v, { manager: managers.get(0)! })).status).toBe('blocked');
+  });
+
+  it('leaves a chain alone', () => {
+    const managers = resolveManagers(
+      [
+        { index: 0, manager: 'u1' },
+        { index: 1, manager: 'u2' },
+      ],
+      accounts,
+      [],
+      (i) => i + 2,
+    );
+    expect([...managers.values()].map((m) => m.kind)).toEqual(['row', 'row']);
+  });
+
+  it('is refused by the import’s schema too', () => {
+    const base = { ouDn: OU, givenName: 'A', surname: 'B', displayName: 'A B', cn: 'A B' };
+    const result = importRequestSchema.safeParse({
+      rows: [
+        { ...base, line: 2, samAccountName: 'a', userPrincipalName: 'a@corp.test', managerRow: 1 },
+        { ...base, line: 3, samAccountName: 'b', userPrincipalName: 'b@corp.test', managerRow: 0 },
+      ],
+      password: { mode: 'random' },
+      enabled: true,
+      mailFromUpn: true,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('ruleKey', () => {
+  it('is one per column and value, without case or spaces around it', () => {
+    expect(ruleKey('department', ' Sales ')).toBe(ruleKey('department', 'sales'));
+    expect(ruleKey('department', 'Sales')).not.toBe(ruleKey('office', 'Sales'));
   });
 });
