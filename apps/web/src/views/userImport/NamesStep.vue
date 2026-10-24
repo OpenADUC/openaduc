@@ -146,6 +146,14 @@ function typed(row: number, field: keyof TypedNames, e: Event): void {
                 t.deviation.kind === 'truncated' && typed(t.row, FIELD_OF[t.deviation.attribute], e)
             "
           />
+          <Button
+            label="Leave out"
+            size="small"
+            text
+            severity="secondary"
+            :aria-label="`Leave row ${t.line} out`"
+            @click="w.exclude(t.row)"
+          />
         </li>
       </ul>
     </section>
@@ -156,7 +164,11 @@ function typed(row: number, field: keyof TypedNames, e: Event): void {
         A number added to a name already taken, or characters a username can’t hold.
       </p>
       <ul class="nm-list">
-        <li v-for="d in individual" :key="`${d.row}:${d.deviation.reason}`" class="nm-item">
+        <li
+          v-for="d in individual"
+          :key="`${d.row}:${d.deviation.reason}`"
+          class="nm-item nm-inline"
+        >
           <label class="nm-check">
             <input
               type="checkbox"
@@ -166,6 +178,14 @@ function typed(row: number, field: keyof TypedNames, e: Event): void {
             <span class="nm-line">Row {{ d.line }}</span>
             <span>{{ d.deviation.reason }} <strong>Use it</strong></span>
           </label>
+          <Button
+            label="Leave out"
+            size="small"
+            text
+            severity="secondary"
+            :aria-label="`Leave row ${d.line} out`"
+            @click="w.exclude(d.row)"
+          />
         </li>
       </ul>
     </section>
@@ -183,7 +203,18 @@ function typed(row: number, field: keyof TypedNames, e: Event): void {
       <h3 class="nm-title nm-warn">Worth a look ({{ warnedRows.length }})</h3>
       <ul class="nm-list">
         <li v-for="r in warnedRows" :key="r.row" class="nm-item">
-          <span class="nm-line">Row {{ r.line }}</span> <span class="nm-name">{{ r.name }}</span>
+          <div class="nm-row-head">
+            <span class="nm-line">Row {{ r.line }}</span>
+            <span class="nm-name">{{ r.name }}</span>
+            <Button
+              label="Leave out"
+              size="small"
+              text
+              severity="secondary"
+              :aria-label="`Leave row ${r.line} out`"
+              @click="w.exclude(r.row)"
+            />
+          </div>
           <p v-for="m in r.warnings" :key="m" class="nm-note nm-warn">{{ m }}</p>
         </li>
       </ul>

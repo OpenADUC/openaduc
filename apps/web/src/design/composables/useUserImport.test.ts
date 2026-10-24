@@ -38,8 +38,9 @@ const check = vi.fn(async (_id: number, body: NamingCheckRequest) => ({
 }));
 const lookup = vi.fn(async (_body: ImportLookupRequest) => ({ people }));
 const finalCheck = vi.fn(async () => PASSED);
+// Answers with every rule, as the API does.
 const saveRules = vi.fn(async (_id: number, body: PlacementRulesSave) => ({
-  rules: body.rules.map((r) => ({
+  rules: [...rules, ...body.rules].map((r) => ({
     column: r.column,
     value: r.value,
     ouDn: r.ouDn,
@@ -62,6 +63,7 @@ vi.mock('../../api/index.js', () => ({
       placementRules: { get: async () => ({ rules }), save: saveRules },
     },
     users: { import: { lookup, check: finalCheck } },
+    auth: { logout: async () => ({ ok: true }) },
     groups: { search: async () => ({ rows: [], total: 0 }) },
   },
 }));
@@ -76,10 +78,17 @@ const SHEET = [
   'Ann\tAsh\tann@corp.test\t\t\tE3',
 ].join('\n');
 
+const DRAFT_KEY = 'openaduc.userImport.1.u-operator';
+
 function signedIn(capabilities = ['read:user', 'write:user.create', 'write:group.membership']) {
   setActivePinia(createPinia());
   const auth = useAuthStore();
-  auth.actor = { directoryId: 1, capabilities, elevated: { active: true } } as never;
+  auth.actor = {
+    directoryId: 1,
+    actorId: 'u-operator',
+    capabilities,
+    elevated: { active: true },
+  } as never;
   return useUserImport();
 }
 
@@ -196,7 +205,7 @@ describe('useUserImport', () => {
       ]);
       expect(lookup).toHaveBeenCalledWith({
         employeeIds: ['E1', 'E2', 'E3'],
-        identifiers: ['jane@corp.test'],
+        identifiers: ['jane@corp.test', 'john@corp.test', 'ann@corp.test'],
       });
       expect(wizard.namesReady.value).toBe(true);
     });
@@ -393,7 +402,7 @@ describe('useUserImport', () => {
       return wizard;
     }
 
-    it('checks the import against the directory, then remembers where each bucket went', async () => {
+    it('checks the import against the directory, and saves no placement rules', async () => {
       const wizard = await checkable();
       expect(wizard.draft.step).toBe('check');
       wizard.runCheck();
@@ -411,13 +420,42 @@ describe('useUserImport', () => {
           mailFromUpn: true,
         }),
       );
+      expect(saveRules).not.toHaveBeenCalled();
+      expect(wizard.ready.value).toBe(true);
+    });
+
+    it('remembers where each bucket went when the run asks it to', async () => {
+      const wizard = await checkable();
+      await wizard.rememberPlacements();
       expect(saveRules).toHaveBeenCalledWith(1, {
         rules: [
           { column: 'department', value: 'Sales', ouDn: SALES, groupIds: [] },
           { column: 'department', value: '', ouDn: STAFF, groupIds: [] },
         ],
       });
-      expect(wizard.ready.value).toBe(true);
+    });
+
+    it('asks the directory again after a failing check, and any row can be left out', async () => {
+      finalCheck.mockResolvedValue({
+        ...PASSED,
+        problems: [{ row: 1, kind: 'taken', message: 'The UPN is now used.' }],
+      });
+      const wizard = await checkable();
+      const [names, lookups] = [check.mock.calls.length, lookup.mock.calls.length];
+      wizard.runCheck();
+      await settled();
+
+      expect(check.mock.calls.length).toBe(names + 1);
+      expect(lookup.mock.calls.length).toBe(lookups + 1);
+      const [problem] = wizard.checkProblems.value;
+      expect(problem).toMatchObject({ row: 1, line: 3, name: 'John Roe' });
+      expect(wizard.reviews.value.get(1)?.review.status).toBe('ready');
+
+      wizard.exclude(problem!.row!);
+      await settled();
+      expect(wizard.toCreate.value).toEqual([0, 2]);
+      expect(wizard.checkStale.value).toBe(true);
+      expect(wizard.checkProblems.value).toHaveLength(1);
     });
 
     it('lists what the check found, by spreadsheet row, and saves no rules', async () => {
@@ -489,7 +527,7 @@ describe('useUserImport', () => {
       expect(again.buckets.value[0]!.placement.ouDn).toBe(SALES);
       expect(again.draft.options.passwordMode).toBe('set');
       expect(again.password.value).toBe('');
-      expect(sessionStorage.getItem('openaduc.userImport.1')).not.toContain('Brand-new-Start9');
+      expect(sessionStorage.getItem(DRAFT_KEY)).not.toContain('Brand-new-Start9');
     });
 
     it('starts afresh from an OU when nothing’s been pasted, and on Start over', async () => {
@@ -501,6 +539,135 @@ describe('useUserImport', () => {
 
       const fromOu = await started(SALES);
       expect(fromOu.draft.startOuDn).toBe(SALES);
+    });
+  });
+
+  describe('review fixes', () => {
+    it('blocks an email someone in the directory holds, though the row has an employee ID', async () => {
+      people = [
+        {
+          id: 'u-bob',
+          distinguishedName: `CN=Bob Baker,${STAFF}`,
+          samAccountName: 'bob.baker',
+          userPrincipalName: 'bob.baker@corp.test',
+          displayName: 'Bob Baker',
+          employeeId: 'E9',
+          addresses: ['jane@corp.test'],
+        },
+      ];
+      const wizard = await reviewing();
+      expect(wizard.blockedRows.value).toEqual([
+        expect.objectContaining({
+          line: 2,
+          blockers: ['The email “jane@corp.test” is already Bob Baker’s in the directory.'],
+        }),
+      ]);
+    });
+
+    it('blocks an email that is another row’s UPN', async () => {
+      const wizard = await reviewing('First,Last,Email\nJane,Doe,\nJohn,Roe,jane.doe@corp.test');
+      expect(wizard.blockedRows.value).toEqual([
+        expect.objectContaining({
+          line: 3,
+          blockers: ['The email “jane.doe@corp.test” is row 2’s UPN too.'],
+        }),
+      ]);
+    });
+
+    it('blocks managers that go round in a loop', async () => {
+      const wizard = await reviewing(
+        'First,Last,Manager\nJane,Doe,john.roe\nJohn,Roe,jane.doe\nAnn,Ash,jane.doe',
+      );
+      expect(wizard.blockedRows.value.map((b) => b.line)).toEqual([2, 3]);
+      expect(wizard.blockedRows.value[0]!.blockers).toEqual([
+        'Its managers go round in a loop (rows 2 → 3 → 2). Change a manager, or leave a row out.',
+      ]);
+    });
+
+    it('keeps a rule the start OU only started with, and replaces one the operator changed', async () => {
+      rules = [
+        {
+          column: 'department',
+          value: 'Sales',
+          ouDn: SALES,
+          groups: [],
+          updatedAt: '2026-10-01T00:00:00.000Z',
+          updatedBy: 'oa.operator',
+        },
+      ];
+      const wizard = await reviewing(SHEET, STAFF);
+      wizard.next();
+      expect(wizard.buckets.value.map((b) => [b.label, b.placement.ouDn, b.remember])).toEqual([
+        ['Sales', STAFF, 'keep'],
+        ['(blank)', STAFF, 'new'],
+      ]);
+      await wizard.rememberPlacements();
+      expect(saveRules).toHaveBeenLastCalledWith(1, {
+        rules: [{ column: 'department', value: '', ouDn: STAFF, groupIds: [] }],
+      });
+
+      wizard.setBucketOu('sales', STAFF);
+      expect(wizard.buckets.value[0]!.remember).toBe('update');
+    });
+
+    it('moves buckets not yet placed to the OU a resumed import is started from', async () => {
+      const first = await reviewing(SHEET, STAFF);
+      first.next();
+      first.setBucketOu('sales', STAFF);
+      await settled();
+
+      const again = await started(SALES);
+      expect(again.draft.startOuDn).toBe(SALES);
+      expect(again.buckets.value.map((b) => b.placement.ouDn)).toEqual([STAFF, SALES]);
+    });
+
+    it('keeps only the mapped columns in the stored draft, and signing out drops it', async () => {
+      const wizard = await started();
+      wizard.paste('First,Last,Temp password\nJane,Doe,Secret-123');
+      await settled();
+      const stored = sessionStorage.getItem(DRAFT_KEY)!;
+      expect(stored).toContain('Jane');
+      expect(stored).not.toContain('Secret-123');
+      expect(stored).not.toContain('Temp password');
+
+      await useAuthStore().logout();
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBe(null);
+    });
+
+    it('keeps two operators’ drafts apart', async () => {
+      const mine = await started();
+      mine.paste(SHEET);
+      await settled();
+      setActivePinia(createPinia());
+      const auth = useAuthStore();
+      auth.actor = {
+        directoryId: 1,
+        actorId: 'u-other',
+        capabilities: ['write:user.create'],
+      } as never;
+      const theirs = useUserImport();
+      await theirs.start();
+      expect(theirs.table.value).toBe(null);
+    });
+
+    it('reads a CSV saved in Windows-1252, and refuses characters a file lost', async () => {
+      const wizard = await started();
+      const bytes = new Uint8Array([
+        ...new TextEncoder().encode('First,Last\n'),
+        0x5a,
+        0x6f,
+        0xeb,
+        0x2c,
+        0x44,
+        0x6f,
+        0x65,
+      ]);
+      await wizard.readFile(new File([bytes], 'starters.csv'));
+      expect(wizard.table.value?.rows).toEqual([['Zoë', 'Doe']]);
+
+      wizard.paste('First,Last\nZo\uFFFD,Doe');
+      expect(wizard.sourceProblems.value).toEqual([expect.stringMatching(/couldn’t be read/)]);
+      expect(wizard.canContinue.value).toBe(false);
     });
   });
 });

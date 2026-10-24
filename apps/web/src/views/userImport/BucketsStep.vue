@@ -53,6 +53,11 @@ function openSearch(key: string): void {
 function addGroup(group: GroupSummary): void {
   if (addingTo.value !== null) w.addBucketGroup(addingTo.value, group);
 }
+const REMEMBER = {
+  new: 'Remembered for this value as a new placement rule when the import runs.',
+  update: 'Replaces this value’s placement rule when the import runs.',
+  keep: 'This value’s placement rule stays as it is.',
+};
 const ouName = (dn: string) =>
   ous.value.find((o) => o.distinguishedName.toLowerCase() === dn.toLowerCase())?.name ?? dn;
 </script>
@@ -170,6 +175,11 @@ const ouName = (dn: string) =>
         </template>
       </div>
 
+      <p v-if="b.remember" class="bk-note">
+        <i class="pi pi-bookmark" aria-hidden="true" />
+        {{ REMEMBER[b.remember] }}
+      </p>
+
       <details class="bk-rows">
         <summary>Rows ({{ b.rows.length }})</summary>
         <ul>
@@ -177,6 +187,14 @@ const ouName = (dn: string) =>
             <span class="bk-line">Row {{ w.lineOf(r) }}</span>
             <span class="bk-row-name">{{ w.nameOf(r) }}</span>
             <span v-if="w.reviews.value.get(r)?.review.existing" class="hint">skipped</span>
+            <Button
+              label="Leave out"
+              size="small"
+              text
+              severity="secondary"
+              :aria-label="`Leave row ${w.lineOf(r)} out`"
+              @click="w.exclude(r)"
+            />
             <Select
               v-if="targets.length > 1"
               :model-value="b.key"
@@ -196,7 +214,7 @@ const ouName = (dn: string) =>
       {{ p }}
     </Message>
     <p v-if="groupBy" class="hint">
-      Where each bucket goes is remembered as a placement rule when the final check passes.
+      Where each bucket goes is remembered as a placement rule when the import runs.
     </p>
   </div>
 </template>
