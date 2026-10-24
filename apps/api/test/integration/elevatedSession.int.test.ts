@@ -248,41 +248,58 @@ describe('elevated sessions end when the API restarts', () => {
     };
   };
 
+  /** Sign in and step up; returns the client and its elevated session's row. */
+  async function steppedUp(username: string) {
+    const client = api.client();
+    await client.signIn(api, username);
+    await client.stepUp();
+    const session = await api.app.db
+      .selectFrom('elevated_sessions')
+      .select(['id', 'actor_user_id'])
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+    return { client, session };
+  }
+
   it('ends every open elevated session at boot and audits why', async () => {
-    const operator = api.client();
-    await operator.signIn(api, 'oa.operator');
-    await operator.stepUp();
+    const { client: operator, session: operatorSession } = await steppedUp('oa.operator');
+    const { session: adminSession } = await steppedUp('oa.admin');
     expect((await elevated(operator)).active).toBe(true);
-    const open = () =>
-      api.app.db
-        .selectFrom('elevated_sessions')
-        .select(['id', 'actor_user_id'])
-        .where('revoked_at', 'is', null)
-        .orderBy('id')
-        .execute();
-    // The operator's, and the admin's from setup.
-    const before = await open();
-    expect(before).toHaveLength(2);
 
     await api.restart();
 
     expect(await elevated(operator)).toEqual({ active: false, idleEndHeader: undefined });
-    expect(await open()).toEqual([]);
+    const open = await api.app.db
+      .selectFrom('elevated_sessions')
+      .select('id')
+      .where('revoked_at', 'is', null)
+      .execute();
+    expect(open).toEqual([]);
     const ended = await api.app.db
       .selectFrom('audit_events')
-      .select(['target_id', 'actor_user_id', 'actor_auth_method', 'result', 'metadata_json'])
+      .select([
+        'target_id',
+        'actor_user_id',
+        'actor_auth_method',
+        'result',
+        'metadata_json',
+        'correlation_id',
+      ])
       .where('action', '=', 'auth.stepup.revoke')
-      .orderBy('target_id')
+      .where('target_id', 'in', [operatorSession.id, adminSession.id])
       .execute();
-    expect(ended).toEqual(
-      before.map((s) => ({
-        target_id: s.id,
-        actor_user_id: s.actor_user_id,
+    expect(ended).toHaveLength(2);
+    for (const session of [operatorSession, adminSession]) {
+      expect(ended.find((e) => e.target_id === session.id)).toMatchObject({
+        actor_user_id: session.actor_user_id,
         actor_auth_method: 'system',
         result: 'success',
         metadata_json: { reason: 'api_restart' },
-      })),
-    );
+      });
+    }
+    // One boot, one correlation id, so the log groups them.
+    expect(ended[0]!.correlation_id).toEqual(expect.any(String));
+    expect(ended[1]!.correlation_id).toBe(ended[0]!.correlation_id);
 
     const write = await operator.patch('/api/users/00000000-0000-0000-0000-000000000000', {});
     expect(write.json()).toMatchObject({ error: { code: 'step_up_required' } });

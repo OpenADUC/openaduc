@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { randomUUID } from 'node:crypto';
 import fp from 'fastify-plugin';
 import { loadEnv } from '../config/env.js';
 import { AuditService } from '../services/audit.js';
@@ -153,6 +154,8 @@ export default fp(async (app) => {
   });
 
   async function endElevatedSessionsLeftOpen(): Promise<void> {
+    // One id for the boot, so the audit log groups the sessions it ended.
+    const correlationId = randomUUID();
     for (const ended of await sessions.endOpenElevatedSessions()) {
       await audit
         .recordEvent({
@@ -162,6 +165,7 @@ export default fp(async (app) => {
           actorDisplayName: ended.actorDisplayName,
           actorAuthMethod: 'system',
           sessionId: ended.adminSessionId,
+          correlationId,
           providerId: ended.directoryId,
           targetType: 'session',
           targetId: ended.id,
