@@ -1131,6 +1131,29 @@
   color: var(--text) !important;
 }
 
+/* On a phone, toasts span the screen along the bottom, where a thumb
+   reaches Undo, and stay clear of the on-screen keyboard. */
+@media (max-width: 767.98px) {
+  .p-toast {
+    top: auto !important;
+    right: 12px !important;
+    bottom: calc(12px + var(--keyboard-inset, 0px)) !important;
+    left: 12px !important;
+    width: auto !important;
+    transform: none !important;
+  }
+
+  /* Clear of an object page's bar of primary actions (ObjectPageLayout). */
+  body:has(.detail-primary-bar) .p-toast {
+    bottom: calc(84px + var(--keyboard-inset, 0px)) !important;
+  }
+
+  .p-toast .p-toast-close-button {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 /* PrimeVue Card (used for the bare login/setup layouts) */
 .p-card {
   background: var(--surface) !important;
