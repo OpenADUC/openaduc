@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { DirectoryUnavailableError } from '../providers/types.js';
 import type { AuditService, AuditEventInput } from './audit.js';
 
@@ -116,4 +116,36 @@ export interface WriteOpResult {
   errorMessage?: string | null;
   /** The target's id when only the operation learns it, as a create does. */
   targetId?: string | null;
+}
+
+/**
+ * Record that the operator looked at a user, when the directory's settings
+ * ask for it. Deduped per session and user on a short window, so reloads
+ * (the refresh after a write included) don't pile up `user.view` rows next
+ * to the action they followed. Never fails the read it describes.
+ */
+export async function recordUserView(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  providerId: number,
+  user: { id: string; distinguishedName: string },
+): Promise<void> {
+  if (
+    !(await app.services.settings.get<boolean>('audit.account_view_enabled', true)) ||
+    !app.services.audit.shouldRecordView(req.actor?.session.id ?? null, 'user', user.id)
+  ) {
+    return;
+  }
+  await app.services.audit
+    .recordEvent({
+      ...auditContextFromRequest(req),
+      action: 'user.view',
+      result: 'success',
+      actorAuthMethod: 'ad-password',
+      providerId,
+      targetType: 'user',
+      targetId: user.id,
+      targetDn: user.distinguishedName,
+    })
+    .catch((err) => req.log.error({ err }, 'audit insert failed for user.view'));
 }

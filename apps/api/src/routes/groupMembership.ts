@@ -5,7 +5,7 @@ import { groupMembershipChangeSchema } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import type { DirectoryObjectIdentifier } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { reconcileNestedGroups, upsertGroup } from '../services/groupCache.js';
+import { findCachedGroups, reconcileNestedGroups, upsertGroup } from '../services/groupCache.js';
 import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
@@ -42,13 +42,8 @@ export async function changeMembership(
   if (!member) throw NotFound(`${kind} not found`);
 
   // Validate the group id belongs to this provider before bothering AD.
-  const groupRow = await app.db
-    .selectFrom('group_cache_records')
-    .select(['object_guid', 'distinguished_name', 'name'])
-    .where('provider_id', '=', provider.id)
-    .where('object_guid', '=', body.groupId)
-    .executeTakeFirst();
-  if (!groupRow) throw NotFound('group not found');
+  const [group] = await findCachedGroups(app.db, provider.id, { ids: [body.groupId] });
+  if (!group) throw NotFound('group not found');
 
   const writeCtx = ctx(actor, req);
   const result = await withAudit(
@@ -63,8 +58,8 @@ export async function changeMembership(
       targetDn: member.distinguishedName,
       metadata: {
         groupId: body.groupId,
-        groupDn: groupRow.distinguished_name,
-        groupName: groupRow.name,
+        groupDn: group.distinguishedName,
+        groupName: group.name,
       },
     },
     async () => {
