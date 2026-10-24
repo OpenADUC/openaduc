@@ -19,8 +19,30 @@ export function csvCell(value: unknown): string {
   return s;
 }
 
+/** Whether a spreadsheet would run this as a formula. */
+export const startsLikeFormula = (value: string): boolean => FORMULA_START.test(value);
+
+/**
+ * A cell holding exactly `value`, always quoted and never neutralised: for
+ * values that must stay as they are, such as passwords, which OpenADUC
+ * makes sure never start like a formula (generated ones are made again,
+ * typed ones refused).
+ */
+export function csvExactCell(value: string): string {
+  if (startsLikeFormula(value))
+    throw new Error('a value written exactly can’t start like a formula');
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+/** A row of cells; an `{ exact }` cell is written by csvExactCell. */
 export function csvRow(cells: unknown[]): string {
-  return cells.map(csvCell).join(',');
+  return cells
+    .map((c) =>
+      typeof c === 'object' && c !== null && 'exact' in c
+        ? csvExactCell(String((c as { exact: unknown }).exact))
+        : csvCell(c),
+    )
+    .join(',');
 }
 
 // ---- Reading ---------------------------------------------------------------

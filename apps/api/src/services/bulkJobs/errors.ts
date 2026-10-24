@@ -11,6 +11,7 @@ export class BulkJobRequestError extends Error {
       | 'manager_not_found'
       | 'nothing_to_revert'
       | 'not_revertible'
+      | 'nothing_to_reset'
       | 'ou_not_found'
       | 'ou_refused'
       | 'preview_mismatch'
@@ -41,6 +42,7 @@ export function refuseBulkRequest(err: unknown): never {
       case 'passwords_expired':
         throw new AppError({ statusCode: 410, code: 'gone', message: err.message });
       case 'check_failed':
+      case 'nothing_to_reset':
       case 'nothing_to_revert':
       case 'not_revertible':
       case 'ou_refused':

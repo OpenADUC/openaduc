@@ -4,10 +4,11 @@ import type {
   BulkJob,
   ImportJobResponse,
   ImportRequest,
-  ImportResultsDownload,
+  BulkJobResultsDownload,
   ImportRow,
   ImportRunRequest,
 } from '@openaduc/shared';
+import { parseTable } from '@openaduc/shared';
 import { Client as LdapClient } from 'ldapts';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -103,12 +104,20 @@ describe('running an import', () => {
     expect(res.statusCode, res.body).toBe(200);
     return res.json<ImportJobResponse>();
   };
-  const download = (id: string, client = operator) =>
-    client.post(`/api/users/import/jobs/${id}/results`);
+  const download = (id: string, client = operator) => client.post(`/api/bulk-jobs/${id}/results`);
   const audits = (where: { action?: string; targetId?: string; bulkJobId?: string }) => {
     let q = api.app.db
       .selectFrom('audit_events')
-      .select(['id', 'action', 'result', 'target_id', 'metadata_json', 'before_json', 'after_json'])
+      .select([
+        'id',
+        'action',
+        'result',
+        'error_code',
+        'target_id',
+        'metadata_json',
+        'before_json',
+        'after_json',
+      ])
       .orderBy('id');
     if (where.action) q = q.where('action', '=', where.action);
     if (where.targetId) q = q.where('target_id', '=', where.targetId);
@@ -241,7 +250,7 @@ describe('running an import', () => {
     // Random mode: the CSV has no passwords, and can be downloaded again.
     const res = await download(job.id);
     expect(res.statusCode, res.body).toBe(200);
-    const { csv } = res.json<ImportResultsDownload>();
+    const { csv } = res.json<BulkJobResultsDownload>();
     expect(csv.split('\r\n')[0]).toBe('Row,Status,Display name,Username,UPN,Problems');
     expect(csv).toContain(`2,Created,Kit Kemp,kit.kemp,kit.kemp@${DC.domain},`);
     expect((await download(job.id)).statusCode).toBe(200);
@@ -268,11 +277,18 @@ describe('running an import', () => {
     const res = await download(job.id);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
-    const [header, line] = res.json<ImportResultsDownload>().csv.split('\r\n');
-    expect(header).toBe(
-      'Row,Status,Display name,Username,UPN,Password,Must change password,Problems',
-    );
-    const password = line!.split(',')[5]!;
+    const table = parseTable(res.json<BulkJobResultsDownload>().csv);
+    expect(table.header).toEqual([
+      'Row',
+      'Status',
+      'Display name',
+      'Username',
+      'UPN',
+      'Password',
+      'Must change password',
+      'Problems',
+    ]);
+    const password = table.rows[0]![5]!;
     expect(password.length).toBeGreaterThanOrEqual(16);
     expect(await canBind(`gus.grant@${DC.domain}`, password)).toBe(true);
 
@@ -285,11 +301,12 @@ describe('running an import', () => {
     });
 
     const events = await audits({ bulkJobId: job.id });
-    expect(events.filter((e) => e.action === 'import.results.download')).toEqual([
+    expect(events.filter((e) => e.action === 'bulk.results.download')).toEqual([
       expect.objectContaining({
         result: 'success',
         metadata_json: expect.objectContaining({ passwords: true }),
       }),
+      expect.objectContaining({ result: 'failure', error_code: 'results_downloaded' }),
     ]);
     const records = await api.app.db
       .selectFrom('bulk_job_rows')
@@ -318,11 +335,6 @@ describe('running an import', () => {
       SHARED_PASSWORD,
     );
 
-    await api.app.db
-      .updateTable('bulk_jobs')
-      .set({ created_at: sql`now() - interval '25 hours'` })
-      .where('id', '=', job.id)
-      .execute();
     await api.app.db
       .updateTable('import_passwords')
       .set({ expires_at: sql`now() - interval '1 hour'` })

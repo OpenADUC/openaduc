@@ -49,6 +49,16 @@ export function membershipRequirement(
   return null;
 }
 
+/** What a membership change takes beyond write:group.membership, as a list a job checks. */
+export const membershipRequirements = (
+  op: BulkMembershipOp,
+  groups: readonly { distinguishedName: string; name: string }[],
+  roleGroups: readonly RoleGroup[],
+): MembershipRequirement[] => {
+  const needs = membershipRequirement(op, groups, roleGroups);
+  return needs ? [needs] : [];
+};
+
 const ROLE_NAMES: Record<Role, string> = {
   admin: 'Admin',
   operator: 'Operator',

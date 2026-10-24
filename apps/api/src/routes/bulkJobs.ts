@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   BULK_JOB_ACTIONS,
+  IMPORT_JOB_ACTION,
+  bulkJobResultsDownloadSchema,
   bulkJobListResponseSchema,
   bulkJobPath,
   bulkJobResponseSchema,
@@ -10,12 +12,14 @@ import {
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
   canRevert,
-  type BulkJobSubject,
 } from '@openaduc/shared';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { NotFound } from '../plugins/errorHandler.js';
+import { auditContextFromRequest } from '../services/auditContext.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
-import { revertRunner, type BulkRevertRunner } from '../services/bulkJobs/reverts.js';
-import type { JobActor, JobRecord } from '../services/bulkJobs/service.js';
+import { downloadResults, handsOutPasswords } from '../services/importResults.js';
+import { actorFrom, requireFor } from '../services/bulkJobs/requestContext.js';
+import { revertRunner } from '../services/bulkJobs/reverts.js';
+import type { JobRecord } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
 const listQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) });
@@ -112,6 +116,29 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     },
   });
 
+  // The results CSV of a job that hands out passwords, or of an import:
+  // it takes the job's capability and step-up, as it can hold credentials.
+  // With passwords it's downloadable once (services/importResults.ts).
+  app.post('/api/bulk-jobs/:id/results', {
+    config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
+    handler: async (req, reply) => {
+      const job = await ownJob(req);
+      if (job.action !== IMPORT_JOB_ACTION && !handsOutPasswords(job)) {
+        throw NotFound('this job has no results to download');
+      }
+      await app.requireCapability(req, jobs.runner(job).capability);
+      const download = await downloadResults(
+        { db: app.db, audit: app.services.audit },
+        job,
+        await jobs.describeOne(job.id),
+        auditContextFromRequest(req),
+      ).catch(refuseBulkRequest);
+      // It can hold credentials: not for any cache between here and the browser.
+      reply.header('Cache-Control', 'no-store');
+      return bulkJobResultsDownloadSchema.parse(download);
+    },
+  });
+
   // No step-up: stopping a job only prevents writes, and an operator whose
   // elevated session ended should be able to stop a paused job.
   app.post('/api/bulk-jobs/:id/cancel', {
@@ -165,34 +192,4 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     if (!job) throw NotFound('bulk job not found');
     return job;
   }
-}
-
-/** The job's capability, and what its subject takes beyond it, such as handing out a role. */
-export async function requireFor(
-  app: FastifyInstance,
-  req: FastifyRequest,
-  runner: Pick<BulkRevertRunner, 'capability' | 'requires'>,
-  subject: BulkJobSubject | null,
-): Promise<void> {
-  await app.requireCapability(req, runner.capability);
-  const roleGroups = await app.services.authorization.roleGroups();
-  for (const needs of runner.requires?.(subject, roleGroups) ?? []) {
-    await app.requireCapability(req, needs.capability, needs.reason);
-  }
-}
-
-/** The operator a job writes as, from the request that starts or continues it. */
-export function actorFrom(req: FastifyRequest): JobActor {
-  const { session } = req.actor!;
-  if (!session.actorUsername) throw Unauthorized('session has no bind identity');
-  return {
-    directoryId: req.directoryId!,
-    adminSessionId: session.id,
-    actorUserId: session.actorUserId,
-    actorDisplayName: session.actorDisplayName,
-    actorUsername: session.actorUsername,
-    sourceIp: req.ip,
-    userAgent: req.headers['user-agent'] ?? null,
-    correlationId: req.correlationId,
-  };
 }

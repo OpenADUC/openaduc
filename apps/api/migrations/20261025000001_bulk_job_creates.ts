@@ -6,12 +6,13 @@ import type { Knex } from 'knex';
 // creates runs after that manager's row (after_ordinal). Dropping NOT NULL
 // and adding nullable columns without defaults are catalogue changes only.
 //
-// The passwords an import hands out in its results CSV are held, encrypted
-// with the app's secret key, in import_passwords until the operator
-// downloads the CSV (once; results_downloaded_at) or 24 hours pass. A row
-// without row_id is the one password every row of a job gets. The table is
-// new, so its indexes are built with it; its foreign keys take a brief lock
-// on bulk_jobs and bulk_job_rows.
+// The passwords a job hands out in its results CSV (an import's, a
+// password reset's) are held, encrypted with the app's secret key, in
+// import_passwords until the operator downloads the CSV (once;
+// results_downloaded_at) or HELD_PASSWORD_HOURS (in @openaduc/shared) pass.
+// A row without row_id is the one password every row of a job gets. The
+// table is new, so its indexes are built with it; its foreign keys take a
+// brief lock on bulk_jobs and bulk_job_rows.
 export async function up(knex: Knex): Promise<void> {
   await knex.raw('ALTER TABLE bulk_job_rows ALTER COLUMN target_id DROP NOT NULL');
   await knex.raw('ALTER TABLE bulk_job_rows ADD COLUMN after_ordinal integer');
