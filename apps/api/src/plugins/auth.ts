@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import fp from 'fastify-plugin';
 import type { FastifyRequest } from 'fastify';
-import type { Capability } from '@openaduc/shared';
+import {
+  BACKGROUND_REQUEST_HEADER,
+  ELEVATED_IDLE_END_HEADER,
+  type Capability,
+} from '@openaduc/shared';
 import type { AdminSession, ElevatedSession } from '../services/sessions.js';
 import { Forbidden, NotFound, SessionRequired, StepUpRequired } from './errorHandler.js';
 
@@ -41,7 +45,7 @@ export interface ResolvedActor {
    * Populated whenever an elevated session is active and the cache still has
    * the password for it. Writes use this to bind to AD as the operator
    * without re-prompting per request. Null when not elevated or when the
-   * cache entry has been wiped (TTL expiry, step-down, logout).
+   * cache entry has been wiped (session ended, step-down, logout, restart).
    */
   elevatedPassword: string | null;
 }
@@ -72,7 +76,9 @@ declare module 'fastify' {
 
 export default fp(async (app) => {
   // ---- Resolve session on every request (no enforcement here) ------------
-  app.addHook('onRequest', async (req) => {
+  // A request from an elevated operator is activity, unless it's marked as
+  // background: it keeps the elevated session from ending idle.
+  app.addHook('onRequest', async (req, reply) => {
     req.actor = null;
     req.directoryId = null;
     const cookieToken = req.cookies[SESSION_COOKIE_NAME];
@@ -80,7 +86,17 @@ export default fp(async (app) => {
     try {
       const session = await app.services.sessions.resolve(cookieToken);
       if (!session) return;
-      const elevated = await app.services.sessions.findActiveElevated(session.id);
+      let elevated = await app.services.sessions.findActiveElevated(session.id);
+      if (elevated && req.headers[BACKGROUND_REQUEST_HEADER] !== '1') {
+        const before = elevated;
+        // Failing to record activity shouldn't fail the request.
+        elevated = await app.services.sessions.recordElevatedActivity(before).catch((err) => {
+          req.log.warn({ err }, 'recording elevated-session activity failed');
+          return before;
+        });
+        if (elevated) app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
+      }
+      if (elevated) reply.header(ELEVATED_IDLE_END_HEADER, elevated.idleExpiresAt.toISOString());
       const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
       req.actor = { session, elevated, elevatedPassword };
       req.directoryId = session.directoryId;

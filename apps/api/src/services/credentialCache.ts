@@ -10,7 +10,9 @@
  * evicted on:
  *   - explicit step-down (DELETE /api/auth/step-up)
  *   - admin session logout / revoke
- *   - elevated session TTL expiry (lazy on get + periodic sweep)
+ *   - the elevated session's end, idle or absolute (lazy on get + periodic
+ *     sweep, so it goes even if the operator never comes back). Activity
+ *     moves the end with `extend`.
  *   - step-up rotation (which calls deleteMany on prior elevated session ids)
  *
  * Passwords are held as `Buffer`s and zeroed on eviction with `.fill(0)`. Node
@@ -31,7 +33,7 @@ export class CredentialCacheService {
   private readonly entries = new Map<string, Entry>();
   private readonly sweepHandle: NodeJS.Timeout;
 
-  constructor(sweepIntervalMs = 60_000) {
+  constructor(sweepIntervalMs = 5_000) {
     this.sweepHandle = setInterval(() => this.sweep(), sweepIntervalMs);
     // Don't keep the event loop alive just for this sweep.
     this.sweepHandle.unref?.();
@@ -56,6 +58,12 @@ export class CredentialCacheService {
     }
     // Decode each time — keeps the canonical store as a buffer we can wipe.
     return entry.password.toString('utf8');
+  }
+
+  /** Move an entry's end, e.g. when activity pushes back the idle timeout. */
+  extend(elevatedSessionId: string, expiresAt: Date): void {
+    const entry = this.entries.get(elevatedSessionId);
+    if (entry) entry.expiresAt = expiresAt.getTime();
   }
 
   delete(elevatedSessionId: string): void {

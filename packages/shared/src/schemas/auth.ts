@@ -13,6 +13,15 @@ export const stepUpRequestSchema = z.object({
 });
 export type StepUpRequest = z.infer<typeof stepUpRequestSchema>;
 
+// The operator's elevated session. It ends at idleExpiresAt unless the
+// operator is active before then, and at absoluteExpiresAt regardless.
+export const elevatedSessionSchema = z.object({
+  active: z.boolean(),
+  idleExpiresAt: z.string().nullable(),
+  absoluteExpiresAt: z.string().nullable(),
+});
+export type ElevatedSessionState = z.infer<typeof elevatedSessionSchema>;
+
 export const meResponseSchema = z.object({
   actorId: z.string(),
   displayName: z.string(),
@@ -23,9 +32,6 @@ export const meResponseSchema = z.object({
   // affordance in the topbar; switching domains = log out.
   directoryId: z.number().int().positive(),
   directoryDomain: z.string().nullable(),
-  elevated: z.object({
-    active: z.boolean(),
-    expiresAt: z.string().nullable(),
-  }),
+  elevated: elevatedSessionSchema,
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;

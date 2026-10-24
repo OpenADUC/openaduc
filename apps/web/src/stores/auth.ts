@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { defineStore } from 'pinia';
 import { computed, onScopeDispose, ref } from 'vue';
-import type { LoginRequest, MeResponse } from '@openaduc/shared';
+import type { ElevatedSessionState, LoginRequest, MeResponse } from '@openaduc/shared';
 import { api } from '../api/index.js';
-import { ApiError, setStepUpRequiredHandler } from '../api/client.js';
+import { ApiError, setElevatedIdleEndHandler, setStepUpRequiredHandler } from '../api/client.js';
+
+const NOT_ELEVATED: ElevatedSessionState = {
+  active: false,
+  idleExpiresAt: null,
+  absoluteExpiresAt: null,
+};
 
 /**
  * Auth store. Owns:
@@ -44,9 +50,11 @@ export const useAuthStore = defineStore('auth', () => {
   onScopeDispose(() => window.clearInterval(tickHandle));
 
   const isAuthenticated = computed(() => actor.value !== null);
-  const elevatedExpiresAt = computed(() => actor.value?.elevated.expiresAt ?? null);
-  const elevatedExpiresAtMs = computed(() => {
-    const iso = elevatedExpiresAt.value;
+  // When the elevated session ends if the operator does nothing more. Kept
+  // current by the idle end each response carries.
+  const elevatedIdleEndsAt = computed(() => actor.value?.elevated.idleExpiresAt ?? null);
+  const elevatedIdleEndsAtMs = computed(() => {
+    const iso = elevatedIdleEndsAt.value;
     return iso ? new Date(iso).getTime() : null;
   });
 
@@ -55,15 +63,15 @@ export const useAuthStore = defineStore('auth', () => {
   // the server-side TTL lapses — no separate watcher needed.
   const elevated = computed(() => {
     if (actor.value?.elevated.active !== true) return false;
-    const exp = elevatedExpiresAtMs.value;
+    const exp = elevatedIdleEndsAtMs.value;
     return exp === null || exp > nowMs.value;
   });
 
   const editMode = elevated;
 
   const remainingSeconds = computed(() => {
-    if (!elevated.value || elevatedExpiresAtMs.value === null) return null;
-    return Math.max(0, Math.floor((elevatedExpiresAtMs.value - nowMs.value) / 1000));
+    if (!elevated.value || elevatedIdleEndsAtMs.value === null) return null;
+    return Math.max(0, Math.floor((elevatedIdleEndsAtMs.value - nowMs.value) / 1000));
   });
 
   function hasCapability(cap: string): boolean {
@@ -139,7 +147,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (reason && actor.value?.elevated.active) {
       actor.value = {
         ...actor.value,
-        elevated: { active: false, expiresAt: null },
+        elevated: NOT_ELEVATED,
       };
     }
     stepUpReason.value = reason;
@@ -154,12 +162,18 @@ export const useAuthStore = defineStore('auth', () => {
     requestStepUp(message);
   });
 
+  // Every request while elevated moves the idle end; responses carry it.
+  setElevatedIdleEndHandler((idleExpiresAt) => {
+    if (!actor.value?.elevated.active) return;
+    actor.value = { ...actor.value, elevated: { ...actor.value.elevated, idleExpiresAt } };
+  });
+
   async function stepUp(password: string): Promise<void> {
     const resp = await api.auth.stepUp({ password });
     if (actor.value) {
       actor.value = {
         ...actor.value,
-        elevated: { active: resp.elevated.active, expiresAt: resp.elevated.expiresAt },
+        elevated: resp.elevated,
       };
     }
     // Run any retry queued by a caller whose original action triggered the
@@ -217,7 +231,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (actor.value) {
         actor.value = {
           ...actor.value,
-          elevated: { active: false, expiresAt: null },
+          elevated: NOT_ELEVATED,
         };
       }
     }
@@ -235,7 +249,7 @@ export const useAuthStore = defineStore('auth', () => {
     error,
     isAuthenticated,
     elevated,
-    elevatedExpiresAt,
+    elevatedIdleEndsAt,
     editMode,
     remainingSeconds,
     canEverWrite,

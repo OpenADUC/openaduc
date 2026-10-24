@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Typed fetch client. Filled out alongside Phase 7 API endpoints.
+import { BACKGROUND_REQUEST_HEADER, ELEVATED_IDLE_END_HEADER } from '@openaduc/shared';
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
@@ -44,17 +45,41 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+/**
+ * Hook called with the elevated session's idle end whenever a response
+ * carries it. The server moves it on each request, so the auth store
+ * listens here to keep its countdown in step.
+ */
+let onElevatedIdleEnd: ((iso: string) => void) | null = null;
+export function setElevatedIdleEndHandler(fn: (iso: string) => void): void {
+  onElevatedIdleEnd = fn;
+}
+
+export interface ApiFetchInit extends RequestInit {
+  /**
+   * The SPA is making this request by itself (polling), not because the
+   * operator did something, so it doesn't keep an elevated session alive.
+   */
+  background?: boolean;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  { background, ...init }: ApiFetchInit = {},
+): Promise<T> {
   const url = path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`;
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
   }
+  if (background) headers.set(BACKGROUND_REQUEST_HEADER, '1');
   const res = await fetch(url, {
     credentials: 'include',
     ...init,
     headers,
   });
+  const idleEnd = res.headers.get(ELEVATED_IDLE_END_HEADER);
+  if (idleEnd) onElevatedIdleEnd?.(idleEnd);
   if (!res.ok) {
     let body: { error?: { code?: string; message?: string; details?: unknown } } = {};
     try {
