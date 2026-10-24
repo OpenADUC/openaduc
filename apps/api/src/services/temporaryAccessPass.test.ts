@@ -397,6 +397,7 @@ describe('issueTap', () => {
     expect(outcome).toEqual({
       ok: true,
       entraUserId: ENTRA_ID,
+      methodId: 'tap-1',
       issued: {
         temporaryAccessPass: '+drkzqAD',
         startsAt: '2026-10-24T12:00:00.000Z',
@@ -435,6 +436,15 @@ describe('issueTap', () => {
       code: 'outside_policy',
     });
     expect(graph.posts).toEqual([]);
+  });
+
+  it('fits a lifetime within the policy’s range when asked to, rather than refusing it', async () => {
+    const graph = new FakeGraph();
+    await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 25, fitLifetime: true });
+    await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 900, fitLifetime: true });
+    expect(
+      graph.posts.map((p) => (p.body as { lifetimeInMinutes: number }).lifetimeInMinutes),
+    ).toEqual([60, 480]);
   });
 
   it('won’t replace the user’s pass unless the operator was warned', async () => {

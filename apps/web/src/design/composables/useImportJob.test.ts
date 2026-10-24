@@ -90,6 +90,7 @@ function answer(
       ...results,
     },
     passwordReset,
+    classTap: null,
   };
 }
 

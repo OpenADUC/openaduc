@@ -2,6 +2,7 @@
 import {
   IMPORT_JOB_ACTION,
   bulkJobResponseSchema,
+  classTapProblems,
   importJobResponseSchema,
   importLookupRequestSchema,
   importRequestSchema,
@@ -10,6 +11,7 @@ import {
   parseDn,
   placementRulesSaveSchema,
   type CheckedImportRequest,
+  type ImportCheckIssue,
   type ImportCheckResponse,
   type ImportJobResponse,
   type ImportLookupResponse,
@@ -30,6 +32,9 @@ import {
   savePlacementRules,
 } from '../services/userImport.js';
 import { actorFrom, requireFor } from '../services/bulkJobs/requestContext.js';
+import { tenantTapPolicy } from '../services/temporaryAccessPass.js';
+import { graphFailure } from './graphFailure.js';
+import { TapNotEnabled } from './temporaryAccessPass.js';
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 
@@ -142,11 +147,43 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     },
   });
 
+  /** Why the import's people can't have class passes as asked: none when they can. */
+  async function classProblems(
+    directoryId: number,
+    body: CheckedImportRequest,
+  ): Promise<ImportCheckIssue[]> {
+    if (!body.classTap) return [];
+    const problem = (message: string, row: number | null = null): ImportCheckIssue => ({
+      row,
+      kind: 'class',
+      message,
+    });
+    const graph = (await app.services.entraIntegration.isFeatureEnabled(
+      directoryId,
+      'temporaryAccessPass',
+    ))
+      ? await app.services.graphClient.build(directoryId)
+      : null;
+    if (!graph) return [problem(TapNotEnabled().message)];
+    const policy = await tenantTapPolicy(graph).catch(graphFailure);
+    if (!policy) {
+      return [
+        problem(
+          'Temporary Access Pass is turned off in the tenant’s authentication methods policy, so there can be no class passes.',
+        ),
+      ];
+    }
+    return classTapProblems(body.classTap, body.rows, policy).map((p) => problem(p.message, p.row));
+  }
+
   /** The final check, as the operator may run it: what the run takes, against the directory now. */
   async function finalCheck(req: FastifyRequest, body: CheckedImportRequest) {
     if (body.rows.some((r) => r.groups?.length)) {
       await app.requireCapability(req, 'write:group.membership');
     }
+    // Whoever schedules class passes may issue them: the follow-up makes
+    // them on this authority, without the operator.
+    if (body.classTap) await app.requireCapability(req, 'write:user.issueTap');
     const provider = await app.services.providers.buildForRequest(req);
     const directory = await app.services.directoryConfig.getById(provider.id);
     if (!directory) throw NotFound('directory not found');
@@ -163,6 +200,7 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       },
       body,
     );
+    result.problems.push(...(await classProblems(directory.id, body)));
     return { result, directory };
   }
 
@@ -234,9 +272,10 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     handler: async (req): Promise<ImportJobResponse> => {
       const job = await ownImport(req);
       const jobs = app.services.bulkJobs;
-      return importJobResponseSchema.parse(
-        await importJobView(app.db, (id) => jobs.describeOne(id), job),
-      );
+      return importJobResponseSchema.parse({
+        ...(await importJobView(app.db, (id) => jobs.describeOne(id), job)),
+        classTap: await app.services.classPasses.alertOf(String(job.id)),
+      });
     },
   });
 }

@@ -235,6 +235,9 @@ export class BulkJobService {
       subject,
       rows,
       secret: handler.secret?.(request) ?? null,
+      ...(handler.stored
+        ? { stored: (trx: Kysely<DB>, jobId: string) => handler.stored!(trx, jobId, request) }
+        : {}),
     });
   }
 
@@ -343,6 +346,7 @@ export class BulkJobService {
     rows,
     revert,
     secret = null,
+    stored,
   }: {
     actor: JobActor;
     action: BulkJobKind;
@@ -356,6 +360,8 @@ export class BulkJobService {
     };
     /** The one secret every row uses, held encrypted for the job. */
     secret?: string | null;
+    /** What else the job keeps, stored with it. */
+    stored?: (trx: Kysely<DB>, jobId: string) => Promise<void>;
   }): Promise<string> {
     const targets = rows.flatMap((r) => (r.targetId === null ? [] : [r.targetId]));
     const cached =
@@ -405,6 +411,7 @@ export class BulkJobService {
           .execute();
       }
       if (secret !== null) await holdPassword(trx, String(job.id), null, secret);
+      await stored?.(trx, String(job.id));
       return job.id;
     });
 

@@ -27,13 +27,17 @@ export function tapRequestProblem(
   if (!request.isUsableOnce && policy.usableOnceOnly) {
     return 'The tenant’s policy allows only one-time passes.';
   }
-  if (request.startsAt) {
-    const start = Date.parse(request.startsAt);
-    if (start < now.getTime() - START_SKEW_MS) return 'The pass can’t start in the past.';
-    if (start > now.getTime() + TAP_MAX_START_DAYS * DAY_MS) {
-      return `The pass can start at most ${TAP_MAX_START_DAYS} days from now.`;
-    }
-  }
+  const start = request.startsAt ? tapStartProblem(request.startsAt, now) : null;
+  if (start === 'past') return 'The pass can’t start in the past.';
+  if (start === 'tooFar') return `The pass can start at most ${TAP_MAX_START_DAYS} days from now.`;
+  return null;
+}
+
+/** Whether a pass can't start then: it's past, or further ahead than TAP_MAX_START_DAYS. */
+export function tapStartProblem(startsAt: string | Date, now: Date): 'past' | 'tooFar' | null {
+  const start = new Date(startsAt).getTime();
+  if (start < now.getTime() - START_SKEW_MS) return 'past';
+  if (start > now.getTime() + TAP_MAX_START_DAYS * DAY_MS) return 'tooFar';
   return null;
 }
 

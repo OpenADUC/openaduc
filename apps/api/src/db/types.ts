@@ -10,6 +10,7 @@ import type {
   BulkJobPauseReason,
   BulkJobRowStatus,
   BulkJobStatus,
+  ClassStart,
   ImportField,
 } from '@openaduc/shared';
 
@@ -482,6 +483,37 @@ export interface ImportPasswordsTable {
   created_at: TimestampDefault;
 }
 
+/** See migrations/20261027000001_class_passes.ts. */
+export interface ImportClassesTable {
+  job_id: string;
+  start: JSONColumnType<ClassStart>;
+  lifetime_minutes: number;
+  is_usable_once: boolean;
+  created_at: TimestampDefault;
+  updated_at: TimestampDefault;
+}
+
+export type ClassPassState = 'waiting' | 'issued' | 'refused' | 'failed';
+
+export interface ClassPassesTable {
+  row_id: string;
+  job_id: string;
+  status: ColumnType<ClassPassState, ClassPassState | undefined, ClassPassState>;
+  class_starts_at: Timestamp | null;
+  entra_user_id: string | null;
+  entra_method_id: string | null;
+  pass_enc: string | null;
+  pass_starts_at: Timestamp | null;
+  expires_at: Timestamp | null;
+  error_code: string | null;
+  message: string | null;
+  tenant_last_sync_at: Timestamp | null;
+  attempts: ColumnType<number, number | undefined, number>;
+  next_attempt_at: TimestampDefault;
+  claim_token: string | null;
+  updated_at: TimestampDefault;
+}
+
 export interface DB {
   directory_providers: DirectoryProvidersTable;
   directory_entra_integrations: DirectoryEntraIntegrationsTable;
@@ -501,6 +533,8 @@ export interface DB {
   bulk_job_rows: BulkJobRowsTable;
   import_placement_rules: ImportPlacementRulesTable;
   import_passwords: ImportPasswordsTable;
+  import_classes: ImportClassesTable;
+  class_passes: ClassPassesTable;
   entra_group_licenses: EntraGroupLicensesTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;

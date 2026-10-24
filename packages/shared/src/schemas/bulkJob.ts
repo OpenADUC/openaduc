@@ -5,6 +5,7 @@ import type { Capability } from '../capabilities.js';
 import { moveRequestSchema, ouRefSchema } from './ou.js';
 import { accountExpiryRequestSchema, CONTROL_CHARS } from './user.js';
 import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
+import { classTapRequestSchema } from './classTap.js';
 import { groupPrivilegeSchema, PASSWORD_MODES } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
@@ -551,6 +552,8 @@ export const bulkJobSubjectSchema = z.object({
       passwordMode: z.enum(PASSWORD_MODES),
       mustChange: z.boolean(),
       enabled: z.boolean(),
+      /** The class its people get Temporary Access Passes for, as first scheduled. */
+      classTap: classTapRequestSchema.optional(),
     })
     .optional(),
 });

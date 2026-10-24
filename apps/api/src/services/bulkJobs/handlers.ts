@@ -130,7 +130,8 @@ export interface BulkJobRowInput<Input> {
  * job acts with, so its progress and its audit entry can say it.
  * `secret`, for a job whose rows all use one secret (an import's shared
  * password), names it: it's held encrypted for the job, never stored with
- * its rows. A handler whose rows create their targets takes rows without
+ * its rows. `stored` keeps what else the job leaves to do (an import's
+ * class passes) with the job, all or nothing. A handler whose rows create their targets takes rows without
  * one (`Target`).
  */
 export interface BulkJobHandler<Request = unknown, Input = unknown, Target = string> {
@@ -143,6 +144,8 @@ export interface BulkJobHandler<Request = unknown, Input = unknown, Target = str
     lookup: { db: Kysely<DB>; directoryId: number; actorUserId: string },
   ): BulkJobRowInput<Input>[] | Promise<BulkJobRowInput<Input>[]>;
   secret?(request: Request): string | null;
+  /** Store what the job keeps besides its rows, in the transaction that stores them. */
+  stored?(trx: Kysely<DB>, jobId: string, request: Request): Promise<void>;
   prepare?(
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },

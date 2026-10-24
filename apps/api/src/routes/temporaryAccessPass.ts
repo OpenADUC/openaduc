@@ -9,17 +9,25 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { AppError, NotFound } from '../plugins/errorHandler.js';
-import { rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { graphFailure } from './graphFailure.js';
 import {
   issueTap,
   tapPreflight,
+  tapUserOf,
   type TapDeps,
   type TapIssueOutcome,
   type TapUser,
 } from '../services/temporaryAccessPass.js';
+
+export const TapNotEnabled = () =>
+  new AppError({
+    statusCode: 409,
+    code: 'tap_not_enabled',
+    message:
+      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
+  });
 
 // Issue TAP on a user's page. Both routes take write:user.issueTap: the
 // preflight says whether this user may have one and within what limits,
@@ -27,14 +35,6 @@ import {
 // issue response alone; it's never stored, logged or audited.
 
 const idParamSchema = z.object({ id: z.guid() });
-
-const NotEnabled = () =>
-  new AppError({
-    statusCode: 409,
-    code: 'tap_not_enabled',
-    message:
-      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
-  });
 
 export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): Promise<void> {
   async function prepare(
@@ -45,21 +45,16 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
     if (
       !(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'temporaryAccessPass'))
     ) {
-      throw NotEnabled();
+      throw TapNotEnabled();
     }
     const graph = await app.services.graphClient.build(directoryId);
-    if (!graph) throw NotEnabled();
+    if (!graph) throw TapNotEnabled();
     const provider = await app.services.providers.buildForRequest(req);
     const user = await provider.getUser({ kind: 'objectGuid', value: id });
     if (!user) throw NotFound('user not found');
     return {
       user,
-      tapUser: {
-        sid: user.sid,
-        displayName: user.displayName,
-        samAccountName: user.samAccountName,
-        protectedAccount: rawScalarValue(user.rawAttributes['adminCount']) === '1',
-      },
+      tapUser: tapUserOf(user),
       deps: {
         graph,
         tokenGroups: () =>
