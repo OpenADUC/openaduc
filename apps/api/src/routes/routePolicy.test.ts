@@ -101,6 +101,16 @@ describe('route policies', () => {
     expect(broken).toEqual([]);
   });
 
+  it('exempts from step-up only POSTs that declare a read', () => {
+    const declared = routes
+      .filter((r) => READ_ONLY_POSTS.has(keyOf(r)))
+      .map((r) => {
+        const policy = r.policy && 'capability' in r.policy ? r.policy : null;
+        return [keyOf(r), policy?.capability?.startsWith('read:') === true, policy?.stepUp];
+      });
+    expect(declared).toEqual([...READ_ONLY_POSTS].map((key) => [key, true, false]));
+  });
+
   it('exempts only routes that exist', () => {
     const keys = new Set(routes.map(keyOf));
     const missing = [...STEP_UP_EXEMPT, ...READ_ONLY_POSTS, ...INSTALLATION_WIDE].filter(
