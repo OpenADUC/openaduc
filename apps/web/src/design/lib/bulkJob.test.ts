@@ -15,6 +15,7 @@ const counts = (c: Partial<BulkJobCounts>): BulkJobCounts => ({
 
 const summary = (more: Partial<AuditBulkSummary>): AuditBulkSummary => ({
   action: 'user.disable',
+  subject: null,
   status: 'finished',
   pauseReason: null,
   total: 42,

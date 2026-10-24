@@ -144,6 +144,7 @@ describe('bulk actions run as server-side jobs', () => {
           action: 'bulk.create',
           bulk: {
             action: 'user.disable',
+            subject: null,
             status: 'finished',
             pauseReason: null,
             total: 3,

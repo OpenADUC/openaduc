@@ -14,6 +14,7 @@ function aJob(
   return {
     id: '7',
     action: 'user.disable',
+    subject: null,
     status,
     pauseReason: null,
     actorDisplayName: 'OpenADUC Operator',

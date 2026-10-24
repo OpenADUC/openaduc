@@ -41,6 +41,7 @@ function aJob(
   return {
     id: '7',
     action: 'user.disable',
+    subject: null,
     status,
     pauseReason: null,
     actorDisplayName: 'OpenADUC Operator',
@@ -139,7 +140,7 @@ describe('bulk actions', () => {
     await flushPromises();
     expect(bulk.job.value?.status).toBe('running');
     expect(bulk.bulkRunning.value).toBe(true);
-    expect(bulk.pendingBulkAction.value).toBe('disable');
+    expect(bulk.pendingBulkAction.value).toBe('user.disable');
 
     await after(POLL.firstMs);
     expect(bulk.job.value?.counts.succeeded).toBe(1);
