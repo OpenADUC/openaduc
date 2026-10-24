@@ -879,9 +879,7 @@ const announcement = computed(() => {
     padding: 4px 4px 4px 16px;
   }
 
-  /* Safari zooms the page into any input set smaller. */
   .gs-input {
-    font-size: 16px;
     min-height: var(--tap-target);
   }
 

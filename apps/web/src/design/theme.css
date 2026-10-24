@@ -1088,13 +1088,17 @@
     min-height: 48px;
   }
 
-  /* Safari zooms the page into any input set smaller. */
-  .p-dialog.ds-sheet input {
-    font-size: 16px;
-  }
-
   .p-dialog.ds-sheet .p-inputtext {
     min-height: var(--tap-target);
+  }
+}
+
+/* Safari zooms the page into any field set smaller than 16px. */
+@media (max-width: 767.98px) {
+  input:not([type='checkbox'], [type='radio']),
+  textarea,
+  select {
+    font-size: 16px !important;
   }
 }
 
