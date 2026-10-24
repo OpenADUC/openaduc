@@ -81,11 +81,6 @@ export const bulkJobRowsQuerySchema = z.object({
   status: z.enum(BULK_JOB_ROW_STATUSES).optional(),
 });
 
-/** Still has rows to run, now or once the operator continues it. */
-export function bulkJobIsOpen(status: BulkJobStatus): boolean {
-  return status === 'queued' || status === 'running' || status === 'paused';
-}
-
 /** A bulk job as the audit log shows it, on the `bulk.create` event that heads it. */
 export const auditBulkSummarySchema = z.object({
   action: z.enum(BULK_JOB_ACTIONS).nullable(),
