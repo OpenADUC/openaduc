@@ -588,10 +588,13 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const count = (status: UserMatchResult['status']) =>
         results.filter((r) => r.status === status).length;
       await recordSearchAudit(app, req, provider.id, {
-        pastedList: results.map((r) => r.entry),
+        pastedEntries: body.entries.length,
         matched: count('matched'),
         ambiguous: count('ambiguous'),
         unmatched: count('unmatched'),
+        matchedUserIds: [
+          ...new Set(results.flatMap((r) => (r.status === 'matched' ? [r.user.id] : []))),
+        ],
       });
 
       return userMatchResponseSchema.parse({ results });
