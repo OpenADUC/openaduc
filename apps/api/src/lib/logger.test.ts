@@ -27,6 +27,7 @@ describe('logger redaction', () => {
     'actorPassword',
     'elevatedPassword',
     'clientSecret',
+    'temporaryAccessPass',
   ])('hides %s however deep it is', (key) => {
     const line = logged({ [key]: 'top', body: { [key]: 'one' }, req: { body: { [key]: 'two' } } });
     expect(line).not.toMatch(/"(top|one|two)"/);
