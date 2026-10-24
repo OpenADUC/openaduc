@@ -30,7 +30,7 @@ import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
-import { userCreatedToast } from '../design/feedback/userToasts.js';
+import { announceUserCreated } from '../design/feedback/userToasts.js';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
@@ -49,7 +49,7 @@ async function onUserCreated(created: UserCreateResponse): Promise<void> {
   } else {
     await load();
   }
-  if (created.remaining.length === 0) toast.add(userCreatedToast(created));
+  announceUserCreated(toast, created);
 }
 
 type AcctStatus = 'enabled' | 'disabled' | 'locked';

@@ -25,7 +25,7 @@ import type { DirectoryOu, GroupCreateResponse, UserCreateResponse } from '@open
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
 import { groupCreatedToast } from '../design/feedback/groupToasts.js';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
-import { userCreatedToast } from '../design/feedback/userToasts.js';
+import { announceUserCreated } from '../design/feedback/userToasts.js';
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -395,7 +395,7 @@ async function onUserCreated(created: UserCreateResponse): Promise<void> {
   } else if (selectedDn.value) {
     void loadContents(selectedDn.value);
   }
-  if (created.remaining.length === 0) toast.add(userCreatedToast(created));
+  announceUserCreated(toast, created);
 }
 
 // ---- Create OU dialog ----------------------------------------------------

@@ -11,8 +11,9 @@ import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { dnPath, rdns } from '../../design/lib/dn.js';
-import { userCreatedToast } from '../../design/feedback/userToasts.js';
+import { announceUserCreated } from '../../design/feedback/userToasts.js';
 import { useUserCreation } from '../../design/composables/useUserCreation.js';
+import { PASSWORD_MODE_LABEL } from '../../design/lib/newUser.js';
 
 const props = defineProps<{ windowId: number; parentDn: string }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -21,7 +22,7 @@ const store = useOldSchool();
 const toast = useToast();
 const creation = useUserCreation({
   onCreated: (created) => {
-    if (created.remaining.length === 0) toast.add(userCreatedToast(created));
+    announceUserCreated(toast, created);
     store.bumpData();
     emit('close');
   },
@@ -31,11 +32,6 @@ const { form, names, upnSuffixes, deviations, plan, unfinished, unfinishedSummar
 void creation.start({ ouDn: props.parentDn });
 
 const createIn = computed(() => dnPath(rdns(props.parentDn)));
-const MODE_LABEL = {
-  random: 'Random password nobody sees',
-  generate: 'Generate a password',
-  set: 'Type a password',
-} as const;
 const locked = computed(() => submitting.value || !!unfinished.value);
 const toApprove = computed(() => deviations.value.filter((d) => d.needsApproval));
 
@@ -141,7 +137,7 @@ function ok(): void {
             :disabled="submitting"
             @change="creation.setPasswordMode(m)"
           />
-          {{ MODE_LABEL[m] }}
+          {{ PASSWORD_MODE_LABEL[m] }}
         </label>
         <div v-if="form.passwordMode !== 'random'" style="display: flex; gap: 4px; margin: 4px 0">
           <input
