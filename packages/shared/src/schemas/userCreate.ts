@@ -72,6 +72,31 @@ export function remainingSteps(
 export const PHONE_FIELDS = ['mobile', 'telephoneNumber'] as const;
 export type PhoneField = (typeof PHONE_FIELDS)[number];
 
+/** AD's upper bound on each text attribute OpenADUC writes to a new user (its schema's rangeUpper). */
+export const AD_TEXT_LIMITS = {
+  givenName: 64,
+  sn: 64,
+  initials: 6,
+  displayName: 256,
+  cn: 64,
+  mail: 256,
+  otherMailbox: 256,
+  employeeID: 16,
+  title: 128,
+  department: 64,
+  company: 64,
+  physicalDeliveryOfficeName: 128,
+  streetAddress: 1024,
+  l: 128,
+  st: 128,
+  postalCode: 40,
+  co: 128,
+  telephoneNumber: 64,
+  mobile: 64,
+  description: 1024,
+} as const;
+const L = AD_TEXT_LIMITS;
+
 /** Text AD holds up to `max` characters of, without control characters. */
 export const directoryText = (max: number) =>
   z
@@ -123,19 +148,19 @@ export type NewUserOrganisationField = (typeof NEW_USER_ORGANISATION_FIELDS)[num
 // AD's own upper bounds for each attribute.
 export const newUserOrganisationSchema = z
   .object({
-    title: optionalDirectoryText(128),
-    department: optionalDirectoryText(64),
-    company: optionalDirectoryText(64),
-    physicalDeliveryOfficeName: optionalDirectoryText(128),
+    title: optionalDirectoryText(L.title),
+    department: optionalDirectoryText(L.department),
+    company: optionalDirectoryText(L.company),
+    physicalDeliveryOfficeName: optionalDirectoryText(L.physicalDeliveryOfficeName),
     /** Multi-line, as ADUC's Street box. */
-    streetAddress: optionalDirectoryLines(1024),
-    l: optionalDirectoryText(128),
-    st: optionalDirectoryText(128),
-    postalCode: optionalDirectoryText(40),
+    streetAddress: optionalDirectoryLines(L.streetAddress),
+    l: optionalDirectoryText(L.l),
+    st: optionalDirectoryText(L.st),
+    postalCode: optionalDirectoryText(L.postalCode),
     /** The two-letter country code. */
     c: optionalDirectoryText(3),
     /** The country's name. */
-    co: optionalDirectoryText(128),
+    co: optionalDirectoryText(L.co),
     /** The country's ISO 3166 number. */
     countryCode: optionalDirectoryText(3).refine((v) => v === null || /^\d+$/.test(v), {
       message: 'must be a number',
@@ -185,20 +210,20 @@ export type UserCreatePassword = z.infer<typeof userCreatePasswordSchema>;
 export const userCreateRequestSchema = z
   .object({
     ouDn: z.string().trim().min(1).max(512),
-    givenName: directoryText(64).min(1),
-    surname: directoryText(64).min(1),
-    displayName: directoryText(256).min(1),
+    givenName: directoryText(L.givenName).min(1),
+    surname: directoryText(L.sn).min(1),
+    displayName: directoryText(L.displayName).min(1),
     /** The RDN value; the naming check suggests it (the display name, or a fallback). */
-    cn: directoryText(64).min(1),
+    cn: directoryText(L.cn).min(1),
     samAccountName: samAccountNameSchema,
     userPrincipalName: userPrincipalNameSchema.refine((v) => !CONTROL_CHARS.test(v), {
       message: 'cannot contain control characters',
     }),
     mailFromUpn: z.boolean(),
     /** A personal address, written to `otherMailbox`. */
-    personalEmail: z.string().trim().email().max(256).nullable().optional(),
-    mobile: optionalDirectoryText(64),
-    telephoneNumber: optionalDirectoryText(64),
+    personalEmail: z.string().trim().email().max(L.otherMailbox).nullable().optional(),
+    mobile: optionalDirectoryText(L.mobile),
+    telephoneNumber: optionalDirectoryText(L.telephoneNumber),
     /**
      * Phone numbers to write as typed though they can't be read as one;
      * any other is written in Entra's form, or refused if unreadable.

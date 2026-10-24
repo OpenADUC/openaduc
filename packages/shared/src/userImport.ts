@@ -2,6 +2,7 @@
 // Importing users from a spreadsheet: which column is which, what each
 // row would create and what stops it, and the buckets rows are placed
 // in. Pure, so the wizard and the server's final check decide alike.
+import { z } from 'zod';
 import { csvRow } from './csv.js';
 import { directoryCountry, directoryCountryCodes } from './country.js';
 import type { NameOverrides, NamingDeviation, NamingRequest, NamingSuggestion } from './naming.js';
@@ -9,6 +10,8 @@ import { normalizePhone, type NormalizedPhone } from './phone.js';
 import type { PhoneField } from './schemas/userCreate.js';
 import {
   IMPORT_FIELDS,
+  IMPORT_FIELD_MAX,
+  managerLoops,
   type ImportField,
   type ImportPerson,
   type ImportRow,
@@ -42,7 +45,8 @@ export const IMPORT_FIELD_LABEL: Record<ImportField, string> = {
 const SYNONYMS: Record<ImportField, string[]> = {
   first: ['firstname', 'givenname', 'given', 'forename', 'first', 'fname', 'legalfirstname'],
   last: ['lastname', 'surname', 'sn', 'familyname', 'last', 'lname', 'legallastname'],
-  middleInitial: ['middleinitial', 'middlename', 'middle', 'initials', 'initial', 'mi'],
+  // Ahead of a middle name, whose first letter is all an initial keeps.
+  middleInitial: ['middleinitial', 'mi', 'initial', 'initials', 'middlename', 'middle'],
   preferredFirst: [
     'preferredfirstname',
     'preferredname',
@@ -85,25 +89,48 @@ const SYNONYMS: Record<ImportField, string[]> = {
     'phonenumber',
   ],
   mobile: ['mobile', 'mobilephone', 'mobilenumber', 'cell', 'cellphone', 'cellnumber'],
-  manager: ['manager', 'linemanager', 'manageremail', 'reportsto', 'supervisor'],
+  manager: [
+    'manager',
+    'linemanager',
+    'manageremail',
+    'manageremailaddress',
+    'managerupn',
+    'managerusername',
+    'reportsto',
+    'supervisor',
+  ],
   description: ['description', 'notes', 'comment', 'comments'],
   usageLocation: ['usagelocation', 'country', 'countrycode'],
   startDate: ['startdate', 'start', 'hiredate', 'employeehiredate', 'joindate', 'joiningdate'],
 };
 
-const headerKey = (header: string) => header.toLowerCase().replace(/[^a-z0-9]/g, '');
+// "Employee #" is "employeenumber".
+const headerKey = (header: string) =>
+  header
+    .toLowerCase()
+    .replace(/#/g, 'number')
+    .replace(/[^a-z0-9]/g, '');
 
 /** Each column's field, or null to leave it out. */
 export type ImportMapping = (ImportField | null)[];
 
-/** Each column's field as its header suggests, each field taken by the first column naming it. */
+/**
+ * Each column's field as its header suggests. Two columns naming one
+ * field: the closer name takes it ("Middle initial" over "Middle name"),
+ * else the first.
+ */
 export function guessMapping(header: readonly string[]): ImportMapping {
-  const taken = new Set<ImportField>();
-  return header.map((h) => {
+  const guesses = header.map((h) => {
     const key = headerKey(h);
-    const field = IMPORT_FIELDS.find((f) => !taken.has(f) && SYNONYMS[f].includes(key)) ?? null;
-    if (field) taken.add(field);
-    return field;
+    const field = IMPORT_FIELDS.find((f) => SYNONYMS[f].includes(key));
+    return field ? { field, rank: SYNONYMS[field].indexOf(key) } : null;
+  });
+  return guesses.map((g, i) => {
+    if (!g) return null;
+    const wins = guesses.every(
+      (o, j) => j === i || o?.field !== g.field || o.rank > g.rank || (o.rank === g.rank && j > i),
+    );
+    return wins ? g.field : null;
   });
 }
 
@@ -212,7 +239,7 @@ export function readStartDate(input: string): Read {
     return value ? { value, problem: null } : bad;
   }
   const month = (name: string) => MONTHS.indexOf(name.slice(0, 3).toLowerCase() as never) + 1;
-  m = /^(\d{1,2})(?:st|nd|rd|th)?[\s-]+([A-Za-z]{3,})\.?,?[\s-]+(\d{4})$/.exec(v);
+  m = /^(\d{1,2})(?:st|nd|rd|th)?[\s-]+([A-Za-z]{3,})\.?,?[\s-]+(\d{4}|\d{2})$/.exec(v);
   const n = /^([A-Za-z]{3,})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/.exec(v);
   const parts = m
     ? { d: m[1]!, mon: m[2]!, y: m[3]! }
@@ -220,22 +247,51 @@ export function readStartDate(input: string): Read {
       ? { d: n[2]!, mon: n[1]!, y: n[3]! }
       : null;
   if (parts && month(parts.mon) > 0) {
-    const value = isoDate(Number(parts.y), month(parts.mon), Number(parts.d));
+    // Excel's 3-Nov-26: a start date is this century.
+    const year = parts.y.length === 2 ? 2000 + Number(parts.y) : Number(parts.y);
+    const value = isoDate(year, month(parts.mon), Number(parts.d));
     return value ? { value, problem: null } : bad;
   }
   return bad;
 }
 
-const COUNTRY_BY_NAME = new Map(
-  directoryCountryCodes().map((c) => [directoryCountry(c)!.co.toLowerCase(), c]),
-);
+const countryKey = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[.]/g, '')
+    .replace(/^the\s+/, '')
+    .replace(/\s+/g, ' ');
+const COUNTRY_ALIASES: Record<string, string> = {
+  uk: 'GB',
+  'great britain': 'GB',
+  britain: 'GB',
+  england: 'GB',
+  scotland: 'GB',
+  wales: 'GB',
+  'northern ireland': 'GB',
+  usa: 'US',
+  'united states of america': 'US',
+  america: 'US',
+  uae: 'AE',
+  holland: 'NL',
+  korea: 'KR',
+  'republic of korea': 'KR',
+  'czech republic': 'CZ',
+  'russian federation': 'RU',
+  'viet nam': 'VN',
+  türkiye: 'TR',
+};
+const COUNTRY_BY_NAME = new Map([
+  ...directoryCountryCodes().map((c): [string, string] => [countryKey(directoryCountry(c)!.co), c]),
+  ...Object.entries(COUNTRY_ALIASES),
+]);
 
 /** A usage location as its two-letter code, from the code or the country's English name. */
 export function readUsageLocation(input: string): Read {
   const v = input.trim();
   if (!v) return { value: null, problem: null };
   const code =
-    v.length === 2 && directoryCountry(v) ? v.toUpperCase() : COUNTRY_BY_NAME.get(v.toLowerCase());
+    v.length === 2 && directoryCountry(v) ? v.toUpperCase() : COUNTRY_BY_NAME.get(countryKey(v));
   return code
     ? { value: code, problem: null }
     : {
@@ -244,32 +300,29 @@ export function readUsageLocation(input: string): Read {
       };
 }
 
-// AD's upper bounds for each attribute a field is written to.
-const MAX_LENGTH: Partial<Record<ImportField, number>> = {
-  first: 64,
-  last: 64,
-  preferredFirst: 64,
-  displayName: 256,
-  employeeId: 16,
-  email: 256,
-  personalEmail: 256,
-  title: 128,
-  department: 64,
-  company: 64,
-  office: 128,
-  officePhone: 64,
-  mobile: 64,
-  manager: 256,
-  description: 1024,
-};
+const emailAddress = z.string().email();
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** An email address as the import's request takes one. */
+export function isEmailAddress(value: string): boolean {
+  return emailAddress.safeParse(value).success;
+}
 
-/** AD's `initials` holds 6 characters; a longer middle name gives its first letter. */
+// Initials as typed (J., JR, J. R.); a middle name gives its first letter.
+const INITIALS = /^([A-Z]\.?\s?){1,3}$/;
+
+/** What AD's `initials` gets from the middle initial column. */
 export function initialsOf(middle: string): string | null {
   const v = middle.trim();
   if (!v) return null;
-  return v.length <= 6 ? v : v.slice(0, 1);
+  return v.length <= 6 && INITIALS.test(v) ? v : v.charAt(0).toUpperCase();
+}
+
+// A cell a spreadsheet would run: =, @, or + or - before a function or a
+// cell reference. A phone number's + is left alone.
+const FORMULA = /^[=@]|^[+-]\s*[A-Za-z_][\w.]*\s*\(|^[+-]\s*\$?[A-Za-z]{1,3}\$?\d+\b/;
+
+export function looksLikeFormula(value: string): boolean {
+  return FORMULA.test(value);
 }
 
 /**
@@ -284,7 +337,7 @@ export function namingRequestOf(
 ): NamingRequest | null {
   if (!values.first || !values.last) return null;
   const tooLong = (['first', 'last', 'preferredFirst', 'displayName'] as const).some(
-    (f) => values[f].length > MAX_LENGTH[f]!,
+    (f) => values[f].length > IMPORT_FIELD_MAX[f]!,
   );
   if (tooLong) return null;
   return {
@@ -335,7 +388,7 @@ export function existingPerson(
   return null;
 }
 
-/** What to look up for a set of rows: their employee IDs, and their emails and managers. */
+/** Who to look up for a set of rows: whoever holds their employee IDs, emails or managers. */
 export function lookupsOf(rows: readonly ImportValues[]): {
   employeeIds: string[];
   identifiers: string[];
@@ -343,31 +396,78 @@ export function lookupsOf(rows: readonly ImportValues[]): {
   const employeeIds = new Set<string>();
   const identifiers = new Set<string>();
   // A value too long to be one is blocked anyway, so isn't asked about.
-  const fits = (v: string, max: number) => v.length <= max;
+  const fits = (v: string, field: ImportField) => !!v && v.length <= IMPORT_FIELD_MAX[field]!;
   for (const v of rows) {
-    if (v.employeeId) {
-      if (fits(v.employeeId, MAX_LENGTH.employeeId!)) employeeIds.add(v.employeeId);
-    } else if (v.email && fits(v.email, MAX_LENGTH.email!)) identifiers.add(v.email);
-    if (v.manager && fits(v.manager, MAX_LENGTH.manager!)) identifiers.add(v.manager);
+    if (fits(v.employeeId, 'employeeId')) employeeIds.add(v.employeeId);
+    if (fits(v.email, 'email')) identifiers.add(v.email);
+    if (fits(v.manager, 'manager')) identifiers.add(v.manager);
   }
   return { employeeIds: [...employeeIds], identifiers: [...identifiers] };
 }
 
-// ---- Managers ----------------------------------------------------------
-
-/** An account this import creates, as a manager value can name it. */
-export interface BatchAccount {
+/** An account the import creates, with the addresses it takes. */
+export interface PlannedAccount {
   index: number;
   email: string | null;
   upn: string;
   samAccountName: string;
 }
 
+const nameOfPerson = (p: ImportPerson) => p.displayName ?? p.samAccountName ?? p.distinguishedName;
+
+/**
+ * Each account's email against the directory, whoever else holds it, and
+ * each account's email and UPN against the other accounts' emails and
+ * UPNs; a clash is the later account's to fix. UPNs among themselves are
+ * the naming check's.
+ */
+export function addressConflicts(
+  accounts: readonly PlannedAccount[],
+  people: readonly ImportPerson[],
+  lineOf: (index: number) => number,
+): Map<number, string[]> {
+  const out = new Map<number, string[]>();
+  const add = (index: number, message: string) =>
+    out.set(index, [...(out.get(index) ?? []), message]);
+  const held = new Map<string, { index: number; what: 'email' | 'UPN' }>();
+  for (const a of accounts) {
+    const email = a.email ? lower(a.email) : null;
+    if (email) {
+      const holder = people.find((p) => holdsAddress(p, email));
+      if (holder) {
+        add(
+          a.index,
+          `The email “${a.email}” is already ${nameOfPerson(holder)}’s in the directory.`,
+        );
+      }
+      const earlier = held.get(email);
+      if (earlier) {
+        add(
+          a.index,
+          `The email “${a.email}” is row ${lineOf(earlier.index)}’s ${earlier.what} too.`,
+        );
+      }
+    }
+    const earlierUpn = held.get(lower(a.upn));
+    if (earlierUpn?.what === 'email') {
+      add(a.index, `The UPN “${a.upn}” is row ${lineOf(earlierUpn.index)}’s email.`);
+    }
+    if (email && !held.has(email)) held.set(email, { index: a.index, what: 'email' });
+    if (!held.has(lower(a.upn))) held.set(lower(a.upn), { index: a.index, what: 'UPN' });
+  }
+  return out;
+}
+
+// ---- Managers ----------------------------------------------------------
+
 export type ManagerMatch =
   | { kind: 'none' }
   | { kind: 'row'; index: number }
   | { kind: 'directory'; person: ImportPerson }
-  | { kind: 'unresolved'; message: string };
+  /** The account goes ahead without a manager. */
+  | { kind: 'unresolved'; message: string }
+  /** The row can't go ahead as it is: the run couldn't order it. */
+  | { kind: 'invalid'; message: string };
 
 /**
  * The manager a row names, by email, UPN or sAMAccountName: first among
@@ -376,28 +476,54 @@ export type ManagerMatch =
 export function resolveManager(
   value: string,
   self: number,
-  batch: readonly BatchAccount[],
+  accounts: readonly PlannedAccount[],
   people: readonly ImportPerson[],
 ): ManagerMatch {
   const v = value.trim().toLowerCase();
   if (!v) return { kind: 'none' };
-  const inBatch = batch.filter(
+  const inImport = accounts.filter(
     (a) => lower(a.email) === v || lower(a.upn) === v || lower(a.samAccountName) === v,
   );
-  if (inBatch.length === 1) {
-    return inBatch[0]!.index === self
-      ? { kind: 'unresolved', message: `The manager “${value.trim()}” is this person.` }
-      : { kind: 'row', index: inBatch[0]!.index };
+  if (inImport.length === 1) {
+    return inImport[0]!.index === self
+      ? { kind: 'invalid', message: `The manager “${value.trim()}” is this person.` }
+      : { kind: 'row', index: inImport[0]!.index };
   }
   const found = people.filter((p) => holdsAddress(p, v) || lower(p.samAccountName) === v);
-  if (inBatch.length === 0 && found.length === 1) return { kind: 'directory', person: found[0]! };
+  if (inImport.length === 0 && found.length === 1) return { kind: 'directory', person: found[0]! };
   return {
     kind: 'unresolved',
     message:
-      inBatch.length + found.length > 1
+      inImport.length + found.length > 1
         ? `More than one person is “${value.trim()}”, so the account gets no manager.`
         : `Nobody in this import or the directory is “${value.trim()}”, so the account gets no manager.`,
   };
+}
+
+/**
+ * Each row's manager, and a loop of managers within the import refused:
+ * each account is created after its manager, so a loop has no order.
+ */
+export function resolveManagers(
+  rows: readonly { index: number; manager: string }[],
+  accounts: readonly PlannedAccount[],
+  people: readonly ImportPerson[],
+  lineOf: (index: number) => number,
+): Map<number, ManagerMatch> {
+  const out = new Map(
+    rows.map(({ index, manager }) => [index, resolveManager(manager, index, accounts, people)]),
+  );
+  const managerOf = new Map<number, number>();
+  for (const [index, m] of out) if (m.kind === 'row') managerOf.set(index, m.index);
+  for (const index of managerLoops(managerOf)) {
+    const chain = [index];
+    for (let at = managerOf.get(index)!; at !== index; at = managerOf.get(at)!) chain.push(at);
+    out.set(index, {
+      kind: 'invalid',
+      message: `Its managers go round in a loop (rows ${[...chain, index].map(lineOf).join(' → ')}). Change a manager, or leave a row out.`,
+    });
+  }
+  return out;
 }
 
 // ---- Review ------------------------------------------------------------
@@ -410,6 +536,8 @@ export interface ImportRowContext {
   /** The people the directory has with the row's employee ID or email; null while pending. */
   people: readonly ImportPerson[] | null;
   manager: ManagerMatch;
+  /** Its email or UPN clashing with the directory's or another row's (addressConflicts). */
+  conflicts: readonly string[];
   phoneCountry: string | null;
 }
 
@@ -442,16 +570,24 @@ export function reviewImportRow(values: ImportValues, ctx: ImportRowContext): Im
 
   if (!values.first || !values.last) blockers.push('A first and a last name are both needed.');
   for (const d of s?.deviations ?? []) if (d.approval === 'blocked') blockers.push(d.reason);
-  for (const [field, max] of Object.entries(MAX_LENGTH) as [ImportField, number][]) {
-    if (values[field].length > max) {
+  for (const field of IMPORT_FIELDS) {
+    const value = values[field];
+    const max = IMPORT_FIELD_MAX[field];
+    if (max !== undefined && value.length > max) {
       blockers.push(`${IMPORT_FIELD_LABEL[field]} is longer than AD allows (${max} characters).`);
+    }
+    if (looksLikeFormula(value)) {
+      blockers.push(
+        `${IMPORT_FIELD_LABEL[field]} “${value}” looks like a spreadsheet formula. Fix the cell, or leave the row out.`,
+      );
     }
   }
   for (const field of ['email', 'personalEmail'] as const) {
-    if (values[field] && !EMAIL.test(values[field])) {
+    if (values[field] && !isEmailAddress(values[field])) {
       blockers.push(`${IMPORT_FIELD_LABEL[field]} “${values[field]}” isn’t an email address.`);
     }
   }
+  if (!existing) blockers.push(...ctx.conflicts);
   const usageLocation = readUsageLocation(values.usageLocation);
   const startDate = readStartDate(values.startDate);
   for (const problem of [usageLocation.problem, startDate.problem]) {
@@ -467,6 +603,7 @@ export function reviewImportRow(values: ImportValues, ctx: ImportRowContext): Im
   };
   for (const phone of Object.values(phones)) if (phone.warning) warnings.push(phone.warning);
   if (ctx.manager.kind === 'unresolved') warnings.push(ctx.manager.message);
+  if (ctx.manager.kind === 'invalid') blockers.push(ctx.manager.message);
 
   const unapproved = (s?.deviations ?? []).filter(
     (d) => needsApproval(d) && !ctx.approved.has(approvalKey(d)),
@@ -594,6 +731,11 @@ export interface BucketPlacement {
   groups: { id: string; name: string }[];
 }
 
+/** One placement rule per grouping column and bucket. */
+export function ruleKey(column: ImportField, value: string): string {
+  return `${column}\n${bucketKey(value)}`;
+}
+
 /** The placement rule for a bucket's value, when the import is grouped by the rule's column. */
 export function ruleFor(
   rules: readonly PlacementRule[],
@@ -601,7 +743,8 @@ export function ruleFor(
   bucket: Pick<ImportBucket, 'key'>,
 ): PlacementRule | null {
   if (!groupBy) return null;
-  return rules.find((r) => r.column === groupBy && bucketKey(r.value) === bucket.key) ?? null;
+  const key = ruleKey(groupBy, bucket.key);
+  return rules.find((r) => ruleKey(r.column, r.value) === key) ?? null;
 }
 
 /**
