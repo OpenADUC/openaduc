@@ -165,14 +165,10 @@ export class BulkJobService {
    * Revert a stopped job: a new job, of the same action, that puts back
    * each row's before-values, on the rows previewed (a token from
    * `previewRevert`). Rows changed again since the job are left alone
-   * unless `include` names them. `authorize` sees the job's subject first.
+   * unless `include` names them. The caller checks the operator may make
+   * its writes.
    */
-  async revert(
-    actor: JobActor,
-    job: JobRecord,
-    body: unknown,
-    authorize?: (subject: BulkJobSubject | null) => Promise<void>,
-  ): Promise<string> {
+  async revert(actor: JobActor, job: JobRecord, body: unknown): Promise<string> {
     const request = bulkJobRevertRequestSchema.parse(body);
     const plan = await this.plan(job);
     if (request.previewToken !== plan.token) {
@@ -202,7 +198,6 @@ export class BulkJobService {
         'Nothing to revert: every account the job changed is back as it was, changed since, or can’t be reverted.',
       );
     }
-    await authorize?.(job.subject_json);
     try {
       return await this.insert(actor, job.action, job.subject_json, rows, String(job.id), {
         leftAsChanged: plan.modified.length - forced.length,

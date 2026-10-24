@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
   AuditBulkSummary,
@@ -371,8 +372,9 @@ describe('reverting a bulk job', () => {
     await revert(theirs.id);
   });
 
-  it('won’t start a second revert of a job while one is under way', async () => {
-    const job = await editAttributes([users.alice], { title: 'Tester' });
+  it('won’t start a second revert of a job, nor retry it, while one is under way', async () => {
+    // The unknown user's row fails, so the job has a row to retry.
+    const job = await editAttributes([users.alice, randomUUID()], { title: 'Tester' });
     const { previewToken } = await previewRevert(job.id);
     // A revert someone else started, still paused.
     const open = await api.app.db
@@ -397,6 +399,7 @@ describe('reverting a bulk job', () => {
     const res = await admin.post(`/api/bulk-jobs/${job.id}/revert`, { previewToken });
 
     expect(res.statusCode).toBe(409);
+    expect((await operator.post(`/api/bulk-jobs/${job.id}/retry`)).statusCode).toBe(409);
     await api.app.db
       .updateTable('bulk_jobs')
       .set({ status: 'cancelled' })
