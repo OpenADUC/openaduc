@@ -95,6 +95,8 @@ const rows = computed<Row[]>(() => {
       node: n,
     });
   }
+  // While loading, `contents` still holds the previous container's objects.
+  if (loading.value) return out;
   for (const u of contents.value.users) {
     out.push({
       kind: 'user',
@@ -413,23 +415,13 @@ const headerLabel = computed(() => store.selectedNode.label);
   <div class="os-list-pane">
     <div class="os-pane-header">{{ headerLabel }}</div>
 
-    <div v-if="loading" style="padding: 8px">Loading…</div>
-    <div v-else-if="errorMsg" class="os-error" style="padding: 8px">{{ errorMsg }}</div>
-    <div
-      v-else-if="sorted.length === 0 && store.selectedNode.kind !== 'root'"
-      class="os-list-empty"
-    >
-      There are no items to show in this view.
-    </div>
-    <div
-      v-else-if="store.selectedNode.kind === 'root' || store.selectedNode.kind === 'savedQueries'"
-      class="os-list-empty"
-    >
+    <div v-if="store.selectedNode.kind === 'root'" class="os-list-empty">
       Select a container in the console tree to view its contents.
     </div>
 
+    <!-- The containers come from the tree, so they show while the objects load or fail. -->
     <div v-else class="os-list">
-      <table class="os-list-table">
+      <table v-if="sorted.length > 0" class="os-list-table">
         <thead>
           <tr>
             <th @click="clickHeader('name')">
@@ -471,6 +463,11 @@ const headerLabel = computed(() => store.selectedNode.label);
           </tr>
         </tbody>
       </table>
+      <div v-if="loading" class="os-list-status">Loading…</div>
+      <div v-else-if="errorMsg" class="os-error os-list-status">{{ errorMsg }}</div>
+      <div v-else-if="sorted.length === 0" class="os-list-empty">
+        There are no items to show in this view.
+      </div>
     </div>
 
     <WinContextMenu v-if="ctx" :x="ctx.x" :y="ctx.y" :items="ctx.items" @close="ctx = null" />

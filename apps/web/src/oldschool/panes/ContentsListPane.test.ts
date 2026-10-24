@@ -243,7 +243,7 @@ describe('a container in the Old School contents list', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    api.ous.list.mockResolvedValueOnce({
+    api.ous.list.mockResolvedValue({
       ous: [
         ou('Staff', 'DC=corp,DC=example'),
         ou('Interns', STAFF, 'Summer intake'),
@@ -284,6 +284,22 @@ describe('a container in the Old School contents list', () => {
       dn: `OU=Interns,${STAFF}`,
       label: 'Interns',
     });
+  });
+
+  it('lists its sub-OUs while its objects load, and after they fail', async () => {
+    api.ous.contents.mockReturnValueOnce(new Promise(() => {}) as never);
+    const { pane } = await openStaffTree();
+
+    expect(listed(pane).map(([name]) => name)).toEqual(['Contractors', 'Interns']);
+    expect(pane.get('.os-list-status').text()).toBe('Loading…');
+
+    api.ous.contents.mockRejectedValueOnce(
+      new ApiError(503, 'directory_unavailable', 'AD is down'),
+    );
+    const { pane: failed } = await openStaffTree();
+
+    expect(listed(failed).map(([name]) => name)).toEqual(['Contractors', 'Interns']);
+    expect(failed.get('.os-error').text()).toBe('AD is down');
   });
 
   it('lists the domain’s containers and top-level OUs', async () => {
