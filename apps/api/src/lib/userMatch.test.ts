@@ -54,8 +54,8 @@ describe('normalizeEntry', () => {
     ['mailto:jane.doe@example.com', 'jane.doe@example.com'],
     ['CORP\\jdoe', 'jdoe'],
     ['CORP\\jdoe, CORP\\bsmith', 'CORP\\jdoe, CORP\\bsmith'],
-    ['﻿jdoe​', 'jdoe'],
-    ['José', 'José'],
+    ['\uFEFFjdoe\u200B', 'jdoe'],
+    ['Jose\u0301', 'José'],
     ['', null],
     ['  "" ,', null],
   ])('%j → %j', (entry, normalized) => {
@@ -87,7 +87,7 @@ describe('matchEntries', () => {
 
   it('matches an entry with invisible characters or another Unicode form', () => {
     const jose = user('jose', { displayName: 'José Diaz' });
-    expect(matchEntries(['﻿José Diaz​'], [jose], fold)[0]).toMatchObject({
+    expect(matchEntries(['\uFEFFJose\u0301 Diaz\u200B'], [jose], fold)[0]).toMatchObject({
       status: 'matched',
     });
   });

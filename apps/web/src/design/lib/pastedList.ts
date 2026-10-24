@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
-const INVISIBLE = /[​-‍⁠﻿]/g;
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/g;
 const STRAY_SEPARATORS = /^[\s,;]+|[\s,;]+$/g;
 
 /**
