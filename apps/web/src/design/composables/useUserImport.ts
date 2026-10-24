@@ -23,6 +23,7 @@ import {
   bucketKey,
   bucketsOf,
   checkPassword,
+  startsLikeFormula,
   guessMapping,
   importRowRequest,
   importTemplateCsv,
@@ -53,6 +54,7 @@ import {
   type NamingSettings,
   type NamingSuggestion,
   type NewUserSettings,
+  type PasswordCheck,
   type PasswordMode,
   type PlacementRule,
 } from '@openaduc/shared';
@@ -680,9 +682,19 @@ export function useUserImport() {
     password.value = '';
     draft.options.mustChange = true;
   }
-  const passwordChecks = computed(() =>
+  const passwordChecks = computed<PasswordCheck[]>(() =>
     draft.options.passwordMode === 'set'
-      ? checkPassword(password.value, policy.value, { samAccountName: null, displayName: null })
+      ? [
+          ...checkPassword(password.value, policy.value, {
+            samAccountName: null,
+            displayName: null,
+          }),
+          {
+            rule: 'formula',
+            met: !startsLikeFormula(password.value),
+            text: 'Doesn’t start with =, +, - or @ (the results spreadsheet would run it)',
+          },
+        ]
       : [],
   );
   const importPassword = computed<ImportPassword | null>(() => {

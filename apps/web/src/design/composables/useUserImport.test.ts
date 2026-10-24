@@ -546,6 +546,8 @@ describe('useUserImport', () => {
       wizard.back();
       wizard.setPasswordMode('set');
       expect(wizard.canContinue.value).toBe(false);
+      wizard.password.value = '=Brand-new-Start9';
+      expect(wizard.canContinue.value).toBe(false);
       wizard.password.value = 'Brand-new-Start9';
       expect(wizard.canContinue.value).toBe(true);
     });

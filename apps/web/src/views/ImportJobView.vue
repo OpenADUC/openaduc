@@ -1,15 +1,20 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <!--
   An import's results: its progress while it runs, then each row's
-  result with a link to the account, the retry of what failed, and the
-  results CSV. The workflow lives in useImportJob; this renders it.
+  result with a link to the account, the retry of what failed, the
+  results CSV, and once its passwords are gone, a reset of them. The
+  workflow lives in useImportJob; this renders it.
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import type { ImportJobRow, ImportResultsDownload } from '@openaduc/shared';
+import {
+  IMPORT_ROW_STATUS_LABEL,
+  type BulkJobResultsDownload,
+  type ImportJobRow,
+} from '@openaduc/shared';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import { useImportJob } from '../design/composables/useImportJob.js';
@@ -18,7 +23,7 @@ import { fmtAbsolute } from '../design/lib/format.js';
 
 const props = defineProps<{ id: string }>();
 
-function save({ fileName, csv }: ImportResultsDownload): void {
+function save({ fileName, csv }: BulkJobResultsDownload): void {
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
@@ -28,7 +33,21 @@ function save({ fileName, csv }: ImportResultsDownload): void {
 }
 
 const imp = useImportJob({ save });
-const { job, rows, results, loading, loadError, failure, busy, resultsNote } = imp;
+const {
+  job,
+  rows,
+  results,
+  loading,
+  loadError,
+  failure,
+  busy,
+  resultsNote,
+  reset,
+  resetNote,
+  needingReset,
+  canReset,
+  confirmingReset,
+} = imp;
 
 watch(
   () => props.id,
@@ -42,14 +61,16 @@ const title = computed(() =>
     : 'Import',
 );
 
-const STATUS: Record<ImportJobRow['status'], { label: string; tone: string }> = {
-  pending: { label: 'Waiting', tone: 'muted' },
-  running: { label: 'Creating', tone: 'blue' },
-  succeeded: { label: 'Created', tone: 'green' },
-  partial: { label: 'Created, partly set up', tone: 'amber' },
-  failed: { label: 'Not created', tone: 'red' },
-  skipped: { label: 'Skipped', tone: 'muted' },
+const TONE: Record<ImportJobRow['status'], string> = {
+  pending: 'muted',
+  running: 'blue',
+  succeeded: 'green',
+  partial: 'amber',
+  failed: 'red',
+  skipped: 'muted',
 };
+const accounts = (n: number) => (n === 1 ? '1 account' : `${n} accounts`);
+const created = computed(() => rows.value.filter((r) => r.id !== null).length);
 
 /** What went wrong for a row: each failed step, or why it wasn't created. */
 const problemsOf = (row: ImportJobRow): string[] =>
@@ -103,6 +124,65 @@ const downloadLabel = computed(() =>
         </Message>
       </section>
 
+      <section v-if="canReset || reset" class="ij-section" aria-labelledby="ij-reset">
+        <h2 id="ij-reset" class="ij-title">Reset their passwords</h2>
+        <template v-if="reset">
+          <BulkJobPanel
+            :job="reset.job"
+            :busy="busy"
+            @stop="imp.stopReset"
+            @continue="imp.continueReset"
+            @retry="imp.retryReset"
+          />
+          <p class="ij-note">{{ resetNote }}</p>
+          <div class="ij-download">
+            <Button
+              label="Download new passwords"
+              icon="pi pi-download"
+              :loading="imp.downloading.value"
+              :disabled="!imp.canDownloadReset.value"
+              @click="imp.downloadReset"
+            />
+          </div>
+        </template>
+        <template v-if="canReset">
+          <p v-if="!confirmingReset" class="ij-note">
+            Give the {{ accounts(created) }} the import created new passwords, which they must
+            change at sign-in, downloaded once as a CSV.
+            <template v-if="needingReset.length">
+              {{ needingReset.length }} of them nobody has the password of.</template
+            >
+          </p>
+          <Button
+            v-if="!confirmingReset"
+            :label="reset ? 'Reset them again…' : 'Reset their passwords…'"
+            icon="pi pi-key"
+            severity="secondary"
+            :disabled="busy"
+            @click="imp.requestReset"
+          />
+          <Message v-else severity="warn" :closable="false" class="ij-msg">
+            Reset the passwords of {{ accounts(created) }}? Whatever password they have now stops
+            working.
+            <span class="ij-confirm">
+              <Button
+                :label="`Reset ${accounts(created)}`"
+                size="small"
+                :disabled="busy"
+                @click="imp.startReset"
+              />
+              <Button
+                label="Cancel"
+                size="small"
+                text
+                severity="secondary"
+                @click="imp.cancelReset"
+              />
+            </span>
+          </Message>
+        </template>
+      </section>
+
       <section class="ij-section" aria-labelledby="ij-rows">
         <h2 id="ij-rows" class="ij-title">People</h2>
         <div class="ij-table-wrap">
@@ -128,8 +208,11 @@ const downloadLabel = computed(() =>
                 <td class="mono">{{ row.samAccountName }}</td>
                 <td class="mono">{{ row.userPrincipalName }}</td>
                 <td>
-                  <span class="badge" :class="`badge-${STATUS[row.status].tone}`">
-                    <span class="badge-dot" />{{ STATUS[row.status].label }}
+                  <span class="badge" :class="`badge-${TONE[row.status]}`">
+                    <span class="badge-dot" />{{ IMPORT_ROW_STATUS_LABEL[row.status] }}
+                  </span>
+                  <span v-if="row.needsPasswordReset" class="badge badge-amber ij-reset-badge">
+                    Needs a password reset
                   </span>
                   <ul v-if="problemsOf(row).length" class="ij-problems">
                     <li v-for="(p, i) in problemsOf(row)" :key="i">{{ p }}</li>
@@ -182,6 +265,16 @@ const downloadLabel = computed(() =>
 
 .ij-msg {
   margin: 0;
+}
+
+.ij-confirm {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.ij-reset-badge {
+  margin-left: 6px;
 }
 
 .ij-table-wrap {
