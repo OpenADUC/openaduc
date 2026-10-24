@@ -2,7 +2,8 @@
 <!--
   Create a user in an OU. The form, the naming check, the plan and the
   create live in useUserCreation; this renders them. Opened from the user
-  list, or from an OU with that OU preselected.
+  list, from an OU with that OU preselected, or from a user's page to
+  copy that user.
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
@@ -17,12 +18,15 @@ import { PASSWORD_MODES, type NewUserField, type UserCreateResponse } from '@ope
 import { useUserCreation } from '../composables/useUserCreation.js';
 import { useOuTree } from '../composables/useOuTree.js';
 import { ouTreeNodes } from '../lib/ouTree.js';
-import { PASSWORD_MODE_LABEL } from '../lib/newUser.js';
+import { PASSWORD_MODE_LABEL, copiedDetails, privilegeWarning } from '../lib/newUser.js';
+import { nameOf } from '../lib/format.js';
 
 const props = defineProps<{
   visible: boolean;
   /** The OU to create the user in, when the operator started from one. */
   ouDn?: string | null;
+  /** The user to copy, by id. */
+  copyFrom?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -52,6 +56,9 @@ const {
   canSubmit,
   canFinish,
   namesTyped,
+  copySource,
+  canAddGroups,
+  groupChoices,
 } = creation;
 
 const { ous, loading: ousLoading, error: ousError, load: loadOus } = useOuTree();
@@ -61,7 +68,8 @@ watch(
   () => props.visible,
   (open) => {
     if (!open) return;
-    void creation.start({ ouDn: props.ouDn ?? null });
+    if (props.copyFrom) void creation.startCopy(props.copyFrom);
+    else void creation.start({ ouDn: props.ouDn ?? null });
     void loadOus();
   },
   { immediate: true },
@@ -100,6 +108,8 @@ const otherBlockers = computed(() =>
   plan.value.blockers.filter((b) => !b.field || !SHOWN_BESIDE.includes(b.field)),
 );
 const locked = computed(() => submitting.value || !!unfinished.value);
+const sourceName = computed(() => (copySource.value ? nameOf(copySource.value.source) : ''));
+const copiedRows = computed(() => (copySource.value ? copiedDetails(copySource.value) : []));
 const cnDiffers = computed(() => !!names.value.cn && names.value.cn !== names.value.displayName);
 
 function close(): void {
@@ -112,7 +122,7 @@ function close(): void {
     :visible="visible"
     modal
     class="ds-sheet"
-    header="New user"
+    :header="copyFrom ? 'Copy user' : 'New user'"
     :style="{ width: '40rem' }"
     :closable="!submitting"
     @update:visible="(v) => !v && close()"
@@ -120,6 +130,11 @@ function close(): void {
     <Message v-if="loadError" severity="error" :closable="false" class="nu-msg">
       {{ loadError }}
     </Message>
+
+    <p v-if="copySource" class="nu-note nu-intro">
+      A new person in {{ sourceName }}’s OU, with their organisation details and groups. Names,
+      email and phone numbers are the new person’s own.
+    </p>
 
     <div class="nu-field">
       <label class="fld-label" for="nu-ou">Create in</label>
@@ -330,6 +345,42 @@ function close(): void {
         }}</span>
       </div>
     </div>
+
+    <template v-if="copySource">
+      <h4 class="nu-section">Copied from {{ sourceName }}</h4>
+      <dl v-if="copiedRows.length" class="nu-copied">
+        <template v-for="row in copiedRows" :key="row.label">
+          <dt>{{ row.label }}</dt>
+          <dd>{{ row.value }}</dd>
+        </template>
+      </dl>
+      <p v-else class="nu-note">{{ sourceName }} has no organisation details to copy.</p>
+
+      <h4 class="nu-section">Groups</h4>
+      <p v-if="!canAddGroups" class="nu-note nu-warn">
+        You can’t change group memberships, so the copy isn’t added to any groups.
+      </p>
+      <ul v-if="groupChoices.length" class="nu-groups" aria-label="Groups to add the copy to">
+        <li v-for="g in groupChoices" :key="g.id">
+          <label class="nu-check">
+            <input
+              type="checkbox"
+              :checked="g.ticked && canAddGroups"
+              :disabled="locked || !canAddGroups"
+              @change="creation.setGroup(g.id, ($event.target as HTMLInputElement).checked)"
+            />
+            <span>{{ g.name }}</span>
+          </label>
+          <span v-if="g.privilege" class="nu-note nu-warn nu-indent">
+            <i class="pi pi-exclamation-triangle" aria-hidden="true" />
+            {{ privilegeWarning(g.privilege) }}
+          </span>
+        </li>
+      </ul>
+      <p v-else class="nu-note">
+        {{ sourceName }} isn’t directly in any group a copy can be added to.
+      </p>
+    </template>
 
     <h4 class="nu-section">Password</h4>
     <SelectButton
@@ -580,6 +631,37 @@ function close(): void {
 
 .nu-msg {
   margin: 8px 0 0;
+}
+
+.nu-intro {
+  display: block;
+  margin: 0 0 12px;
+}
+
+.nu-copied {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.nu-copied dt {
+  color: var(--text-3);
+}
+
+.nu-copied dd {
+  margin: 0;
+  color: var(--text-2);
+  white-space: pre-line;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nu-groups {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
 }
 
 .nu-checking {

@@ -13,6 +13,37 @@ import { ApiError } from '../api/client.js';
 const inFifteenMinutes = () => new Date(Date.now() + 15 * 60_000).toISOString();
 
 const user = aUserDetail({ title: 'Analyst' });
+const COPY_SOURCE = {
+  source: {
+    id: 'u1',
+    distinguishedName: 'CN=Jane Doe',
+    samAccountName: 'jane.doe',
+    displayName: 'Jane Doe',
+  },
+  ouDn: 'OU=Staff,DC=corp,DC=test',
+  organisation: {
+    title: 'Analyst',
+    department: 'Finance',
+    company: null,
+    physicalDeliveryOfficeName: null,
+    streetAddress: null,
+    l: 'Leeds',
+    st: null,
+    postalCode: null,
+    c: null,
+    co: null,
+  },
+  manager: { id: 'u2', distinguishedName: 'CN=Max Boss', displayName: 'Max Boss' },
+  groups: [
+    {
+      id: 'g-admins',
+      name: 'Domain Admins',
+      distinguishedName: 'CN=Domain Admins',
+      privilege: { reason: 'protected' },
+    },
+    { id: 'g-finance', name: 'Finance', distinguishedName: 'CN=Finance', privilege: null },
+  ],
+};
 
 const api = {
   users: {
@@ -26,6 +57,22 @@ const api = {
     setAccountExpiry: vi.fn(async () => ({})),
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
+    copySource: vi.fn(async () => COPY_SOURCE),
+  },
+  directories: {
+    naming: {
+      get: vi.fn(async () => ({
+        naming: { pattern: '{first}.{last}', upnSuffix: 'corp.test' },
+        upnSuffixes: ['corp.test'],
+      })),
+      check: vi.fn(async () => ({ suggestions: [] })),
+    },
+    newUsers: {
+      get: vi.fn(async () => ({
+        newUsers: { mailFromUpn: true, passwordMode: 'random', phoneCountry: null },
+      })),
+    },
+    policy: vi.fn(async () => ({ policy: null })),
   },
   ous: { list: vi.fn(async () => ({ ous: [] })) },
   auth: {
@@ -632,5 +679,57 @@ describe('shortcuts on a user’s page', () => {
     expect(page.find('#reset-new-password').exists()).toBe(true);
     await press('e');
     expect(api.users.disable).not.toHaveBeenCalled();
+  });
+});
+
+describe('copying the user', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user });
+  });
+
+  const groupBox = (page: Page, name: string) =>
+    page
+      .findAll('[aria-label="Groups to add the copy to"] label')
+      .find((l) => l.text() === name)!
+      .find('input').element as HTMLInputElement;
+
+  it('opens New user prefilled from this user, privileged groups unticked and flagged', async () => {
+    const { page } = await openTab(
+      'overview',
+      ['read:user', 'write:user.create', 'write:group.membership'],
+      true,
+    );
+
+    await runAction(page, 'Copy…');
+
+    expect(api.users.copySource).toHaveBeenCalledWith('u1');
+    const dialog = page.find('[role="dialog"]');
+    expect(dialog.text()).toContain('Copy user');
+    expect(dialog.text()).toContain('Copied from Jane Doe');
+    expect(dialog.text()).toContain('Finance');
+    expect(dialog.text()).toContain('Max Boss');
+    expect((dialog.find('#nu-first').element as HTMLInputElement).value).toBe('');
+    expect(groupBox(page, 'Finance').checked).toBe(true);
+    expect(groupBox(page, 'Domain Admins').checked).toBe(false);
+    expect(dialog.text()).toContain('Administrative group');
+  });
+
+  it('shows the groups but can’t tick them without group membership rights', async () => {
+    const { page } = await openTab('overview', ['read:user', 'write:user.create'], true);
+
+    await runAction(page, 'Copy…');
+
+    expect(page.find('[role="dialog"]').text()).toContain('You can’t change group memberships');
+    expect(groupBox(page, 'Finance').disabled).toBe(true);
+    expect(groupBox(page, 'Finance').checked).toBe(false);
+  });
+
+  it('isn’t offered without the create capability', async () => {
+    const { page } = await openTab('overview', ['read:user', 'write:user.enableDisable'], true);
+
+    await click(page, 'Actions');
+
+    expect(page.findAll('[role="menuitem"]').map((i) => i.text())).not.toContain('Copy…');
   });
 });

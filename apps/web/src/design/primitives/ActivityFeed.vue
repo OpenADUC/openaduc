@@ -100,6 +100,10 @@ function detailFor(e: AuditEventRow): string {
   if (e.result !== 'success') {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';
   }
+  if (e.action === 'user.create' && md.copiedFrom && typeof md.copiedFrom === 'object') {
+    const from = md.copiedFrom as { samAccountName?: unknown; distinguishedName?: unknown };
+    return `Copied from ${String(from.samAccountName ?? from.distinguishedName)}`;
+  }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
   if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
     return expiryText(md.expiresAt ? String(md.expiresAt) : null, true);
