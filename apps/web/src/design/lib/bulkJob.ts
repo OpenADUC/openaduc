@@ -10,6 +10,7 @@ import type {
 } from '@openaduc/shared';
 import { expiryMoment } from './accountExpiry.js';
 import { fieldNames } from './bulkAttributes.js';
+import { fmtAbsolute } from './format.js';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
@@ -61,6 +62,20 @@ export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | n
   if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
   if (action === 'user.group.remove') return ` from ${groupNames(subject.groups)}`;
   return '';
+}
+
+/**
+ * How a job's progress and result put what it does: "Disabling", " to
+ * Sales". A revert says only that it reverts; its audit entry says what.
+ */
+export function bulkJobWords(job: Pick<BulkJob, 'action' | 'subject' | 'revertsJobId'>): {
+  ing: string;
+  ed: string;
+  target: string;
+} {
+  if (job.revertsJobId !== null) return { ing: 'Reverting', ed: 'Reverted', target: '' };
+  const { ing, ed } = BULK_VERBS[job.action];
+  return { ing, ed, target: bulkJobTarget(job.action, job.subject) };
 }
 
 /** Rows got through, whatever their outcome. */
@@ -117,8 +132,7 @@ export interface BulkJobDescription {
 
 /** What a bulk job's progress panel says, and which controls it offers. */
 export function describeBulkJob(job: BulkJob): BulkJobDescription {
-  const { ing, ed } = BULK_VERBS[job.action];
-  const target = bulkJobTarget(job.action, job.subject);
+  const { ing, ed, target } = bulkJobWords(job);
   const { counts } = job;
   const { label, open } = STATUS[job.status];
   const progress = counts.total === 0 ? 0 : Math.round((done(counts) / counts.total) * 100);
@@ -180,29 +194,54 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   };
 }
 
+/** Whether a revert has got anywhere, as the reverted job's entry says it. */
+function revertedNote(revert: NonNullable<AuditBulkSummary['revertedBy']>): string {
+  const by = revert.actorDisplayName ? ` by ${revert.actorDisplayName}` : '';
+  const on = fmtAbsolute(revert.createdAt);
+  if (revert.status === 'cancelled') return `Revert${by} on ${on} was stopped`;
+  if (STATUS[revert.status].open) return `Being reverted${by}, since ${on}`;
+  return `Reverted${by} on ${on}`;
+}
+
 /**
  * A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe:
- * 42 users" or "Bulk add to Sales by Jane Doe: 42 users".
+ * 42 users", "Bulk add to Sales by Jane Doe: 42 users", or "Revert of bulk
+ * disable by Jane Doe: 40 users"; and whether it's been reverted.
  */
 export function describeBulkEntry(
   bulk: AuditBulkSummary,
   actor: string | null,
-): { title: string; outcome: string | null; tone: 'green' | 'amber' | 'red' | 'muted' } {
+): {
+  title: string;
+  outcome: string | null;
+  tone: 'green' | 'amber' | 'red' | 'muted';
+  reverted: string | null;
+} {
   const verb = BULK_VERBS[bulk.action].verb.toLowerCase();
   const users = bulk.total === 1 ? '1 user' : `${bulk.total} users`;
   const target = bulkJobTarget(bulk.action, bulk.subject);
-  const title = `Bulk ${verb}${target}${actor ? ` by ${actor}` : ''}: ${users}`;
+  const what = bulk.revertsJobId === null ? 'Bulk' : 'Revert of bulk';
+  const title = `${what} ${verb}${target}${actor ? ` by ${actor}` : ''}: ${users}`;
+  const reverted = bulk.revertedBy ? revertedNote(bulk.revertedBy) : null;
   const { status, counts } = bulk;
-  if (status === null || counts === null) return { title, outcome: null, tone: 'muted' };
+  if (status === null || counts === null) {
+    return { title, outcome: null, tone: 'muted', reverted };
+  }
 
   const { label, open } = STATUS[status];
   const failedTone = counts.failed > 0 ? 'red' : null;
   if (open) {
-    return { title, outcome: `${label}: ${done(counts)} of ${counts.total} done`, tone: 'amber' };
+    return {
+      title,
+      outcome: `${label}: ${done(counts)} of ${counts.total} done`,
+      tone: 'amber',
+      reverted,
+    };
   }
   return {
     title,
     outcome: label ? `${label}: ${tally(counts)}` : tally(counts),
     tone: failedTone ?? (label ? 'amber' : 'green'),
+    reverted,
   };
 }

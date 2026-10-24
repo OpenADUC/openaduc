@@ -11,6 +11,7 @@ import Select from 'primevue/select';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import DatePicker from 'primevue/datepicker';
+import { useToast } from 'primevue/usetoast';
 import { api, type AuditEventRow } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
@@ -20,6 +21,9 @@ import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
 import AuditBulkEvents from '../design/primitives/AuditBulkEvents.vue';
+import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import BulkRevertDialog from '../design/feedback/BulkRevertDialog.vue';
+import { useBulkJobRevert } from '../design/composables/useBulkJobRevert.js';
 import { describeBulkEntry } from '../design/lib/bulkJob.js';
 import { resultBadge } from '../design/lib/auditResult.js';
 import type { MfaRegistrationRow, MfaRegistrationStatus, SignInEventApp } from '@openaduc/shared';
@@ -342,7 +346,17 @@ function openDetail(ev: DataTableRowClickEvent): void {
 
 const bulkEntry = (row: AuditEventRow) => describeBulkEntry(row.bulk!, row.actorDisplayName);
 
-onMounted(load);
+const revert = useBulkJobRevert({ toast: useToast(), reload: load });
+const { job: revertJob, jobBusy: revertBusy, jobFailure: revertFailure } = revert;
+
+function openRevert(row: AuditEventRow): void {
+  void revert.open({ jobId: row.bulkJobId!, title: bulkEntry(row).title, bulk: row.bulk! });
+}
+
+onMounted(() => {
+  void load();
+  revert.restore();
+});
 </script>
 
 <template>
@@ -413,6 +427,17 @@ onMounted(load);
       </div>
 
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+
+      <BulkJobPanel
+        v-if="revertJob"
+        :job="revertJob"
+        :failure="revertFailure"
+        :busy="revertBusy"
+        @stop="revert.stopJob"
+        @continue="revert.continueJob"
+        @retry="revert.retryFailed"
+        @dismiss="revert.dismissJob"
+      />
 
       <DataTable
         :value="rows"
@@ -504,7 +529,22 @@ onMounted(load);
         </Column>
         <Column header="Target" :style="{ minWidth: '200px' }">
           <template #body="{ data }">
-            <span v-if="data.bulk" class="bulk-title">{{ bulkEntry(data).title }}</span>
+            <div v-if="data.bulk" class="bulk-cell">
+              <span class="bulk-title">{{ bulkEntry(data).title }}</span>
+              <span v-if="bulkEntry(data).reverted" class="bulk-reverted">
+                {{ bulkEntry(data).reverted }}
+              </span>
+              <Button
+                v-if="revert.canRevert(data.bulk)"
+                label="Revert"
+                icon="pi pi-undo"
+                size="small"
+                severity="secondary"
+                text
+                class="bulk-revert"
+                @click.stop="openRevert(data)"
+              />
+            </div>
             <span v-else-if="data.targetDn" class="dn-cell mono">{{ data.targetDn }}</span>
             <span v-else-if="data.targetType" class="cell-muted"
               >{{ data.targetType
@@ -541,6 +581,7 @@ onMounted(load);
       </DataTable>
 
       <AuditEventDialog v-model:visible="detailOpen" :event="detailEvent" />
+      <BulkRevertDialog :workflow="revert" />
     </div>
 
     <!-- Sign-ins tab — filterable view of cached Entra events. -->
@@ -995,8 +1036,24 @@ onMounted(load);
   padding: 2px 4px;
 }
 
+.bulk-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
 .bulk-title {
   font-weight: 500;
+}
+
+.bulk-reverted {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.bulk-revert {
+  margin-left: -8px;
 }
 
 .bulk-outcome {
