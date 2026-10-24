@@ -36,6 +36,7 @@ import type {
   DirectoryGroupPolicy,
   DirectoryGroupPolicyLink,
   DirectoryObjectIdentifier,
+  DirectoryObjectRef,
   DirectoryOu,
   DirectoryProvider,
   DirectoryGroupSearchQuery,
@@ -89,6 +90,7 @@ import {
   GPLINK_SCAN_ATTRS,
   GPO_ATTRS,
   GROUP_ATTRS,
+  OBJECT_REF_ATTRS,
   OU_ATTRS,
   USER_ATTRS,
   USER_ATTRS_FULL,
@@ -102,6 +104,7 @@ import {
   normalizeDeletedUser,
   normalizeGroup,
   normalizeGroupPolicy,
+  normalizeObjectRef,
   normalizeOu,
   normalizeUser,
   parentDn,
@@ -408,6 +411,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   // ---- Reads -------------------------------------------------------------
+
+  async findObject(identifier: DirectoryObjectIdentifier): Promise<DirectoryObjectRef | null> {
+    return this.withServiceBind(async (client) => {
+      const filter = identifierToFilter(identifier, '(objectClass=*)');
+      const entry = await this.searchOne(client, this.config.baseDn, filter, OBJECT_REF_ATTRS);
+      return entry ? normalizeObjectRef(entry) : null;
+    });
+  }
 
   async getUser(identifier: DirectoryObjectIdentifier): Promise<DirectoryUser | null> {
     return this.withServiceBind(async (client) => {
@@ -1189,14 +1200,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (refused) return refused;
         const dn = asString(target.distinguishedName) ?? target.dn;
         const currentParent = parentDn(dn);
+        // By GUID too, so a revert finds the OU however it's renamed or moved since.
+        const parentGuid = currentParent ? await this.guidOf(client, currentParent) : null;
         // Compare case-insensitively — AD treats DN components as case-
         // insensitive even though it preserves the casing on writes.
         if (currentParent && currentParent.toLowerCase() === trimmedTarget.toLowerCase()) {
-          return {
-            ok: true,
-            before: { distinguishedName: dn, parentDn: currentParent },
-            after: { distinguishedName: dn, parentDn: currentParent },
-          };
+          const unchanged = { distinguishedName: dn, parentDn: currentParent, parentGuid };
+          return { ok: true, before: unchanged, after: unchanged };
         }
 
         const rdn = leafRdn(dn);
@@ -1205,13 +1215,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 
         return {
           ok: true,
-          before: {
-            distinguishedName: dn,
-            parentDn: currentParent,
-          },
+          before: { distinguishedName: dn, parentDn: currentParent, parentGuid },
           after: {
             distinguishedName: newDn,
             parentDn: trimmedTarget,
+            parentGuid: await this.guidOf(client, trimmedTarget),
           },
         };
       } catch (err) {
@@ -2546,6 +2554,21 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.unbind().catch(() => undefined);
       }
     });
+  }
+
+  /** The object's GUID, or null when it can't be read. */
+  private async guidOf(client: Client, dn: string): Promise<string | null> {
+    try {
+      const { searchEntries } = await client.search(dn, {
+        scope: 'base',
+        filter: '(objectClass=*)',
+        attributes: ['objectGUID'],
+        explicitBufferAttributes: BINARY_ATTRS,
+      });
+      return searchEntries[0] ? (normalizeObjectRef(searchEntries[0])?.objectGuid ?? null) : null;
+    } catch {
+      return null;
+    }
   }
 
   private async searchOne(

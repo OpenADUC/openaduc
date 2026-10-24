@@ -24,6 +24,16 @@ export type DirectoryObjectIdentifier =
   | { kind: 'samAccountName'; value: string }
   | { kind: 'userPrincipalName'; value: string };
 
+/** Any object, as found by its GUID or DN. */
+export interface DirectoryObjectRef {
+  objectGuid: string;
+  distinguishedName: string;
+  /** displayName, else name. */
+  name: string;
+  isOu: boolean;
+  isCriticalSystemObject: boolean;
+}
+
 export interface DirectoryUser {
   objectGuid: string;
   sid: string | null;
@@ -406,6 +416,8 @@ export interface DirectoryProvider {
   /** A PSO's lockout duration in ms (0 = until unlocked), or null if it can't be read. */
   getPsoLockoutDuration(psoDn: string): Promise<number | null>;
 
+  /** Any object in the directory by GUID or DN, read as the service account. */
+  findObject(identifier: DirectoryObjectIdentifier): Promise<DirectoryObjectRef | null>;
   getUser(identifier: DirectoryObjectIdentifier): Promise<DirectoryUser | null>;
   searchUsers(query: DirectoryUserSearchQuery): Promise<DirectoryUser[]>;
   getGroup(identifier: DirectoryObjectIdentifier): Promise<DirectoryGroup | null>;

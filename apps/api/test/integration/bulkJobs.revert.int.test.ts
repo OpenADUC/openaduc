@@ -14,8 +14,10 @@ import {
   configureDirectory,
   DC,
   finishedJob,
+  previewedJob,
   readDirectoryUser,
   reseedDirectory,
+  revertJob,
   sambaTool,
   setUserAttribute,
   startApi,
@@ -113,16 +115,11 @@ describe('reverting a bulk job', () => {
   const refresh = (...ids: string[]) =>
     Promise.all(ids.map((id) => operator.get(`/api/users/${id}`)));
 
-  async function editAttributes(ids: string[], changes: BulkAttributeChanges): Promise<BulkJob> {
-    const preview = await operator.post('/api/users/bulk-update/preview', { ids, changes });
-    const res = await operator.post('/api/users/bulk-update', {
+  const editAttributes = (ids: string[], changes: BulkAttributeChanges) =>
+    previewedJob(operator, '/api/users/bulk-update/preview', '/api/users/bulk-update', {
       ids,
       changes,
-      previewToken: preview.json<{ previewToken: string }>().previewToken,
     });
-    expect(res.statusCode).toBe(202);
-    return finishedJob(operator, res.json<{ job: BulkJob }>().job.id);
-  }
 
   async function previewRevert(jobId: string, client = admin): Promise<BulkJobRevertPreview> {
     const res = await client.get(`/api/bulk-jobs/${jobId}/revert/preview`);
@@ -130,16 +127,8 @@ describe('reverting a bulk job', () => {
     return res.json<BulkJobRevertPreview>();
   }
 
-  async function revert(
-    jobId: string,
-    body: Partial<BulkJobRevertRequest> = {},
-    client = admin,
-  ): Promise<BulkJob> {
-    const { previewToken } = await previewRevert(jobId, client);
-    const res = await client.post(`/api/bulk-jobs/${jobId}/revert`, { previewToken, ...body });
-    expect(res.statusCode).toBe(202);
-    return finishedJob(client, res.json<{ job: BulkJob }>().job.id);
-  }
+  const revert = (jobId: string, body: Partial<BulkJobRevertRequest> = {}, client = admin) =>
+    revertJob(client, jobId, body);
 
   const rows = async (jobId: string, client = admin) =>
     (await client.get(`/api/bulk-jobs/${jobId}/rows`)).json<{ rows: BulkJobRow[] }>().rows;

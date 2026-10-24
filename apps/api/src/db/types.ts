@@ -5,7 +5,7 @@
 
 import type { ColumnType, Generated, JSONColumnType } from 'kysely';
 import type {
-  BulkJobAction,
+  BulkJobKind,
   BulkJobSubject,
   BulkJobPauseReason,
   BulkJobRowStatus,
@@ -211,7 +211,7 @@ export interface AuditEventsTable {
 export interface BulkJobsTable {
   id: Generated<string>;
   provider_id: number;
-  action: BulkJobAction;
+  action: BulkJobKind;
   status: BulkJobStatus;
   pause_reason: BulkJobPauseReason | null;
   run_token: string | null;
