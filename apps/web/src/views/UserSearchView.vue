@@ -24,10 +24,9 @@ import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filter
 import { api } from '../api/index.js';
 import {
   BULK_ACCOUNT_ACTIONS,
+  BULK_ACCOUNT_CAPABILITIES,
   BULK_ACCOUNT_OPS,
   csvRow,
-  type BulkAccountOp,
-  type Capability,
   type UserCreateResponse,
   type UserSummary,
 } from '@openaduc/shared';
@@ -489,13 +488,6 @@ const attributeEdit = useBulkAttributeEdit({
   start: startAttributeEdit,
 });
 
-// Each account change takes the capability its single-user write does.
-const BULK_ACCOUNT_CAPABILITIES: Record<BulkAccountOp, Capability> = {
-  move: 'write:user.move',
-  accountExpiry: 'write:user.enableDisable',
-  mustChangePassword: 'write:user.resetPassword',
-  clearPasswordNeverExpires: 'write:user.enableDisable',
-};
 const allowedAccountOps = computed(() =>
   BULK_ACCOUNT_OPS.filter((op) => auth.hasCapability(BULK_ACCOUNT_CAPABILITIES[op])),
 );

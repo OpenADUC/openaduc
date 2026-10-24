@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
 import { directoryCountry } from '../country.js';
-import { moveRequestSchema } from './ou.js';
+import type { Capability } from '../capabilities.js';
+import { moveRequestSchema, ouRefSchema } from './ou.js';
 import { accountExpiryRequestSchema, CONTROL_CHARS } from './user.js';
 import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
 import { groupPrivilegeSchema } from './userCreate.js';
@@ -339,6 +340,19 @@ export const BULK_ACCOUNT_ACTIONS = {
   clearPasswordNeverExpires: 'user.passwordNeverExpires.clear',
 } as const satisfies Record<BulkAccountOp, BulkJobAction>;
 
+/**
+ * The capability each account change takes. Expiry and clearing "password
+ * never expires" write the Account Restrictions property set, as enabling
+ * does; must-change is half of a password reset, and ADUC's delegation
+ * wizard grants the two together.
+ */
+export const BULK_ACCOUNT_CAPABILITIES = {
+  move: 'write:user.move',
+  accountExpiry: 'write:user.enableDisable',
+  mustChangePassword: 'write:user.resetPassword',
+  clearPasswordNeverExpires: 'write:user.enableDisable',
+} as const satisfies Record<BulkAccountOp, Capability>;
+
 export const bulkAccountChangeSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('move'), targetOuDn: moveRequestSchema.shape.targetOuDn }).strict(),
   z
@@ -409,7 +423,7 @@ export const bulkAccountPreviewSchema = z.object({
   /** Among the users it changes; only the notes that apply, each listing whom. */
   notes: z.array(previewUserListSchema.extend({ kind: z.enum(BULK_ACCOUNT_NOTES) })),
   /** The OU a move puts them in. */
-  ou: z.object({ distinguishedName: z.string(), name: z.string() }).nullable(),
+  ou: ouRefSchema.nullable(),
   /** Users asked for that the cache doesn't know; their rows would fail. */
   unknownCount: z.number().int(),
   /** Starting the job takes this back. */
@@ -441,7 +455,7 @@ export const bulkJobSubjectSchema = z.object({
   attributes: z
     .array(z.object({ field: z.enum(BULK_ATTRIBUTE_FIELDS), value: z.string().nullable() }))
     .optional(),
-  ou: z.object({ distinguishedName: z.string(), name: z.string() }).optional(),
+  ou: ouRefSchema.optional(),
   expiresAt: z.string().nullable().optional(),
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;

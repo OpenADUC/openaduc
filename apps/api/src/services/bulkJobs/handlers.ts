@@ -3,6 +3,7 @@ import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
   BULK_ACCOUNT_ACTIONS,
+  BULK_ACCOUNT_CAPABILITIES,
   bulkAccountChangeSchema,
   bulkAccountRequestSchema,
   bulkAttributeChangesSchema,
@@ -25,12 +26,7 @@ import {
   type WriteContext,
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
-import {
-  accountChangeSubject,
-  accountPreviewToken,
-  accountWrite,
-  resolveAccountChange,
-} from '../bulkAccountChange.js';
+import { accountPreviewToken, resolveAccountChange } from '../bulkAccountChange.js';
 import {
   attributesPreviewToken,
   changesSubject,
@@ -48,7 +44,7 @@ import {
   type MembershipCacheDeps,
   type MembershipRequirement,
 } from '../groupMembershipWrite.js';
-import { previewToken } from '../groupMembershipPreview.js';
+import { membershipPreviewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
 import { BulkJobRequestError } from './errors.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../userAttributeWrite.js';
@@ -205,14 +201,13 @@ const accountChangeInputSchema = z.object({ change: bulkAccountChangeSchema });
  */
 function accountChangeHandler(
   op: BulkAccountOp,
-  capability: Capability,
 ): BulkJobHandler<
   z.infer<typeof bulkAccountRequestSchema>,
   z.infer<typeof accountChangeInputSchema>
 > {
   return {
     action: BULK_ACCOUNT_ACTIONS[op],
-    capability,
+    capability: BULK_ACCOUNT_CAPABILITIES[op],
     request: bulkAccountRequestSchema.refine((r) => r.change.op === op, {
       message: `change.op must be ${op}`,
       path: ['change', 'op'],
@@ -226,7 +221,7 @@ function accountChangeHandler(
           'The users or the change aren’t the ones previewed. Preview it again.',
         );
       }
-      return accountChangeSubject(await resolveAccountChange(db, directoryId, change));
+      return (await resolveAccountChange(db, directoryId, change)).subject;
     },
     async run(row, ctx) {
       let change;
@@ -241,7 +236,7 @@ function accountChangeHandler(
           audited: false,
         };
       }
-      return accountRow(row, ctx, accountWrite(change));
+      return accountRow(row, ctx, change.write);
     },
   };
 }
@@ -273,7 +268,7 @@ function groupMembershipHandler(
       { ids: userIds, groupIds, previewToken: token, acknowledgeProtected },
       { db, directoryId },
     ) {
-      if (token !== previewToken(op, userIds, groupIds)) {
+      if (token !== membershipPreviewToken(op, userIds, groupIds)) {
         throw new BulkJobRequestError(
           'preview_mismatch',
           'The users or groups aren’t the ones previewed. Preview the change again.',
@@ -558,16 +553,8 @@ export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
   'user.update': userAttributesHandler(),
-  'user.move': accountChangeHandler('move', 'write:user.move'),
-  'user.accountExpiry.set': accountChangeHandler('accountExpiry', 'write:user.enableDisable'),
-  // Half of a password reset, and ADUC's delegation wizard grants it with one.
-  'user.passwordMustChange.set': accountChangeHandler(
-    'mustChangePassword',
-    'write:user.resetPassword',
-  ),
-  // userAccountControl, which enable and disable write, as expiry takes their capability too.
-  'user.passwordNeverExpires.clear': accountChangeHandler(
-    'clearPasswordNeverExpires',
-    'write:user.enableDisable',
-  ),
+  'user.move': accountChangeHandler('move'),
+  'user.accountExpiry.set': accountChangeHandler('accountExpiry'),
+  'user.passwordMustChange.set': accountChangeHandler('mustChangePassword'),
+  'user.passwordNeverExpires.clear': accountChangeHandler('clearPasswordNeverExpires'),
 };
