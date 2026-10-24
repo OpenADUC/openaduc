@@ -24,8 +24,8 @@ function aJob(
   };
 }
 
-const panel = (job: BulkJob, failure: string | null = null) =>
-  mount(BulkJobPanel, { props: { job, failure }, global: { plugins: [PrimeVue] } });
+const panel = (job: BulkJob, failure: string | null = null, busy = false) =>
+  mount(BulkJobPanel, { props: { job, failure, busy }, global: { plugins: [PrimeVue] } });
 
 const text = (page: ReturnType<typeof panel>) => page.text().replace(/\s+/g, ' ');
 const buttons = (page: ReturnType<typeof panel>) => page.findAll('button').map((b) => b.text());
@@ -36,6 +36,9 @@ describe('the bulk job panel', () => {
 
     expect(text(page)).toContain('Disabling 42 accounts…');
     expect(text(page)).toContain('14 of 42 done. You can leave this page; it carries on.');
+    expect(text(page)).toContain(
+      'It pauses if your elevated session ends (when idle, or at its time limit); then step up to continue.',
+    );
     expect(page.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('33');
     expect(buttons(page)).toEqual(['Stop']);
 
@@ -57,6 +60,17 @@ describe('the bulk job panel', () => {
       aJob('paused', { pending: 30, succeeded: 11, failed: 1 }, { pauseReason: 'interrupted' }),
     );
     expect(text(restarted)).toContain('OpenADUC restarted while it ran.');
+
+    const unreachable = panel(
+      aJob('paused', { pending: 30, succeeded: 12 }, { pauseReason: 'directory_unavailable' }),
+    );
+    expect(text(unreachable)).toContain('No domain controller could be reached.');
+  });
+
+  it('holds its controls while a request about the job is in flight', () => {
+    const page = panel(aJob('finished', { succeeded: 40, failed: 2 }), null, true);
+
+    expect(page.findAll('button').map((b) => b.attributes('disabled'))).toEqual(['', '']);
   });
 
   it('reports a result with failures, and offers to retry them', async () => {

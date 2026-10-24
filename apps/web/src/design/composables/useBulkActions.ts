@@ -10,12 +10,12 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type { BulkJob, BulkJobAction } from '@openaduc/shared';
+import { bulkJobVerb, type BulkJob, type BulkJobVerb } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { accounts, BULK_VERBS, bulkJobActive } from '../lib/bulkJob.js';
 
-export type BulkAction = 'disable' | 'enable' | 'unlock';
+export type BulkAction = BulkJobVerb;
 
 const CONSEQUENCE: Record<BulkAction, string> = {
   disable: "They won't be able to sign in until an operator enables them again.",
@@ -23,27 +23,33 @@ const CONSEQUENCE: Record<BulkAction, string> = {
   unlock: 'Locked accounts can sign in again straight away.',
 };
 
-const actionOf = (action: BulkAction): BulkJobAction => `user.${action}`;
-const bulkActionOf = (action: BulkJobAction): BulkAction => action.slice(5) as BulkAction;
-
 /** The job last dismissed here, so coming back doesn't show it again. */
 const DISMISSED_KEY = 'openaduc.bulkJob.dismissed';
+/** The job whose failed accounts were last selected, so coming back doesn't select them again. */
+const SELECTED_KEY = 'openaduc.bulkJob.selected';
 /** A finished job older than this isn't shown on coming back. */
 const RESULT_SHOWN_FOR_MS = 24 * 60 * 60 * 1000;
 
-function dismissedId(): string | null {
+/**
+ * Polling a running job starts at a second and slows to five, to stay well
+ * inside the API's rate limit; a paused job changes only when someone
+ * continues it, so it's checked rarely. A stopped one isn't polled.
+ */
+export const POLL = { firstMs: 1000, factor: 1.5, maxMs: 5000, pausedMs: 15_000 } as const;
+
+function stored(key: string): string | null {
   try {
-    return localStorage.getItem(DISMISSED_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-function rememberDismissed(id: string): void {
+function store(key: string, id: string): void {
   try {
-    localStorage.setItem(DISMISSED_KEY, id);
+    localStorage.setItem(key, id);
   } catch {
-    // Without storage, a dismissed result shows again next visit.
+    // Without storage, coming back shows or selects it again.
   }
 }
 
@@ -54,10 +60,8 @@ export function useBulkActions(opts: {
   toast: Pick<ToastServiceMethods, 'add'>;
   /** Reload the list once a job finishes. */
   reload: () => Promise<void>;
-  pollMs?: number;
 }) {
   const auth = useAuthStore();
-  const pollMs = opts.pollMs ?? 1000;
   const job = shallowRef<BulkJob | null>(null);
   // Errors from the job shown, per user, until the next run.
   const bulkErrors = ref(new Map<string, string>());
@@ -73,14 +77,13 @@ export function useBulkActions(opts: {
       (job.value !== null && (job.value.status === 'paused' || bulkJobActive(job.value))),
   );
   const pendingBulkAction = computed<BulkAction | null>(() =>
-    job.value && bulkJobActive(job.value) ? bulkActionOf(job.value.action) : null,
+    job.value && bulkJobActive(job.value) ? bulkJobVerb(job.value.action) : null,
   );
 
-  // The question for the action waiting to be confirmed.
   const confirmation = computed(() => {
     const action = confirming.value;
     if (!action) return null;
-    const { verb } = BULK_VERBS[actionOf(action)];
+    const { verb } = BULK_VERBS[`user.${action}`];
     const n = opts.selectedIds.value.size;
     return {
       title: `${verb} ${accounts(n)}?`,
@@ -90,38 +93,64 @@ export function useBulkActions(opts: {
   });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let delay: number = POLL.firstMs;
   let disposed = false;
+  // A poll that came due while the page was hidden, made once it's shown.
+  let dueWhileHidden: string | null = null;
+  const hidden = () => typeof document !== 'undefined' && document.hidden;
+  const onVisible = () => {
+    const id = dueWhileHidden;
+    if (id && !hidden()) {
+      dueWhileHidden = null;
+      void poll(id);
+    }
+  };
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
   if (getCurrentScope()) {
     onScopeDispose(() => {
       disposed = true;
       clearTimeout(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisible);
+      }
     });
   }
 
   /**
-   * Show `next`, then poll it while it runs and settle it once it stops.
-   * `announce`: the operator saw it run, so a full success is told in a
-   * toast and leaves no panel; coming back to one, the panel says it.
+   * Show `next`, then poll it while it may change and settle it once it
+   * stops. `announce`: the operator saw it run, so a full success is told
+   * in a toast and leaves no panel, and its failed accounts are selected;
+   * coming back to one, the panel says it.
    */
   async function show(next: BulkJob, announce = true): Promise<void> {
+    const wasActive = job.value?.id === next.id && bulkJobActive(job.value);
     job.value = next;
     clearTimeout(timer);
     if (bulkJobActive(next)) {
-      timer = setTimeout(() => void poll(next.id), pollMs);
+      delay = wasActive ? Math.min(delay * POLL.factor, POLL.maxMs) : POLL.firstMs;
+      timer = setTimeout(() => void poll(next.id), delay);
       return;
     }
-    if (next.status === 'finished' || next.status === 'cancelled') await settle(next, announce);
+    if (next.status === 'paused') {
+      timer = setTimeout(() => void poll(next.id), POLL.pausedMs);
+      return;
+    }
+    await settle(next, announce);
   }
 
   async function poll(id: string): Promise<void> {
     if (disposed || job.value?.id !== id) return;
+    if (hidden()) {
+      dueWhileHidden = id;
+      return;
+    }
     try {
       const { job: latest } = await api.bulkJobs.get(id, { background: true });
       if (job.value?.id === id) await show(latest);
     } catch {
       // A missed poll is retried; the job runs regardless.
       if (!disposed && job.value?.id === id) {
-        timer = setTimeout(() => void poll(id), pollMs * 3);
+        timer = setTimeout(() => void poll(id), POLL.maxMs);
       }
     }
   }
@@ -130,25 +159,21 @@ export function useBulkActions(opts: {
     const { rows: failures } =
       done.counts.failed > 0 ? await api.bulkJobs.rows(done.id, 'failed') : { rows: [] };
     if (job.value?.id !== done.id) return;
-    const { succeeded } = done.counts;
-    const { ed } = BULK_VERBS[done.action];
-    if (failures.length === 0) {
-      opts.selectedIds.value = new Set();
-      bulkErrors.value = new Map();
-      if (done.status === 'finished' && announce) {
-        opts.toast.add({
-          severity: 'success',
-          summary: `${ed} ${accounts(succeeded)}`,
-          life: 4000,
-        });
-        dismissJob();
-      }
-    } else {
-      // Failures stay on screen, in the job's panel and under each name.
+    bulkErrors.value = new Map(
+      failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
+    );
+    if (announce || stored(SELECTED_KEY) !== done.id) {
       opts.selectedIds.value = new Set(failures.map((f) => f.targetId));
-      bulkErrors.value = new Map(
-        failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
-      );
+      store(SELECTED_KEY, done.id);
+    }
+    if (failures.length === 0 && done.status === 'finished' && announce) {
+      const { ed } = BULK_VERBS[done.action];
+      opts.toast.add({
+        severity: 'success',
+        summary: `${ed} ${accounts(done.counts.succeeded)}`,
+        life: 4000,
+      });
+      dismissJob();
     }
     await opts.reload();
   }
@@ -181,13 +206,12 @@ export function useBulkActions(opts: {
     confirming.value = null;
   }
 
-  /** Start the confirmed action on the selection. */
   function startBulk(action: BulkAction): void {
     const ids = Array.from(opts.selectedIds.value);
     if (ids.length === 0) return;
     confirming.value = null;
     bulkErrors.value = new Map();
-    write(() => api.bulkJobs.start(actionOf(action), ids), true);
+    write(() => api.bulkJobs.start(`user.${action}`, ids), true);
   }
 
   function continueJob(): void {
@@ -208,7 +232,7 @@ export function useBulkActions(opts: {
   }
 
   function dismissJob(): void {
-    if (job.value) rememberDismissed(job.value.id);
+    if (job.value) store(DISMISSED_KEY, job.value.id);
     clearTimeout(timer);
     job.value = null;
     jobFailure.value = null;
@@ -219,7 +243,7 @@ export function useBulkActions(opts: {
   async function restore(): Promise<void> {
     try {
       const [latest] = (await api.bulkJobs.list(1)).jobs;
-      if (!latest || latest.id === dismissedId()) return;
+      if (!latest || latest.id === stored(DISMISSED_KEY)) return;
       const stoppedAt = latest.finishedAt ? new Date(latest.finishedAt).getTime() : null;
       if (stoppedAt !== null && Date.now() - stoppedAt > RESULT_SHOWN_FOR_MS) return;
       await show(latest, false);
@@ -230,6 +254,7 @@ export function useBulkActions(opts: {
 
   return {
     job,
+    busy,
     pendingBulkAction,
     bulkRunning,
     bulkErrors,

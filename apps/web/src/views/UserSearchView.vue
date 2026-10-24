@@ -437,6 +437,7 @@ const canBulkUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 
 const {
   job: bulkJob,
+  busy: bulkJobBusy,
   pendingBulkAction,
   bulkRunning,
   bulkErrors,
@@ -607,6 +608,7 @@ onMounted(() => {
       v-if="bulkJob"
       :job="bulkJob"
       :failure="bulkJobFailure"
+      :busy="bulkJobBusy"
       @stop="stopJob"
       @continue="continueJob"
       @retry="retryFailed"

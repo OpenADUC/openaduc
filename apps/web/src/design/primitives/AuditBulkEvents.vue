@@ -5,6 +5,7 @@ import Button from 'primevue/button';
 import Message from 'primevue/message';
 import { api, type AuditEventRow } from '../../api/index.js';
 import { fmtAbsolute } from '../lib/format.js';
+import { resultBadge } from '../lib/auditResult.js';
 
 // The events of one bulk job, listed under its entry in the audit log.
 const props = defineProps<{ bulkJobId: string }>();
@@ -36,9 +37,6 @@ async function loadMore(): Promise<void> {
   }
 }
 
-const resultClass = (r: string) =>
-  r === 'success' ? 'badge-green' : r === 'failure' || r === 'denied' ? 'badge-red' : 'badge-muted';
-
 onMounted(loadMore);
 </script>
 
@@ -54,7 +52,7 @@ onMounted(loadMore);
             <span class="bulk-event-target">{{ e.targetDn ?? e.targetId ?? '—' }}</span>
           </td>
           <td>
-            <span class="badge" :class="resultClass(e.result)">
+            <span class="badge" :class="resultBadge(e.result)">
               <span class="badge-dot" />
               {{ e.result }}
             </span>
