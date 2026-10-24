@@ -34,6 +34,7 @@ const ATTRIBUTES = [
   'physicalDeliveryOfficeName',
   'manager',
   'l',
+  'postOfficeBox',
   'c',
   'co',
   'countryCode',
@@ -93,6 +94,7 @@ describe('editing users’ attributes in bulk', () => {
     physicalDeliveryOfficeName: [],
     manager: [],
     l: [],
+    postOfficeBox: [],
     c: [],
     co: [],
     countryCode: ['0'],
@@ -136,8 +138,9 @@ describe('editing users’ attributes in bulk', () => {
     ids: string[],
     changes: BulkAttributeChanges = {},
     client = operator,
+    page: { offset?: number; limit?: number } = {},
   ): Promise<BulkUserAttributesPreview> {
-    const res = await client.post('/api/users/bulk-update/preview', { ids, changes });
+    const res = await client.post('/api/users/bulk-update/preview', { ids, changes, ...page });
     expect(res.statusCode).toBe(200);
     return res.json<BulkUserAttributesPreview>();
   }
@@ -169,11 +172,11 @@ describe('editing users’ attributes in bulk', () => {
 
       expect(result.unknownCount).toBe(1);
       expect(result.fields).toEqual([
-        { field: 'department', count: 1 },
-        { field: 'company', count: 3 },
-        { field: 'physicalDeliveryOfficeName', count: 3 },
-        { field: 'manager', count: 3 },
-        { field: 'country', count: 3 },
+        { field: 'department', count: 1, unread: 0 },
+        { field: 'company', count: 3, unread: 0 },
+        { field: 'physicalDeliveryOfficeName', count: 3, unread: 0 },
+        { field: 'manager', count: 3, unread: 0 },
+        { field: 'country', count: 3, unread: 0 },
       ]);
       expect(result.changed.count).toBe(3);
       const alice = result.changed.users.find((u) => u.id === users.alice)!;
@@ -188,25 +191,56 @@ describe('editing users’ attributes in bulk', () => {
       expect(bob.changes.map((c) => c.field)).not.toContain('department');
 
       const asked = await preview([users.bob, users.dave], { department: 'Sales' });
-      expect(asked.changed).toEqual({ count: 0, users: [] });
+      expect(asked.changed).toEqual({ count: 0, offset: 0, users: [] });
       expect(asked.unchanged.users.map((u) => nameOf(u.id))).toEqual(['bob', 'dave']);
     });
 
-    it('refuses a manager the directory doesn’t have, or one of the users edited', async () => {
+    it('pages through the users it changes', async () => {
+      const ids = [users.alice, users.bob, users.dave];
+      const all = await preview(ids, { company: 'Globex' });
+      const second = await preview(ids, { company: 'Globex' }, operator, { offset: 1, limit: 1 });
+
+      expect(second.changed).toMatchObject({ count: 3, offset: 1 });
+      expect(second.changed.users).toEqual([all.changed.users[1]]);
+      expect(second.previewToken).toBe(all.previewToken);
+    });
+
+    it('holds an office the cache hasn’t read as unknown, not as empty', async () => {
+      const forget = (read: boolean) =>
+        api.app.db
+          .updateTable('user_cache_records')
+          .set({ office_read: read })
+          .where('object_guid', '=', users.alice)
+          .execute();
+      await forget(false);
+      try {
+        const result = await preview([users.alice, users.bob], {
+          physicalDeliveryOfficeName: 'Leeds',
+        });
+
+        expect(result.current.physicalDeliveryOfficeName).toEqual({ kind: 'unknown' });
+        expect(result.fields).toEqual([
+          { field: 'physicalDeliveryOfficeName', count: 1, unread: 1 },
+        ]);
+        expect(result.unread.users.map((u) => nameOf(u.id))).toEqual(['alice']);
+        expect(result.changed.users.map((u) => nameOf(u.id))).toEqual(['bob']);
+      } finally {
+        await forget(true);
+      }
+    });
+
+    it('refuses a manager the directory doesn’t have, and skips one among the users', async () => {
       const unknown = await operator.post('/api/users/bulk-update/preview', {
         ids: [users.alice],
         changes: { manager: randomUUID() },
       });
       expect(unknown.statusCode).toBe(404);
 
-      const self = await operator.post('/api/users/bulk-update/preview', {
-        ids: [users.alice, users.erin],
-        changes: { manager: users.erin },
-      });
-      expect(self.statusCode).toBe(422);
-      expect(self.json()).toMatchObject({
-        error: { message: expect.stringMatching(/their own manager/) },
-      });
+      const self = await preview([users.alice, users.erin], { manager: users.erin });
+      expect(self.skipped.users).toEqual([
+        { id: users.erin, name: expect.any(String), reason: expect.stringMatching(/own manager/) },
+      ]);
+      expect(self.changed.users.map((u) => nameOf(u.id))).toEqual(['alice']);
     });
 
     it('is a read anyone with read:user may make, and writes nothing', async () => {
@@ -386,10 +420,11 @@ describe('editing users’ attributes in bulk', () => {
       for (const event of events) {
         expect(event).toMatchObject({
           result: 'success',
-          metadata: { fields: [] },
-          before: { department: 'Sales', company: null },
-          after: { department: 'Sales', company: null },
+          metadata: { unchanged: true },
+          before: { department: 'Sales', company: null, displayName: expect.any(String) },
         });
+        expect(event.metadata).not.toHaveProperty('fields');
+        expect(event.after).toEqual(event.before);
       }
     });
 
@@ -405,19 +440,21 @@ describe('editing users’ attributes in bulk', () => {
       expect(events.map((e) => [nameOf(e.targetId!), e.metadata.fields])).toEqual(
         expect.arrayContaining([
           ['alice', ['l']],
-          ['bob', []],
+          ['bob', undefined],
         ]),
       );
       expect((await directoryValues(SAM.alice)).l).toEqual(['York']);
     });
 
-    it('clears the manager and the country', async () => {
+    it('clears the manager and the country, also for a user with only part of one', async () => {
+      await setAttributes(SAM.dave, { co: [], countryCode: ['0'] });
+      await operator.get(`/api/users/${users.dave}`);
       const job = await finished(
-        (await start([users.alice, users.bob], { manager: null, country: null })).id,
+        (await start([users.alice, users.bob, users.dave], { manager: null, country: null })).id,
       );
 
-      expect(job.counts).toMatchObject({ succeeded: 2 });
-      for (const sam of [SAM.alice, SAM.bob]) {
+      expect(job.counts).toMatchObject({ succeeded: 3, failed: 0 });
+      for (const sam of [SAM.alice, SAM.bob, SAM.dave]) {
         expect(await directoryValues(sam)).toMatchObject({
           manager: [],
           c: [],
@@ -425,23 +462,46 @@ describe('editing users’ attributes in bulk', () => {
           countryCode: ['0'],
         });
       }
+      const dave = (await jobEvents(job.id)).find((e) => e.targetId === users.dave)!;
+      expect(dave).toMatchObject({
+        before: { c: 'GB', co: null },
+        after: { c: null, co: null, countryCode: '0' },
+      });
     });
 
-    it('refuses a manager among the users edited', async () => {
-      const before = await jobCount();
-      const changes = { manager: users.alice };
+    it('sets every PO box, replacing the ones there', async () => {
+      await setAttributes(SAM.bob, { postOfficeBox: ['PO 9'] });
+      await operator.get(`/api/users/${users.bob}`);
       const ids = [users.alice, users.bob];
-      const res = await operator.post(PATH, { ids, changes, previewToken: 'x' });
-      // The token is checked first; a matching one still can't make Alice her own manager.
-      expect(res.statusCode).toBe(409);
-      const { attributesPreviewToken } = await import('../../src/services/bulkAttributes.js');
-      const self = await operator.post(PATH, {
-        ids,
-        changes,
-        previewToken: attributesPreviewToken(ids, changes),
-      });
-      expect(self.statusCode).toBe(422);
-      expect(await jobCount()).toBe(before);
+      expect((await preview(ids)).current.postOfficeBox).toEqual({ kind: 'multiple', count: 2 });
+
+      const job = await finished((await start(ids, { postOfficeBox: ['PO 2', 'PO 1'] })).id);
+
+      expect(job.counts).toMatchObject({ succeeded: 2 });
+      for (const sam of [SAM.alice, SAM.bob]) {
+        expect([...(await directoryValues(sam)).postOfficeBox!].sort()).toEqual(['PO 1', 'PO 2']);
+      }
+      const again = await preview(ids, { postOfficeBox: ['PO 1', 'PO 2'] });
+      expect(again.current.postOfficeBox).toEqual({ kind: 'same', value: 'PO 1, PO 2' });
+      expect(again.changed.count).toBe(0);
+    });
+
+    it('skips a user who’d become their own manager, and edits the rest', async () => {
+      const job = await finished(
+        (await start([users.alice, users.erin], { manager: users.erin })).id,
+      );
+
+      expect(job.counts).toMatchObject({ succeeded: 1, skipped: 1 });
+      expect(await rowsWith(job.id, 'skipped')).toEqual([
+        expect.objectContaining({
+          targetId: users.erin,
+          errorCode: 'self_manager',
+          errorMessage: expect.stringMatching(/own manager/),
+        }),
+      ]);
+      expect((await directoryValues(SAM.erin)).manager).toEqual([]);
+      const erinDn = String((await readDirectoryUser(SAM.erin, ['distinguishedName']))!.dn);
+      expect((await directoryValues(SAM.alice)).manager).toEqual([erinDn]);
     });
 
     it('runs only on the users and changes previewed', async () => {

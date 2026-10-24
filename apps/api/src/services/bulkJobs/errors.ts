@@ -1,20 +1,34 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { AppError, Conflict, NotFound } from '../../plugins/errorHandler.js';
 
-/**
- * A bulk job request that can't start as asked; the routes answer it
- * with the matching HTTP status.
- */
+/** A bulk job request (or its preview) that can't start as asked. */
 export class BulkJobRequestError extends Error {
   constructor(
     readonly code:
-      | 'group_not_found'
-      | 'manager_not_found'
-      | 'manager_in_selection'
-      | 'preview_mismatch'
-      | 'protected_unacknowledged',
+      'group_not_found' | 'manager_not_found' | 'preview_mismatch' | 'protected_unacknowledged',
     message: string,
   ) {
     super(message);
     this.name = 'BulkJobRequestError';
   }
+}
+
+/** A BulkJobRequestError as its HTTP error; anything else rethrown. */
+export function refuseBulkRequest(err: unknown): never {
+  if (err instanceof BulkJobRequestError) {
+    switch (err.code) {
+      case 'group_not_found':
+      case 'manager_not_found':
+        throw NotFound(err.message);
+      case 'preview_mismatch':
+        throw Conflict(err.message);
+      case 'protected_unacknowledged':
+        throw new AppError({
+          statusCode: 422,
+          code: 'unprocessable_entity',
+          message: err.message,
+        });
+    }
+  }
+  throw err;
 }

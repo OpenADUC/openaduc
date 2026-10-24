@@ -4,200 +4,212 @@ import { sql, type Kysely, type Selectable } from 'kysely';
 import {
   BULK_ATTRIBUTE_FIELDS,
   directoryCountry,
-  type BulkAttributeChange,
   type BulkAttributeChanges,
   type BulkAttributeField,
   type BulkAttributesPreviewUser,
   type BulkAttributeValue,
-  type BulkGroupPreviewUser,
   type BulkUserAttributesPreview,
-  type DirectoryCountry,
+  type PreviewUser,
 } from '@openaduc/shared';
 import type { DB, UserCacheRecordsTable } from '../db/types.js';
-import { rawScalarValue } from '../lib/rawAttributes.js';
+import { rawArrayValues, rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser, UserAttributePatch } from '../providers/types.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
-import { listed } from './groupMembershipPreview.js';
-import { findCachedUser } from './userCache.js';
+import { previewList } from './previewList.js';
+import { cachedUserName, findCachedUser } from './userCache.js';
+import { SELF_MANAGER_MESSAGE } from './userAttributeWrite.js';
 
-/** The fields that are one string attribute each, named as the attribute. */
-const TEXT_FIELDS = [
-  'title',
-  'department',
-  'company',
-  'physicalDeliveryOfficeName',
-  'description',
-  'streetAddress',
-  'postOfficeBox',
-  'l',
-  'st',
-  'postalCode',
-] as const satisfies readonly BulkAttributeField[];
-type TextField = (typeof TEXT_FIELDS)[number];
+/** A country as compared and written: by code and number; the name goes along. */
+interface Country {
+  c: string | null;
+  co: string | null;
+  countryCode: string | null;
+}
 
-type Country = { [K in keyof DirectoryCountry]: string | null };
-
-/** A user's values for the fields a bulk edit changes, from the cache or read live. */
-export type AttributeValues = Record<TextField, string | null> & {
-  managerDn: string | null;
+/** Each field's value, as compared: the manager by DN, the PO boxes sorted. */
+interface FieldValues {
+  title: string | null;
+  department: string | null;
+  company: string | null;
+  physicalDeliveryOfficeName: string | null;
+  manager: string | null;
+  description: string | null;
+  streetAddress: string | null;
+  postOfficeBox: string[];
+  l: string | null;
+  st: string | null;
+  postalCode: string | null;
   country: Country;
+}
+
+/** A user's values; a field the cache hasn't read for them is missing. */
+export type AttributeValues = Partial<FieldValues>;
+
+/** What a bulk edit sets each field it names to (null or [] clears it), as AD stores it. */
+export type ResolvedChanges = Partial<FieldValues> & {
+  /** The manager's name, for the preview and the job's subject. */
+  managerName?: string;
 };
-
-/**
- * What a bulk edit sets each field it names to (null clears it), with the
- * manager and country resolved to what AD stores.
- */
-export type ResolvedChanges = Partial<Record<TextField, string | null>> & {
-  manager?: { dn: string; name: string } | null;
-  country?: DirectoryCountry | null;
-};
-
-const NO_COUNTRY: Country = { c: null, co: null, countryCode: null };
-
-function text(v: string | null | undefined): string | null {
-  const t = v?.trim();
-  return t ? t : null;
-}
-
-function country(c: unknown, co: unknown, countryCode: unknown): Country {
-  const code = text(rawScalarValue(countryCode));
-  // AD writes 0 for no country.
-  return {
-    c: text(rawScalarValue(c)),
-    co: text(rawScalarValue(co)),
-    countryCode: code === '0' ? null : code,
-  };
-}
-
-const sameCountry = (a: Country, b: Country): boolean =>
-  a.c === b.c && a.co === b.co && a.countryCode === b.countryCode;
-
-/** The user's values as just read from the directory. */
-export function liveValues(user: DirectoryUser): AttributeValues {
-  const raw = user.rawAttributes;
-  const fromRaw = (name: string) => text(rawScalarValue(raw[name]));
-  return {
-    title: text(user.title),
-    department: text(user.department),
-    company: fromRaw('company'),
-    physicalDeliveryOfficeName: text(user.office),
-    description: fromRaw('description'),
-    streetAddress: fromRaw('streetAddress'),
-    postOfficeBox: fromRaw('postOfficeBox'),
-    l: fromRaw('l'),
-    st: fromRaw('st'),
-    postalCode: fromRaw('postalCode'),
-    managerDn: text(user.managerDn),
-    country: country(raw['c'], raw['co'], raw['countryCode']),
-  };
-}
 
 type CachedUser = Pick<
   Selectable<UserCacheRecordsTable>,
-  'title' | 'department' | 'manager_dn' | 'raw_attributes_json'
+  'title' | 'department' | 'manager_dn' | 'office' | 'office_read' | 'raw_attributes_json'
 >;
 
-/** The user's values as the cache last saw them. */
-export function cachedValues(user: CachedUser): AttributeValues {
-  const raw = user.raw_attributes_json;
-  const fromRaw = (name: string) => text(rawScalarValue(raw[name]));
+/** How one field is read, compared, written and shown. */
+interface Field<V> {
+  live(user: DirectoryUser): V;
+  /** Undefined when the cache hasn't read it. */
+  cached(user: CachedUser): V | undefined;
+  same(a: V, b: V): boolean;
+  patch(value: V): UserAttributePatch;
+  /** By attribute, as the job's row keeps it. */
+  snapshot(value: V): Record<string, unknown>;
+  display(value: V, managerName: (dn: string) => string): string | null;
+}
+
+const text = (v: unknown): string | null => {
+  const t = rawScalarValue(v)?.trim();
+  return t ? t : null;
+};
+
+const COUNTRY_NONE = '0';
+
+/** A single-valued string attribute, read live from `live` and from the cache's `cached`. */
+function textField(
+  attribute: Exclude<keyof UserAttributePatch, 'otherMailbox' | 'otherHomePhone' | 'otherMobile'>,
+  live: (user: DirectoryUser) => unknown = (u) => u.rawAttributes[attribute],
+  cached: (user: CachedUser) => unknown = (u) => u.raw_attributes_json[attribute],
+): Field<string | null> {
   return {
-    title: text(user.title),
-    department: text(user.department),
-    company: fromRaw('company'),
-    physicalDeliveryOfficeName: fromRaw('physicalDeliveryOfficeName'),
-    description: fromRaw('description'),
-    streetAddress: fromRaw('streetAddress'),
-    postOfficeBox: fromRaw('postOfficeBox'),
-    l: fromRaw('l'),
-    st: fromRaw('st'),
-    postalCode: fromRaw('postalCode'),
-    managerDn: text(user.manager_dn),
-    country: country(raw['c'], raw['co'], raw['countryCode']),
+    live: (user) => text(live(user)),
+    cached: (user) => text(cached(user)),
+    same: (a, b) => a === b,
+    patch: (value) => ({ [attribute]: value }),
+    snapshot: (value) => ({ [attribute]: value }),
+    display: (value) => value,
   };
 }
 
-/** One field's change to one user, in what AD stores. */
-type FieldChange =
-  | { field: TextField; before: string | null; after: string | null }
-  | { field: 'manager'; before: string | null; after: string | null }
-  | { field: 'country'; before: Country; after: Country };
+function country(c: unknown, co: unknown, countryCode: unknown): Country {
+  const code = text(countryCode);
+  return { c: text(c), co: text(co), countryCode: code === COUNTRY_NONE ? null : code };
+}
+
+const poBoxes = (v: unknown): string[] =>
+  rawArrayValues(v)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0)
+    .sort();
+
+const FIELDS: { [F in BulkAttributeField]: Field<FieldValues[F]> } = {
+  title: textField(
+    'title',
+    (u) => u.title,
+    (u) => u.title,
+  ),
+  department: textField(
+    'department',
+    (u) => u.department,
+    (u) => u.department,
+  ),
+  company: textField('company'),
+  physicalDeliveryOfficeName: {
+    ...textField('physicalDeliveryOfficeName', (u) => u.office),
+    cached: (u) => (u.office_read ? text(u.office) : undefined),
+  },
+  manager: {
+    live: (u) => text(u.managerDn),
+    cached: (u) => text(u.manager_dn),
+    same: (a, b) => a?.toLowerCase() === b?.toLowerCase(),
+    patch: (dn) => ({ managerDn: dn }),
+    snapshot: (dn) => ({ managerDn: dn }),
+    display: (dn, managerName) => (dn === null ? null : managerName(dn)),
+  },
+  description: textField('description'),
+  streetAddress: textField('streetAddress'),
+  postOfficeBox: {
+    live: (u) => poBoxes(u.rawAttributes['postOfficeBox']),
+    cached: (u) => poBoxes(u.raw_attributes_json['postOfficeBox']),
+    same: (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
+    patch: (values) => ({ postOfficeBox: values.length > 0 ? values : null }),
+    snapshot: (values) => ({ postOfficeBox: values }),
+    display: (values) => (values.length > 0 ? values.join(', ') : null),
+  },
+  l: textField('l'),
+  st: textField('st'),
+  postalCode: textField('postalCode'),
+  country: {
+    live: (u) =>
+      country(u.rawAttributes['c'], u.rawAttributes['co'], u.rawAttributes['countryCode']),
+    cached: (u) =>
+      country(
+        u.raw_attributes_json['c'],
+        u.raw_attributes_json['co'],
+        u.raw_attributes_json['countryCode'],
+      ),
+    // The name isn't compared: ADUC and other tools spell it differently.
+    same: (a, b) => a.c === b.c && a.countryCode === b.countryCode,
+    patch: (v) => ({ c: v.c, co: v.co, countryCode: v.countryCode ?? COUNTRY_NONE }),
+    snapshot: (v) => ({ c: v.c, co: v.co, countryCode: v.countryCode ?? COUNTRY_NONE }),
+    display: (v) => v.co ?? v.c,
+  },
+};
+
+// The table's fields, typed loosely so they can be walked in one loop.
+const field = (f: BulkAttributeField) => FIELDS[f] as Field<unknown>;
+const named = (changes: object) =>
+  BULK_ATTRIBUTE_FIELDS.filter((f) => (changes as Record<string, unknown>)[f] !== undefined);
+
+/** The user's values as just read from the directory. */
+export function liveValues(user: DirectoryUser): AttributeValues {
+  return Object.fromEntries(BULK_ATTRIBUTE_FIELDS.map((f) => [f, field(f).live(user)]));
+}
+
+/** The user's values as the cache last saw them. */
+export function cachedValues(user: CachedUser): AttributeValues {
+  return Object.fromEntries(BULK_ATTRIBUTE_FIELDS.map((f) => [f, field(f).cached(user)]));
+}
+
+export interface FieldChange {
+  field: BulkAttributeField;
+  before: unknown;
+  after: unknown;
+}
 
 /**
  * The fields `changes` would change for a user with these values, in
- * field order; a field already as asked isn't one of them.
+ * field order, and those it names that aren't known for the user.
  */
-export function fieldChanges(values: AttributeValues, changes: ResolvedChanges): FieldChange[] {
+export function fieldChanges(
+  values: AttributeValues,
+  changes: ResolvedChanges,
+): { changes: FieldChange[]; unread: BulkAttributeField[] } {
   const out: FieldChange[] = [];
-  for (const field of BULK_ATTRIBUTE_FIELDS) {
-    if (changes[field] === undefined) continue;
-    if (field === 'manager') {
-      const after = changes.manager?.dn ?? null;
-      const before = values.managerDn;
-      if (before?.toLowerCase() !== after?.toLowerCase()) out.push({ field, before, after });
-    } else if (field === 'country') {
-      const after = changes.country ?? NO_COUNTRY;
-      if (!sameCountry(values.country, after)) {
-        out.push({ field, before: values.country, after });
-      }
-    } else {
-      const after = changes[field] ?? null;
-      if (values[field] !== after) out.push({ field, before: values[field], after });
-    }
+  const unread: BulkAttributeField[] = [];
+  for (const f of named(changes)) {
+    const before = values[f];
+    const after = changes[f];
+    if (before === undefined) unread.push(f);
+    else if (!field(f).same(before, after)) out.push({ field: f, before, after });
   }
-  return out;
+  return { changes: out, unread };
 }
 
 /** The provider patch that makes these changes. */
 export function patchFor(changes: readonly FieldChange[]): UserAttributePatch {
-  const patch: UserAttributePatch = {};
-  for (const change of changes) {
-    if (change.field === 'manager') patch.managerDn = change.after;
-    else if (change.field === 'country') {
-      patch.c = change.after.c;
-      patch.co = change.after.co;
-      // As ADUC does when the country is set to none.
-      patch.countryCode = change.after.countryCode ?? '0';
-    } else patch[change.field] = change.after;
-  }
-  return patch;
+  return Object.assign({}, ...changes.map((c) => field(c.field).patch(c.after)));
 }
 
 /** A row's before and after, by attribute, for the job to keep. */
 export function rowSnapshots(changes: readonly FieldChange[]): {
-  before: Record<string, string | null>;
-  after: Record<string, string | null>;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
 } {
-  const before: Record<string, string | null> = {};
-  const after: Record<string, string | null> = {};
-  for (const change of changes) {
-    if (change.field === 'manager') {
-      before['managerDn'] = change.before;
-      after['managerDn'] = change.after;
-    } else if (change.field === 'country') {
-      Object.assign(before, change.before);
-      Object.assign(after, change.after);
-    } else {
-      before[change.field] = change.before;
-      after[change.field] = change.after;
-    }
-  }
-  return { before, after };
-}
-
-/** The user's values for the fields an edit names, by attribute: a no-op row's before and after. */
-export function askedSnapshot(
-  values: AttributeValues,
-  changes: ResolvedChanges,
-): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
-  for (const field of BULK_ATTRIBUTE_FIELDS) {
-    if (changes[field] === undefined) continue;
-    if (field === 'manager') out['managerDn'] = values.managerDn;
-    else if (field === 'country') Object.assign(out, values.country);
-    else out[field] = values[field];
-  }
-  return out;
+  return {
+    before: Object.assign({}, ...changes.map((c) => field(c.field).snapshot(c.before))),
+    after: Object.assign({}, ...changes.map((c) => field(c.field).snapshot(c.after))),
+  };
 }
 
 /**
@@ -210,168 +222,160 @@ export function attributesPreviewToken(
   changes: BulkAttributeChanges,
 ): string {
   const users = [...ids.map((id) => id.toLowerCase())].sort().join(',');
-  const fields = BULK_ATTRIBUTE_FIELDS.filter((f) => changes[f] !== undefined).map((f) => [
-    f,
-    f === 'manager' ? (changes.manager?.toLowerCase() ?? null) : (changes[f] ?? null),
-  ]);
+  const fields = named(changes).map((f) => {
+    const value = changes[f];
+    return [f, f === 'manager' && typeof value === 'string' ? value.toLowerCase() : value];
+  });
   return createHash('sha256')
     .update(`attributes\n${users}\n${JSON.stringify(fields)}`)
     .digest('base64url');
 }
 
 /**
- * The edit with its manager and country as AD stores them. Refuses a
- * manager the cache doesn't know, or one among the users edited (they'd
- * be their own manager).
+ * The edit as AD stores it: the manager by DN, the country as its three
+ * attributes. Refuses a manager the cache doesn't know.
  */
 export async function resolveChanges(
   db: Kysely<DB>,
   providerId: number,
-  ids: readonly string[],
   changes: BulkAttributeChanges,
 ): Promise<ResolvedChanges> {
-  const { manager, country: code, ...texts } = changes;
+  const { manager, country: code, postOfficeBox, ...texts } = changes;
   const resolved: ResolvedChanges = {};
-  for (const field of TEXT_FIELDS) {
-    const value = texts[field];
-    if (value !== undefined) resolved[field] = value;
+  for (const [f, value] of Object.entries(texts)) {
+    if (value !== undefined) (resolved as Record<string, unknown>)[f] = value;
   }
-  if (manager !== undefined) {
-    if (manager === null) resolved.manager = null;
-    else {
-      const id = manager.toLowerCase();
-      if (ids.some((u) => u.toLowerCase() === id)) {
-        throw new BulkJobRequestError(
-          'manager_in_selection',
-          'The manager is one of the users edited, and can’t be their own manager. Leave them out, or pick another manager.',
-        );
-      }
-      const found = await findCachedUser(db, providerId, { id });
-      if (!found) throw new BulkJobRequestError('manager_not_found', 'manager not found');
-      resolved.manager = {
-        dn: found.distinguished_name,
-        name: found.display_name ?? found.sam_account_name ?? found.distinguished_name,
-      };
-    }
+  if (postOfficeBox !== undefined) resolved.postOfficeBox = [...(postOfficeBox ?? [])].sort();
+  if (code !== undefined) {
+    const found = code === null ? null : directoryCountry(code);
+    resolved.country = found ?? { c: null, co: null, countryCode: null };
   }
-  if (code !== undefined) resolved.country = code === null ? null : directoryCountry(code);
+  if (manager === null) resolved.manager = null;
+  else if (manager !== undefined) {
+    const found = await findCachedUser(db, providerId, { id: manager.toLowerCase() });
+    if (!found) throw new BulkJobRequestError('manager_not_found', 'manager not found');
+    resolved.manager = found.distinguished_name;
+    resolved.managerName = cachedUserName(found, found.distinguished_name);
+  }
   return resolved;
 }
+
+/** Whether this user is the edit's new manager, which would make them their own. */
+export const ownManager = (userDn: string, changes: ResolvedChanges): boolean =>
+  !!changes.manager && changes.manager.toLowerCase() === userDn.toLowerCase();
 
 /** What the job's audit entry and progress say it sets each field to. */
 export function changesSubject(
   changes: ResolvedChanges,
 ): { field: BulkAttributeField; value: string | null }[] {
-  return BULK_ATTRIBUTE_FIELDS.filter((f) => changes[f] !== undefined).map((field) => ({
-    field,
-    value:
-      field === 'manager'
-        ? (changes.manager?.name ?? null)
-        : field === 'country'
-          ? (changes.country?.co ?? null)
-          : (changes[field] ?? null),
+  return named(changes).map((f) => ({
+    field: f,
+    value: field(f).display(changes[f], () => changes.managerName ?? ''),
   }));
 }
 
 /**
  * What editing these users would change, read from the cache before
  * anything is written, with each field's current values across them.
+ * `offset` and `limit` page through the users it changes.
  */
 export async function previewAttributes(
   db: Kysely<DB>,
   providerId: number,
-  request: { ids: string[]; changes: BulkAttributeChanges },
+  request: { ids: string[]; changes: BulkAttributeChanges; offset: number; limit: number },
 ): Promise<BulkUserAttributesPreview> {
   const ids = request.ids.map((id) => id.toLowerCase());
-  const changes = await resolveChanges(db, providerId, ids, request.changes);
-  const users = await db
+  const changes = await resolveChanges(db, providerId, request.changes);
+  const rows = await db
     .selectFrom('user_cache_records')
     .select([
       'object_guid',
+      'distinguished_name',
       'display_name',
       'sam_account_name',
       'title',
       'department',
       'manager_dn',
+      'office',
+      'office_read',
       'raw_attributes_json',
     ])
     .where('provider_id', '=', providerId)
     .where('deleted_at', 'is', null)
     .where(sql<boolean>`object_guid = ANY(${ids}::uuid[])`)
     .execute();
-  const known = users
+  const known = rows
     .map((u) => ({
       id: u.object_guid.toLowerCase(),
-      name: u.display_name ?? u.sam_account_name ?? u.object_guid,
+      dn: u.distinguished_name,
+      name: cachedUserName(u, u.object_guid),
       values: cachedValues(u),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const managerDns = new Set(known.flatMap((u) => u.values.managerDn ?? []));
-  if (changes.manager) managerDns.add(changes.manager.dn);
-  const managerNames = await namesByDn(db, providerId, [...managerDns]);
-  const managerName = (dn: string | null) =>
-    dn === null ? null : (managerNames.get(dn.toLowerCase()) ?? dn);
-  const countryName = (c: Country) => c.co ?? c.c;
+  const managerDns = new Set(known.flatMap((u) => u.values.manager ?? []));
+  const names = await namesByDn(db, providerId, [...managerDns]);
+  if (changes.manager && changes.managerName) {
+    names.set(changes.manager.toLowerCase(), changes.managerName);
+  }
+  const managerName = (dn: string) => names.get(dn.toLowerCase()) ?? dn;
+  const shown = (f: BulkAttributeField, v: unknown) => field(f).display(v, managerName);
 
-  const changed = listed<BulkAttributesPreviewUser>();
-  const unchanged = listed<BulkGroupPreviewUser>();
-  const perField = new Map<BulkAttributeField, number>();
+  const changed = previewList<BulkAttributesPreviewUser>(request.offset, request.limit);
+  const unchanged = previewList();
+  const unread = previewList();
+  const skipped = previewList<PreviewUser & { reason: string }>();
+  const perField = new Map(named(changes).map((f) => [f, { count: 0, unread: 0 }]));
   for (const user of known) {
-    const list = fieldChanges(user.values, changes);
-    if (list.length === 0) {
-      unchanged.add({ id: user.id, name: user.name });
+    const entry = { id: user.id, name: user.name };
+    if (ownManager(user.dn, changes)) {
+      skipped.add({ ...entry, reason: SELF_MANAGER_MESSAGE });
       continue;
     }
-    for (const c of list) perField.set(c.field, (perField.get(c.field) ?? 0) + 1);
-    changed.add({
-      id: user.id,
-      name: user.name,
-      changes: list.map((c): BulkAttributeChange =>
-        c.field === 'country'
-          ? { field: c.field, before: countryName(c.before), after: countryName(c.after) }
-          : c.field === 'manager'
-            ? { field: c.field, before: managerName(c.before), after: managerName(c.after) }
-            : c,
-      ),
-    });
+    const found = fieldChanges(user.values, changes);
+    for (const f of found.unread) perField.get(f)!.unread++;
+    for (const c of found.changes) perField.get(c.field)!.count++;
+    if (found.changes.length > 0) {
+      changed.add({
+        ...entry,
+        changes: found.changes.map((c) => ({
+          field: c.field,
+          before: shown(c.field, c.before),
+          after: shown(c.field, c.after),
+        })),
+      });
+    } else if (found.unread.length > 0) unread.add(entry);
+    else unchanged.add(entry);
   }
 
   const current = Object.fromEntries(
-    BULK_ATTRIBUTE_FIELDS.map((field) => {
-      const shown = new Map<string, string | null>();
-      for (const { values } of known) {
-        const [key, display] =
-          field === 'manager'
-            ? [values.managerDn?.toLowerCase() ?? '', managerName(values.managerDn)]
-            : field === 'country'
-              ? [JSON.stringify(values.country), countryName(values.country)]
-              : [values[field] ?? '', values[field]];
-        shown.set(key, display);
+    BULK_ATTRIBUTE_FIELDS.map((f): [BulkAttributeField, BulkAttributeValue] => {
+      const values: unknown[] = [];
+      for (const { values: v } of known) {
+        if (v[f] !== undefined && !values.some((seen) => field(f).same(seen, v[f]))) {
+          values.push(v[f]);
+        }
       }
-      const value: BulkAttributeValue =
-        shown.size > 1
-          ? { kind: 'multiple', count: shown.size }
-          : { kind: 'same', value: [...shown.values()][0] ?? null };
-      return [field, value];
+      if (values.length > 1) return [f, { kind: 'multiple', count: values.length }];
+      if (known.some((u) => u.values[f] === undefined)) return [f, { kind: 'unknown' }];
+      return [f, { kind: 'same', value: values.length ? shown(f, values[0]) : null }];
     }),
-  ) as Record<BulkAttributeField, BulkAttributeValue>;
+  ) as BulkUserAttributesPreview['current'];
 
   const knownIds = new Set(known.map((u) => u.id));
   return {
     current,
-    changed: changed.list,
+    changed: { ...changed.list, offset: request.offset },
     unchanged: unchanged.list,
-    fields: BULK_ATTRIBUTE_FIELDS.filter((f) => changes[f] !== undefined).map((field) => ({
-      field,
-      count: perField.get(field) ?? 0,
-    })),
+    unread: unread.list,
+    skipped: skipped.list,
+    fields: [...perField].map(([f, counts]) => ({ field: f, ...counts })),
     unknownCount: ids.filter((id) => !knownIds.has(id)).length,
     previewToken: attributesPreviewToken(request.ids, request.changes),
   };
 }
 
-/** Cached users' display names by lowercased DN. */
+/** Cached users' names by lowercased DN. */
 async function namesByDn(
   db: Kysely<DB>,
   providerId: number,
@@ -390,9 +394,6 @@ async function namesByDn(
     )
     .execute();
   return new Map(
-    rows.map((r) => [
-      r.distinguished_name.toLowerCase(),
-      r.display_name ?? r.sam_account_name ?? r.distinguished_name,
-    ]),
+    rows.map((r) => [r.distinguished_name.toLowerCase(), cachedUserName(r, r.distinguished_name)]),
   );
 }

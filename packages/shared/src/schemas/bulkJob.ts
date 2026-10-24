@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { directoryCountry } from '../country.js';
 import { CONTROL_CHARS } from './user.js';
+import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
 import { groupPrivilegeSchema } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
@@ -111,18 +112,6 @@ export const bulkGroupMembershipRequestSchema = z.object({
 });
 export type BulkGroupMembershipRequest = z.input<typeof bulkGroupMembershipRequestSchema>;
 
-/** How many users a preview lists in each group's lists; it counts them all. */
-export const PREVIEW_LIST_LIMIT = 50;
-
-export const bulkGroupPreviewUserSchema = z.object({ id: z.string(), name: z.string() });
-export type BulkGroupPreviewUser = z.infer<typeof bulkGroupPreviewUserSchema>;
-
-/** Some users, the first PREVIEW_LIST_LIMIT by name, and how many there are in all. */
-const previewUsersSchema = z.object({
-  count: z.number().int(),
-  users: z.array(bulkGroupPreviewUserSchema),
-});
-
 /** One group in a membership job's preview, read from the cache. */
 export const bulkGroupPreviewGroupSchema = z.object({
   id: z.string(),
@@ -137,13 +126,13 @@ export const bulkGroupPreviewGroupSchema = z.object({
    * members already (for an add, the group being their primary group
    * included), or not direct members (for a remove).
    */
-  unchanged: previewUsersSchema,
+  unchanged: previewUserListSchema,
   /**
    * Members only through a nested group, or for a remove through their
    * primary group: an add makes them direct members, and a remove leaves
    * them members.
    */
-  indirect: previewUsersSchema,
+  indirect: previewUserListSchema,
 });
 export type BulkGroupPreviewGroup = z.infer<typeof bulkGroupPreviewGroupSchema>;
 
@@ -177,6 +166,8 @@ export const BULK_ATTRIBUTE_FIELDS = [
 ] as const;
 export type BulkAttributeField = (typeof BULK_ATTRIBUTE_FIELDS)[number];
 
+const MAX_PO_BOXES = 10;
+
 // eslint-disable-next-line no-control-regex -- matching them is the point
 const CONTROL_CHARS_BUT_NEWLINES = /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]/;
 const value = (max: number, multiline = false) =>
@@ -203,7 +194,20 @@ export const bulkAttributeChangesSchema = z
     manager: z.guid().nullable().optional(),
     description: value(1024),
     streetAddress: value(1024, true),
-    postOfficeBox: value(40),
+    /** Multi-valued: the values given replace all the user's. */
+    postOfficeBox: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(40)
+          .refine((v) => !CONTROL_CHARS.test(v), { message: 'cannot contain control characters' }),
+      )
+      .min(1)
+      .max(MAX_PO_BOXES)
+      .nullable()
+      .optional(),
     l: value(128),
     st: value(128),
     postalCode: value(40),
@@ -218,11 +222,16 @@ export const bulkAttributeChangesSchema = z
   .strict();
 export type BulkAttributeChanges = z.infer<typeof bulkAttributeChangesSchema>;
 
-/** What a bulk edit would change, and each field's values across the users, asked first. */
+/**
+ * What a bulk edit would change, and each field's values across the users,
+ * asked first. `offset` and `limit` page through the users it changes.
+ */
 export const bulkUserAttributesPreviewRequestSchema = z.object({
   ids: uniqueGuids(MAX_BULK_JOB_ROWS, 'ids'),
   /** Empty asks only for the current values. */
   changes: bulkAttributeChangesSchema.default({}),
+  offset: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(500).default(PREVIEW_LIST_LIMIT),
 });
 export type BulkUserAttributesPreviewRequest = z.input<
   typeof bulkUserAttributesPreviewRequestSchema
@@ -241,10 +250,15 @@ export const bulkUserAttributesRequestSchema = z.object({
 });
 export type BulkUserAttributesRequest = z.input<typeof bulkUserAttributesRequestSchema>;
 
-/** A field's value across the users: one they all share (null: all empty), or several. */
+/**
+ * A field's value across the users: one they all share (null: all
+ * empty), several, or not known yet for some of them (the cache hasn't
+ * read it; the job reads each user live).
+ */
 export const bulkAttributeValueSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('same'), value: z.string().nullable() }),
   z.object({ kind: z.literal('multiple'), count: z.number().int() }),
+  z.object({ kind: z.literal('unknown') }),
 ]);
 export type BulkAttributeValue = z.infer<typeof bulkAttributeValueSchema>;
 
@@ -256,7 +270,7 @@ export const bulkAttributeChangeSchema = z.object({
 });
 export type BulkAttributeChange = z.infer<typeof bulkAttributeChangeSchema>;
 
-export const bulkAttributesPreviewUserSchema = bulkGroupPreviewUserSchema.extend({
+export const bulkAttributesPreviewUserSchema = previewUserSchema.extend({
   changes: z.array(bulkAttributeChangeSchema),
 });
 export type BulkAttributesPreviewUser = z.infer<typeof bulkAttributesPreviewUserSchema>;
@@ -264,12 +278,29 @@ export type BulkAttributesPreviewUser = z.infer<typeof bulkAttributesPreviewUser
 /** A bulk edit's preview, read from the cache. Lists hold the first PREVIEW_LIST_LIMIT by name. */
 export const bulkUserAttributesPreviewSchema = z.object({
   current: z.record(z.enum(BULK_ATTRIBUTE_FIELDS), bulkAttributeValueSchema),
-  /** The users it would change, each with every field's before and after. */
-  changed: z.object({ count: z.number().int(), users: z.array(bulkAttributesPreviewUserSchema) }),
+  /** The users it would change, each with every field's before and after: the page asked for. */
+  changed: z.object({
+    count: z.number().int(),
+    offset: z.number().int(),
+    users: z.array(bulkAttributesPreviewUserSchema),
+  }),
   /** The users already as asked, whose rows would be skipped. */
-  unchanged: previewUsersSchema,
-  /** How many users each field asked for would change. */
-  fields: z.array(z.object({ field: z.enum(BULK_ATTRIBUTE_FIELDS), count: z.number().int() })),
+  unchanged: previewUserListSchema,
+  /** Users it would change only in fields the cache hasn't read for them yet. */
+  unread: previewUserListSchema,
+  /** Users whose rows would be skipped, and why: one would become their own manager. */
+  skipped: z.object({
+    count: z.number().int(),
+    users: z.array(previewUserSchema.extend({ reason: z.string() })),
+  }),
+  /** How many users each field asked for would change, and for how many it isn't known yet. */
+  fields: z.array(
+    z.object({
+      field: z.enum(BULK_ATTRIBUTE_FIELDS),
+      count: z.number().int(),
+      unread: z.number().int(),
+    }),
+  ),
   /** Users asked for that the cache doesn't know; their rows would fail. */
   unknownCount: z.number().int(),
   /** Starting the job takes this back. */
