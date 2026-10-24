@@ -851,9 +851,8 @@ const announcement = computed(() => {
   color: var(--text-3);
 }
 
-/* A phone: the trigger is thumb-sized, the panel takes what the on-screen
-   keyboard leaves of the screen, a user's actions wrap under the name, and
-   the keyboard hints go. */
+/* A phone: the trigger is thumb-sized, a user's actions wrap under the
+   name, and the keyboard hints go. */
 @media (max-width: 767.98px) {
   .gs-trigger {
     min-height: 44px;
@@ -864,13 +863,15 @@ const announcement = computed(() => {
     display: none;
   }
 
+  /* Within what the on-screen keyboard leaves, the search box at the top
+     of it even when Safari has panned down (useVisualViewport). */
   .gs-overlay {
-    padding: 0;
+    padding: var(--visual-viewport-top, 0px) 0 var(--keyboard-inset, 0px);
   }
 
   .gs-panel {
+    align-self: stretch;
     max-height: none;
-    height: calc(100dvh - var(--keyboard-inset, 0px));
     border-radius: 0;
   }
 

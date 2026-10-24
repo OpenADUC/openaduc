@@ -8,7 +8,7 @@ import StepUpDialog from '../feedback/StepUpDialog.vue';
 import OldSchoolMmc from '../../oldschool/OldSchoolMmc.vue';
 import ShortcutSheet from './ShortcutSheet.vue';
 import { useAuthStore } from '../../stores/auth.js';
-import { useKeyboardInset } from '../composables/useKeyboardInset.js';
+import { useVisualViewport } from '../composables/useVisualViewport.js';
 import { useResponsive } from '../composables/useResponsive.js';
 import { useThemeStore } from '../stores/useTheme.js';
 
@@ -17,7 +17,7 @@ const showShell = computed(() => route.meta.layout !== 'bare');
 const auth = useAuthStore();
 const theme = useThemeStore();
 const { isMobile } = useResponsive();
-useKeyboardInset();
+useVisualViewport();
 
 // Old School takes over the entire browser window — sidebar, topbar, and
 // page content all hide behind the MMC overlay. The operator returns to
