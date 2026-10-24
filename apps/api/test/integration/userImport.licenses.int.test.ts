@@ -277,23 +277,33 @@ describe('an import’s licenses', () => {
       expect((await check(request(rows))).warnings).toEqual([]);
     });
 
-    it('says when none is free, and of seats in a grace period', async () => {
-      graph.skus[0]!.prepaidUnits = { enabled: 10, warning: 5, suspended: 0 };
-      const result = await check(request([row('lia.lane', 2, [groups['All Staff']!.id])]));
+    it('counts seats in a grace period as free, saying they lapse', async () => {
+      graph.skus[0]!.prepaidUnits = { enabled: 10, warning: 1, suspended: 3 };
+      const allStaff = groups['All Staff']!.id;
+      const result = await check(
+        request([row('lia.lane', 2, [allStaff]), row('max.mohr', 3, [allStaff])]),
+      );
       expect(result.warnings.map((w) => w.message)).toEqual([
-        'Microsoft 365 E3: 1 person joins groups that grant it, but none is free. Entra won’t assign it to 1 of them until licenses are bought or freed up. Another 5 are in a lapsed subscription’s grace period, so they don’t last.',
+        'Microsoft 365 E3: 2 people join groups that grant it, but only 1 is free, 1 of them in a subscription’s grace period that will lapse. Entra won’t assign it to 1 of them until licenses are bought or freed up.',
       ]);
     });
 
-    it('warns of a bucket group that is only inside a licensed group', async () => {
-      const result = await check(request([row('lia.lane', 2, [groups['Engineering']!.id])]));
+    it('warns of people who’d only get a license through a nested group', async () => {
+      const engineering = groups['Engineering']!.id;
+      const result = await check(
+        request([
+          row('lia.lane', 2, [engineering]),
+          // In All Staff too, so licensed directly: not counted.
+          row('max.mohr', 3, [engineering, groups['All Staff']!.id]),
+        ]),
+      );
       expect(result.problems).toEqual([]);
-      expect(result.warnings).toEqual([
+      expect(result.warnings.filter((w) => w.kind === 'license_nested')).toEqual([
         {
           row: null,
           kind: 'license_nested',
           message:
-            '“Engineering” is inside “All Staff”, which grants Microsoft 365 E3, but group-based licensing doesn’t follow nested groups: the people added to Engineering don’t get it. License Engineering itself, or add them to “All Staff” too.',
+            '1 person would only get Microsoft 365 E3 through nesting: “Engineering” is inside “All Staff”, but group-based licensing doesn’t follow nested groups. License “Engineering” directly, or add them to “All Staff” too.',
         },
       ]);
     });

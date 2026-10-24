@@ -17,7 +17,7 @@ const MAX_WAIT_MS = 15 * MINUTE;
 export const retryMs = (attempts: number): number =>
   Math.min(MAX_WAIT_MS, MINUTE * 2 ** Math.max(0, attempts - 1));
 
-const lower = (v: string) => v.toLowerCase();
+export const lower = (v: string) => v.toLowerCase();
 
 /** A user's license assignment states, as Graph lists them. */
 export type AssignmentStates = readonly {

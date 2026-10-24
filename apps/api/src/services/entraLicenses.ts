@@ -112,7 +112,12 @@ export interface SkuSeats {
   skuPartNumber: string | null;
   /** Units of active subscriptions. */
   enabled: number;
-  /** Units of lapsed subscriptions in their grace period: still usable, not for long. */
+  /**
+   * Units of a subscription in its grace period: still assignable until it
+   * lapses (Graph's licenseUnitsDetail,
+   * https://learn.microsoft.com/graph/api/resources/licenseunitsdetail).
+   * Suspended and locked-out units aren't kept: they can't be assigned.
+   */
   warning: number;
   consumed: number;
 }

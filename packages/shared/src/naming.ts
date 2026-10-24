@@ -6,6 +6,7 @@
 // API's uniqueness check all agree.
 
 import { CONTROL_CHARS, samAccountNameSchema } from './schemas/user.js';
+import { andList } from './words.js';
 
 export const NAMING_TOKENS = ['first', 'last', 'f', 'l', 'mi'] as const;
 export type NamingToken = (typeof NAMING_TOKENS)[number];
@@ -809,7 +810,7 @@ function collision(
 ): NamingDeviation {
   const source = clashes.some((c) => c.source === 'directory') ? 'directory' : 'batch';
   const many = clashes.length > 1;
-  const values = listOf(
+  const values = andList(
     clashes.map(({ attr }) => `${ATTRIBUTE_LABEL[attr]} "${valueOf(base, attr)}"`),
   );
   const where =
@@ -835,11 +836,6 @@ function collision(
         : `${taken} ${addresses}.`
       : `${taken} With ${suffix} added it becomes "${names.samAccountName}"; the UPN and email are free and stay "${names.upn}".`,
   };
-}
-
-function listOf(words: string[]): string {
-  if (words.length <= 1) return words.join('');
-  return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 }
 
 function commonPrefix(values: string[]): string {

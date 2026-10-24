@@ -34,6 +34,7 @@ import { SweepTimer } from '../sweepTimer.js';
 import { licensedGroupsById } from './check.js';
 import {
   checkedLicenses,
+  lower,
   retryMs,
   settleOutcome,
   syncOutcome,
@@ -54,8 +55,6 @@ const STOP_WAIT_MS = 4_000;
 /** How long a claimed check is the claimer's before another process may take it. */
 const LEASE = sql<Date>`now() + interval '10 minutes'`;
 const INSERT_CHUNK = 1_000;
-
-const lower = (v: string) => v.toLowerCase();
 
 type Check = Selectable<ImportLicenseChecksTable> & {
   target_id: string | null;
