@@ -17,6 +17,7 @@ import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import GroupLicenseList from '../design/primitives/GroupLicenseList.vue';
+import LicenseBadge from '../design/primitives/LicenseBadge.vue';
 import { useLicensedGroupsStore } from '../stores/licensedGroups.js';
 import AppToast from '../design/feedback/AppToast.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
@@ -477,7 +478,10 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <div class="result-meta mono">{{ accountOf(c) }}</div>
             </div>
             <StatusBadge v-if="c.kind === 'user'" :user="c" />
-            <span v-else class="badge badge-muted"><i class="pi pi-users" /> group</span>
+            <template v-else>
+              <LicenseBadge :group-id="c.id" />
+              <span class="badge badge-muted"><i class="pi pi-users" /> group</span>
+            </template>
           </li>
         </ul>
         <Message v-else-if="addSearchError" severity="error" :closable="false">

@@ -43,6 +43,7 @@ import ReportingStructureCard from '../design/primitives/ReportingStructureCard.
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import UserLicenseList from '../design/primitives/UserLicenseList.vue';
+import LicenseBadge from '../design/primitives/LicenseBadge.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, nameOf } from '../design/lib/format.js';
 import type { UserCreateResponse, UserDetail } from '@openaduc/shared';
@@ -1925,6 +1926,7 @@ watch(user, (u) => {
                 member via a nested group
               </span>
             </div>
+            <LicenseBadge :group-id="g.id" />
             <Button
               v-if="existingMembership(g.id) !== 'direct'"
               label="Add"

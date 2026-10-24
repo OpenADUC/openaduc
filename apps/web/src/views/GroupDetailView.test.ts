@@ -343,4 +343,16 @@ describe('a group’s licenses', () => {
     expect(card?.text()).toContain('Microsoft 365 E3');
     expect(card?.text()).toContain('1 service plan turned off');
   });
+
+  it('badges a licensed group among the members to add', async () => {
+    const { page } = await openMembers();
+    await click(page, 'Add member');
+    await page.get('[role="dialog"] input').setValue('con');
+    const option = await vi.waitFor(() => {
+      const found = page.findAll('[role="option"]').find((o) => o.text().includes('Contractors'));
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(option.find('.license-badge').text()).toBe('Microsoft 365 E3');
+  });
 });

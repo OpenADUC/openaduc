@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
+import { useLicensedGroupsStore } from '../../stores/licensedGroups.js';
 import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
 import { MIN_GROUP_QUERY, useAddToGroup } from '../../design/composables/useAddToGroup.js';
@@ -52,7 +53,18 @@ const {
     ),
 });
 
-onMounted(() => load(props.userId));
+// A licensed group gives whoever joins it its licenses, so the list says which.
+const licensed = useLicensedGroupsStore();
+const licenseNames = (groupId: string) =>
+  licensed
+    .licensesOf(groupId)
+    .map((l) => l.name)
+    .join(', ');
+
+onMounted(() => {
+  void load(props.userId);
+  void licensed.ensureLoaded();
+});
 
 const selected = ref<GroupSummary | null>(null);
 const canOk = computed(
@@ -108,6 +120,7 @@ function ok(): void {
             <template v-else-if="existing(g.id) === 'nested'">
               (member via a nested group)</template
             >
+            <template v-if="licenseNames(g.id)"> (licenses: {{ licenseNames(g.id) }})</template>
           </span>
           <span style="color: var(--os-window-text-muted)">{{ g.description ?? '' }}</span>
         </div>
