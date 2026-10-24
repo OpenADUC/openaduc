@@ -124,6 +124,39 @@ describe('naming pattern', () => {
     expect(elsewhere).toMatchObject({ samAccountName: 'alice.anders3', cn: 'Alice Anders' });
   });
 
+  it('blocks a CN whose bracketed fallback is taken in the OU too', async () => {
+    const fallbackDn = `CN=Alice Anders (alice.anders2),${staffOu}`;
+    await asAdministrator((client) =>
+      client.add(fallbackDn, {
+        objectClass: ['top', 'contact'],
+        cn: 'Alice Anders (alice.anders2)',
+      }),
+    );
+    try {
+      const [staff] = await check(operator, [{ first: 'Alice', last: 'Anders', ouDn: staffOu }]);
+      expect(staff!.deviations.at(-1)).toMatchObject({
+        kind: 'cn_collision',
+        approval: 'blocked',
+      });
+    } finally {
+      await asAdministrator((client) => client.del(fallbackDn));
+    }
+  });
+
+  it('accepts a container under the base DN, and refuses any other OU', async () => {
+    const [users] = await check(operator, [
+      { first: 'Zed', last: 'Quinn', ouDn: `CN=Users,${DC.baseDn}` },
+    ]);
+    expect(users!.cn).toBe('Zed Quinn');
+
+    for (const ouDn of ['not a dn', 'OU=Staff,DC=elsewhere,DC=test', 'OU=Staff\\']) {
+      const res = await operator.post(`${url}/check`, {
+        names: [{ first: 'Zed', last: 'Quinn', ouDn }],
+      });
+      expect(res.statusCode, ouDn).toBe(400);
+    }
+  });
+
   it('is refused to an operator, and to a pattern or suffix that cannot work', async () => {
     const body = { pattern: '{f}{last}', upnSuffix: EXTRA_SUFFIX };
     expect((await operator.put(url, body)).statusCode).toBe(403);
