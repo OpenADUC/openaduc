@@ -21,7 +21,8 @@ import { ApiError } from '../../api/client.js';
 import { ATTRIBUTE_LABELS } from '../lib/bulkAttributes.js';
 import { accounts } from '../lib/bulkJob.js';
 import { latestRequest } from '../lib/latestRequest.js';
-import { useDebouncedSearch } from './useDebouncedSearch.js';
+import { useAttributeEditPreview } from './useAttributeEditPreview.js';
+import { useUserPick } from './useUserPick.js';
 
 export type FieldMode = 'keep' | 'set' | 'clear';
 
@@ -30,8 +31,6 @@ export const MULTIPLE_VALUES = '(multiple values)';
 /** Shown for a field the cache hasn't read for some of the users. */
 export const NOT_READ_YET = 'not known yet for some of them';
 
-const MANAGER_SEARCH_DELAY_MS = 200;
-const MANAGER_PAGE_SIZE = 12;
 const FIELDS = bulkAttributeChangesSchema.shape;
 
 const message = (err: unknown): string => (err instanceof ApiError ? err.message : String(err));
@@ -69,18 +68,16 @@ export function useBulkAttributeEdit(options: {
       string
     >,
   );
-  const manager = shallowRef<{ id: string; name: string } | null>(null);
-  const managerSearch = useDebouncedSearch<UserSummary>({
-    delayMs: MANAGER_SEARCH_DELAY_MS,
-    search: (q) => api.users.search({ q, pageSize: MANAGER_PAGE_SIZE }),
-  });
+  const managerPick = useUserPick();
+  const manager = managerPick.chosen;
 
-  const preview = shallowRef<BulkUserAttributesPreview | null>(null);
-  // What the preview was asked for, which the job then runs on.
-  let previewed: { ids: string[]; changes: BulkAttributeChanges } | null = null;
-  const previewing = ref(false);
-  const previewError = ref<string | null>(null);
-  const previews = latestRequest();
+  const {
+    review: reviewEdit,
+    request,
+    forget: forgetPreview,
+    ...previewState
+  } = useAttributeEditPreview();
+  const { preview, previewing, mayChange } = previewState;
 
   const count = computed(() => options.ids().length);
 
@@ -128,12 +125,6 @@ export function useBulkAttributeEdit(options: {
       Object.keys(problems.value).length === 0 &&
       !previewing.value,
   );
-  // Users whose value the cache hasn't read may change too.
-  const mayChange = computed(() =>
-    preview.value ? preview.value.changed.count + preview.value.unread.count : 0,
-  );
-  const canConfirm = computed(() => mayChange.value > 0);
-
   const title = computed(() =>
     preview.value ? `Edit ${accounts(count.value)}?` : `Edit ${accounts(count.value)}`,
   );
@@ -165,18 +156,8 @@ export function useBulkAttributeEdit(options: {
   }
 
   function chooseManager(user: UserSummary): void {
-    manager.value = { id: user.id, name: user.displayName ?? user.samAccountName };
-    managerSearch.reset();
+    managerPick.choose(user);
     forgetPreview();
-  }
-
-  function forgetPreview(): void {
-    previews.begin();
-    preview.value = null;
-    previewed = null;
-    previewing.value = false;
-    loadingMore.value = false;
-    previewError.value = null;
   }
 
   async function open(): Promise<void> {
@@ -184,8 +165,7 @@ export function useBulkAttributeEdit(options: {
       modes[field] = 'keep';
       values[field] = '';
     }
-    manager.value = null;
-    managerSearch.reset();
+    managerPick.reset();
     forgetPreview();
     current.value = null;
     loadError.value = null;
@@ -213,55 +193,7 @@ export function useBulkAttributeEdit(options: {
   }
 
   async function review(): Promise<void> {
-    if (!canPreview.value) return;
-    const isCurrent = previews.begin();
-    previewing.value = true;
-    previewError.value = null;
-    const asked = { ids: options.ids(), changes: { ...changes.value } };
-    try {
-      const result = await api.users.previewAttributeEdit(asked);
-      if (isCurrent()) {
-        preview.value = result;
-        previewed = asked;
-      }
-    } catch (err) {
-      if (isCurrent()) previewError.value = message(err);
-    } finally {
-      if (isCurrent()) previewing.value = false;
-    }
-  }
-
-  const loadingMore = ref(false);
-  const hasMore = computed(
-    () => !!preview.value && preview.value.changed.users.length < preview.value.changed.count,
-  );
-
-  /** The next page of the users it changes, added to the preview's list. */
-  async function showMore(): Promise<void> {
-    const shownPreview = preview.value;
-    if (!shownPreview || !previewed || !hasMore.value || loadingMore.value) return;
-    const isCurrent = previews.begin();
-    loadingMore.value = true;
-    try {
-      const next = await api.users.previewAttributeEdit({
-        ...previewed,
-        offset: shownPreview.changed.users.length,
-      });
-      if (!isCurrent()) return;
-      if (next.previewToken !== shownPreview.previewToken) {
-        forgetPreview();
-        previewError.value = 'The users changed since the preview. Preview it again.';
-        return;
-      }
-      preview.value = {
-        ...next,
-        changed: { ...next.changed, users: [...shownPreview.changed.users, ...next.changed.users] },
-      };
-    } catch (err) {
-      if (isCurrent()) previewError.value = message(err);
-    } finally {
-      if (isCurrent()) loadingMore.value = false;
-    }
+    if (canPreview.value) await reviewEdit(options.ids(), changes.value);
   }
 
   /** Back from the preview to change the fields. */
@@ -270,17 +202,10 @@ export function useBulkAttributeEdit(options: {
   }
 
   function confirm(): void {
-    const shownPreview = preview.value;
-    if (!shownPreview || !previewed || !canConfirm.value) return;
-    const { ids, changes: asked } = previewed;
-    const now = new Set(options.ids());
-    if (now.size !== ids.length || ids.some((id) => !now.has(id))) {
-      forgetPreview();
-      previewError.value = 'The selection changed since the preview. Preview it again.';
-      return;
-    }
+    const edit = request(options.ids());
+    if (!edit) return;
     close();
-    options.start({ ids, changes: asked, previewToken: shownPreview.previewToken });
+    options.start(edit);
   }
 
   return {
@@ -294,21 +219,15 @@ export function useBulkAttributeEdit(options: {
     modes,
     values,
     manager,
-    managerQuery: managerSearch.query,
-    managerResults: managerSearch.results,
-    managerSearching: managerSearch.searching,
-    managerSearchError: managerSearch.searchError,
+    managerQuery: managerPick.query,
+    managerResults: managerPick.results,
+    managerSearching: managerPick.searching,
+    managerSearchError: managerPick.searchError,
     changes,
     changedFields,
     problems,
     canPreview,
-    preview,
-    previewing,
-    previewError,
-    canConfirm,
-    hasMore,
-    loadingMore,
-    showMore,
+    ...previewState,
     shown,
     label: (field: BulkAttributeField) => ATTRIBUTE_LABELS[field],
     setMode,

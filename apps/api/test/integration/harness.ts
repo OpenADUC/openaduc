@@ -10,6 +10,7 @@ import type { FastifyInstance, HTTPMethods, InjectOptions, LightMyRequestRespons
 import { Client as LdapClient } from 'ldapts';
 import pg from 'pg';
 import { inject, vi } from 'vitest';
+import type { BulkJob } from '@openaduc/shared';
 import { TEMPLATE_DB } from './globalSetup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -368,6 +369,18 @@ export class TestClient {
   async stepUp(password: string = DC.password): Promise<void> {
     expectOk(await this.post('/api/auth/step-up', { password }), 'step-up');
   }
+}
+
+/** Wait for a bulk job to stop running with no rows left to run. */
+export async function finishedJob(client: TestClient, id: string): Promise<BulkJob> {
+  for (let i = 0; i < 300; i++) {
+    const { job } = (await client.get(`/api/bulk-jobs/${id}`)).json<{ job: BulkJob }>();
+    if (job.status !== 'queued' && job.status !== 'running' && job.counts.pending === 0) {
+      return job;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`bulk job ${id} didn’t finish`);
 }
 
 export function expectOk(res: LightMyRequestResponse, what: string): void {
