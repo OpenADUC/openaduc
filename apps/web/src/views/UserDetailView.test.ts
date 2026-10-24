@@ -48,7 +48,7 @@ const COPY_SOURCE = {
 
 const api = {
   users: {
-    get: vi.fn(async () => ({ user })),
+    get: vi.fn(async (_id: string) => ({ user })),
     activity: vi.fn(async () => ({ rows: [] })),
     update: vi.fn(async () => ({ user })),
     resetPassword: vi.fn(async () => ({})),
