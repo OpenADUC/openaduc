@@ -2,6 +2,7 @@
 import fp from 'fastify-plugin';
 import { ZodError } from 'zod';
 import type { FastifyRequest } from 'fastify';
+import type { StepUpRequiredReason } from '@openaduc/shared';
 import { DirectoryUnavailableError } from '../providers/types.js';
 import { auditContextFromRequest, wasAudited } from '../services/auditContext.js';
 
@@ -28,13 +29,24 @@ export const SessionRequired = (msg = 'authentication required') =>
   new AppError({ statusCode: 401, code: 'session_required', message: msg });
 export const Forbidden = (msg = 'Forbidden') =>
   new AppError({ statusCode: 403, code: 'forbidden', message: msg });
+const STEP_UP_REQUIRED_MESSAGES: Record<StepUpRequiredReason, string> = {
+  not_elevated: 'step-up required — confirm your password to continue',
+  password_rejected: 'the directory rejected your step-up password — step up again',
+};
+
 /**
  * 403 with a specific `step_up_required` code. The web client treats
  * this distinctly: it clears stale local elevated state and opens the
  * step-up dialog, then retries the write once the operator steps up.
+ * `details.reason` says why, for the dialog to explain.
  */
-export const StepUpRequired = (msg = 'step-up required — confirm your password to continue') =>
-  new AppError({ statusCode: 403, code: 'step_up_required', message: msg });
+export const StepUpRequired = (reason: StepUpRequiredReason = 'not_elevated') =>
+  new AppError({
+    statusCode: 403,
+    code: 'step_up_required',
+    message: STEP_UP_REQUIRED_MESSAGES[reason],
+    details: { reason },
+  });
 export const NotFound = (msg = 'Not found') =>
   new AppError({ statusCode: 404, code: 'not_found', message: msg });
 export const Conflict = (msg: string) =>
