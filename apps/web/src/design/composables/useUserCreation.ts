@@ -36,6 +36,7 @@ import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
+import { privilegeWarning } from '../lib/newUser.js';
 
 const CHECK_DELAY_MS = 300;
 
@@ -94,6 +95,8 @@ export function useUserCreation(options: {
   const unfinished = ref<UserCreateResponse | null>(null);
   /** The user being copied, when this is a copy. */
   const copySource = ref<UserCopySource | null>(null);
+  /** Why the user to copy couldn't be loaded; there's no form to fill then. */
+  const copyError = ref<string | null>(null);
 
   /**
    * Start a new form: `initial` prefills it (the OU started from, or what
@@ -105,6 +108,7 @@ export function useUserCreation(options: {
   ): Promise<void> {
     Object.assign(form, blankForm(), initial);
     copySource.value = from;
+    copyError.value = null;
     Object.assign(typed, {
       samAccountName: null,
       upnLocal: null,
@@ -146,12 +150,15 @@ export function useUserCreation(options: {
 
   /** Start a copy of a user: its OU, organisation and groups, the rest blank. */
   async function startCopy(sourceId: string): Promise<void> {
+    copySource.value = null;
+    copyError.value = null;
     let source: UserCopySource;
+    loading.value = true;
     try {
       source = await api.users.copySource(sourceId);
     } catch (err) {
-      await start();
-      loadError.value = errorMessage(err, 'Couldn’t load the user to copy');
+      copyError.value = errorMessage(err, 'Couldn’t load the user to copy');
+      loading.value = false;
       return;
     }
     await start(copyToForm(source), source);
@@ -291,17 +298,39 @@ export function useUserCreation(options: {
 
   const canAddGroups = computed(() => auth.hasCapability('write:group.membership'));
 
-  /** The source's groups, each ticked while the copy is to be added to it. */
+  /**
+   * The source's groups as the checklist shows them: ticked while the copy
+   * is to be added, and why a privileged one deserves a second thought.
+   */
   const groupChoices = computed(() =>
     (copySource.value?.groups ?? []).map((g) => ({
-      ...g,
-      ticked: !!form.groups?.includes(g.id),
+      id: g.id,
+      name: g.name,
+      ticked: canAddGroups.value && !!form.groups?.includes(g.id),
+      disabled: !canAddGroups.value,
+      warning: g.privilege ? privilegeWarning(g.privilege) : null,
     })),
   );
 
-  function setGroup(id: string, ticked: boolean): void {
-    const rest = (form.groups ?? []).filter((g) => g !== id);
-    form.groups = ticked ? [...rest, id] : rest;
+  function toggleGroup(id: string): void {
+    const groups = form.groups ?? [];
+    form.groups = groups.includes(id) ? groups.filter((g) => g !== id) : [...groups, id];
+  }
+
+  /** The source's manager while the copy keeps it. */
+  const manager = computed(() =>
+    form.organisation?.managerId ? (copySource.value?.manager ?? null) : null,
+  );
+  function clearManager(): void {
+    form.organisation = { ...form.organisation, managerId: null };
+  }
+  /** The copied country, as the three attributes that travel together. */
+  const country = computed(() => {
+    const o = form.organisation ?? {};
+    return o.co || o.c ? [o.co, o.c && `(${o.c})`].filter(Boolean).join(' ') : null;
+  });
+  function clearCountry(): void {
+    form.organisation = { ...form.organisation, c: null, co: null, countryCode: null };
   }
 
   const plan = computed(() =>
@@ -355,7 +384,12 @@ export function useUserCreation(options: {
   // ---- Submit --------------------------------------------------------------
 
   const canSubmit = computed(
-    () => !!plan.value.request && !submitting.value && !unfinished.value && !loading.value,
+    () =>
+      !!plan.value.request &&
+      !submitting.value &&
+      !unfinished.value &&
+      !loading.value &&
+      !copyError.value,
   );
 
   function submit(): void {
@@ -445,6 +479,7 @@ export function useUserCreation(options: {
     start,
     startCopy,
     copySource,
+    copyError,
     loading,
     loadError,
     naming,
@@ -466,7 +501,11 @@ export function useUserCreation(options: {
     plan,
     canAddGroups,
     groupChoices,
-    setGroup,
+    toggleGroup,
+    manager,
+    clearManager,
+    country,
+    clearCountry,
     tidyPhones,
     setPasswordMode,
     generate,

@@ -32,6 +32,7 @@ const COPY_SOURCE = {
     postalCode: null,
     c: null,
     co: null,
+    countryCode: null,
   },
   manager: { id: 'u2', distinguishedName: 'CN=Max Boss', displayName: 'Max Boss' },
   groups: [
@@ -706,8 +707,9 @@ describe('copying the user', () => {
     expect(api.users.copySource).toHaveBeenCalledWith('u1');
     const dialog = page.find('[role="dialog"]');
     expect(dialog.text()).toContain('Copy user');
-    expect(dialog.text()).toContain('Copied from Jane Doe');
-    expect(dialog.text()).toContain('Finance');
+    expect(dialog.text()).toContain('Organisation, from Jane Doe');
+    expect((dialog.find('#nu-org-department').element as HTMLInputElement).value).toBe('Finance');
+    expect((dialog.find('#nu-org-title').element as HTMLInputElement).value).toBe('Analyst');
     expect(dialog.text()).toContain('Max Boss');
     expect((dialog.find('#nu-first').element as HTMLInputElement).value).toBe('');
     expect(groupBox(page, 'Finance').checked).toBe(true);
@@ -723,6 +725,17 @@ describe('copying the user', () => {
     expect(page.find('[role="dialog"]').text()).toContain('You can’t change group memberships');
     expect(groupBox(page, 'Finance').disabled).toBe(true);
     expect(groupBox(page, 'Finance').checked).toBe(false);
+  });
+
+  it('says so, with no form, when this user can’t be loaded to copy', async () => {
+    api.users.copySource.mockRejectedValueOnce(new ApiError(404, 'not_found', 'user not found'));
+    const { page } = await openTab('overview', ['read:user', 'write:user.create'], true);
+
+    await runAction(page, 'Copy…');
+
+    const dialog = page.find('[role="dialog"]');
+    expect(dialog.text()).toContain('user not found');
+    expect(dialog.find('#nu-first').exists()).toBe(false);
   });
 
   it('isn’t offered without the create capability', async () => {
