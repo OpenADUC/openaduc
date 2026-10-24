@@ -62,6 +62,9 @@ import type {
   OuListResponse,
   OuUpdateRequest,
   ResetPasswordRequest,
+  TapIssueRequest,
+  TapIssueResponse,
+  TapPreflight,
   RestoreUserRequest,
   MfaRegistrationResponse,
   MfaRegistrationStatus,
@@ -195,7 +198,8 @@ export type EntraFeatureKey =
   | 'signInEvents'
   | 'mfaRegistration'
   | 'teamsAdminWebhook'
-  | 'passwordExpiryNotifications';
+  | 'passwordExpiryNotifications'
+  | 'temporaryAccessPass';
 
 export interface EntraIntegrationSummary {
   id: number;
@@ -521,6 +525,16 @@ export const api = {
     },
     resetPassword(id: string, body: ResetPasswordRequest): Promise<{ ok: boolean }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    /** Whether a Temporary Access Pass can be issued to the user, and within what limits. */
+    tapPreflight(id: string): Promise<TapPreflight> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`);
+    },
+    issueTap(id: string, body: TapIssueRequest): Promise<TapIssueResponse> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -933,9 +947,13 @@ export const api = {
       remove(id: number): Promise<{ ok: boolean }> {
         return apiFetch(`/directories/${id}/entra`, { method: 'DELETE' });
       },
-      test(
-        id: number,
-      ): Promise<{ ok: boolean; message: string; tenantDisplayName: string | null }> {
+      test(id: number): Promise<{
+        ok: boolean;
+        message: string;
+        tenantDisplayName: string | null;
+        /** Permissions a turned-on feature needs that the app registration lacks. */
+        missingPermissions: string[];
+      }> {
         return apiFetch(`/directories/${id}/entra/test`, { method: 'POST' });
       },
       /**
