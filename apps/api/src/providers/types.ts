@@ -552,6 +552,9 @@ export interface DirectoryProvider {
     finish: UserCreateFinish,
     ctx: WriteContext,
   ): Promise<UserCreateResult>;
+  // What shows whether an account is as a create left it. Reads with the
+  // service account.
+  getAccountFingerprint(identifier: DirectoryObjectIdentifier): Promise<AccountFingerprint | null>;
   // Run `steps`, the ones a create left undone, on the account it made.
   finishUserCreate(
     userId: DirectoryObjectIdentifier,
@@ -695,6 +698,21 @@ export interface UserCreateResult extends MutationResult {
   failedStep?: UserCreateStep;
   /** The account as read back, unless that failed. */
   user?: DirectoryUser;
+  /** The account as the steps left it, unless that couldn't be read. */
+  fingerprint?: AccountFingerprint;
+}
+
+/**
+ * Raw values that change whenever anyone changes the account, so a later
+ * finish can tell the account is still as a create left it. uSNChanged
+ * is per domain controller.
+ */
+export interface AccountFingerprint {
+  objectGuid: string;
+  whenCreated: string | null;
+  usnChanged: string | null;
+  pwdLastSet: string | null;
+  lastLogonTimestamp: string | null;
 }
 
 export interface OuAttributePatch {
