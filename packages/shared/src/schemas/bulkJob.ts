@@ -22,6 +22,44 @@ export const BULK_JOB_ACTIONS = [
 ] as const;
 export type BulkJobAction = (typeof BULK_JOB_ACTIONS)[number];
 
+/**
+ * What a revert does to each row, for each action it can revert: the
+ * opposite write, or the same one with the before-values. Unlock has
+ * none, AD can't lock an account again.
+ */
+export const BULK_REVERT_ACTIONS = {
+  'user.disable': 'user.enable',
+  'user.enable': 'user.disable',
+  'user.group.add': 'user.group.remove',
+  'user.group.remove': 'user.group.add',
+  'user.update': 'user.update',
+  'user.move': 'user.move',
+  'user.accountExpiry.set': 'user.accountExpiry.set',
+  'user.passwordMustChange.set': 'user.passwordMustChange.clear',
+  'user.passwordNeverExpires.clear': 'user.passwordNeverExpires.set',
+} as const satisfies Partial<Record<BulkJobAction, string>>;
+export type BulkRevertableAction = keyof typeof BULK_REVERT_ACTIONS;
+
+/** Every action a job has: a bulk action's, or a revert's, which only reverts start. */
+export const BULK_JOB_KINDS = [
+  ...BULK_JOB_ACTIONS,
+  'user.passwordMustChange.clear',
+  'user.passwordNeverExpires.set',
+] as const;
+export type BulkJobKind = (typeof BULK_JOB_KINDS)[number];
+
+export const canRevert = (action: BulkJobKind): action is BulkRevertableAction =>
+  action in BULK_REVERT_ACTIONS;
+
+/** The action a revert of this action reverted: each revert action reverts exactly one. */
+export function revertedAction(revert: BulkJobKind): BulkRevertableAction {
+  const found = (Object.keys(BULK_REVERT_ACTIONS) as BulkRevertableAction[]).find(
+    (a) => BULK_REVERT_ACTIONS[a] === revert,
+  );
+  if (!found) throw new Error(`${revert} reverts nothing`);
+  return found;
+}
+
 const BULK_JOB_PATHS: Record<BulkJobAction, string> = {
   'user.disable': '/users/bulk-disable',
   'user.enable': '/users/bulk-enable',
@@ -365,7 +403,9 @@ export const BULK_JOB_CAPABILITIES = {
   'user.accountExpiry.set': BULK_ACCOUNT_CAPABILITIES.accountExpiry,
   'user.passwordMustChange.set': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
   'user.passwordNeverExpires.clear': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
-} as const satisfies Record<BulkJobAction, Capability>;
+  'user.passwordMustChange.clear': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
+  'user.passwordNeverExpires.set': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
+} as const satisfies Record<BulkJobKind, Capability>;
 
 export const bulkAccountChangeSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('move'), targetOuDn: moveRequestSchema.shape.targetOuDn }).strict(),
@@ -481,11 +521,22 @@ export const bulkJobSubjectSchema = z.object({
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 
+/** A job's latest revert. */
+export const bulkJobRevertedBySchema = z.object({
+  jobId: z.string(),
+  actorDisplayName: z.string().nullable(),
+  createdAt: z.string(),
+  status: z.enum(BULK_JOB_STATUSES),
+});
+
 export const bulkJobSchema = z.object({
   id: z.string(),
-  action: z.enum(BULK_JOB_ACTIONS),
+  action: z.enum(BULK_JOB_KINDS),
   /** The job this one reverts: it puts back what that job changed, row by row. */
   revertsJobId: z.string().nullable(),
+  /** Whether it can be reverted now (see revertRefusal). */
+  revertible: z.boolean(),
+  revertedBy: bulkJobRevertedBySchema.nullable(),
   /** Null for a job that acts on its rows alone, as disable does. */
   subject: bulkJobSubjectSchema.nullable(),
   status: z.enum(BULK_JOB_STATUSES),
@@ -517,7 +568,7 @@ export const bulkJobRowsQuerySchema = z.object({
 
 /** A bulk job as the audit log shows it, on the `bulk.create` event that heads it. */
 export const auditBulkSummarySchema = z.object({
-  action: z.enum(BULK_JOB_ACTIONS),
+  action: z.enum(BULK_JOB_KINDS),
   /** From its `bulk.create` event. */
   subject: bulkJobSubjectSchema.nullable(),
   /** Null once the job's record is gone; its audit events remain. */
@@ -529,22 +580,62 @@ export const auditBulkSummarySchema = z.object({
   total: z.number().int(),
   /** The job it reverts, from its `bulk.create` event. */
   revertsJobId: z.string().nullable(),
-  /**
-   * Whether it can be reverted now: its action can be undone, it has
-   * stopped, it isn't a revert itself, and no revert of it is under way.
-   */
   revertible: z.boolean(),
-  /** Its latest revert, if it has one. */
-  revertedBy: z
-    .object({
-      jobId: z.string(),
-      actorDisplayName: z.string().nullable(),
-      createdAt: z.string(),
-      status: z.enum(BULK_JOB_STATUSES),
-    })
-    .nullable(),
+  revertedBy: bulkJobRevertedBySchema.nullable(),
 });
 export type AuditBulkSummary = z.infer<typeof auditBulkSummarySchema>;
+
+/**
+ * Why a job can't be reverted now, or null: its action can't be undone,
+ * it's a revert itself, it hasn't stopped (rows still running count, as
+ * after a stop), a revert of it is under way, or it changed nothing.
+ */
+export function revertRefusal(
+  job: {
+    action: BulkJobKind;
+    revertsJobId: string | null;
+    status: BulkJobStatus;
+    counts: Pick<BulkJobCounts, 'running' | 'succeeded' | 'partial'>;
+  },
+  openRevert: boolean,
+): {
+  code: 'not_revertible' | 'job_running' | 'revert_running' | 'nothing_to_revert';
+  message: string;
+} | null {
+  if (job.revertsJobId !== null) {
+    return {
+      code: 'not_revertible',
+      message: 'A revert can’t be reverted. To make the change again, run the bulk action again.',
+    };
+  }
+  if (!canRevert(job.action)) {
+    return {
+      code: 'not_revertible',
+      message: 'An unlock can’t be reverted: AD can’t lock an account again.',
+    };
+  }
+  if (
+    job.status === 'queued' ||
+    job.status === 'running' ||
+    job.status === 'paused' ||
+    job.counts.running > 0
+  ) {
+    return {
+      code: 'job_running',
+      message: 'The job hasn’t stopped. Let it finish, or stop it, then revert it.',
+    };
+  }
+  if (openRevert) {
+    return { code: 'revert_running', message: 'This job is being reverted already.' };
+  }
+  if (job.counts.succeeded + job.counts.partial === 0) {
+    return {
+      code: 'nothing_to_revert',
+      message: 'The job changed nothing, so there’s nothing to revert.',
+    };
+  }
+  return null;
+}
 
 /**
  * What a revert compares and puts back: one of a bulk edit's fields,
@@ -576,11 +667,15 @@ export const bulkRevertChangeSchema = z.object({
   now: revertValueSchema,
   /** What the revert puts back: the value before the job. */
   restore: revertValueSchema,
+  /** The job's own re-read failed, so what it left, and whether that's changed since, isn't known. */
+  unverified: z.boolean().optional(),
 });
 export type BulkRevertChange = z.infer<typeof bulkRevertChangeSchema>;
 
 export const bulkRevertPreviewUserSchema = previewUserSchema.extend({
   changes: z.array(bulkRevertChangeSchema),
+  /** Why a user whose values are as the job left them counts as changed since. */
+  changedSince: z.string().optional(),
 });
 export type BulkRevertPreviewUser = z.infer<typeof bulkRevertPreviewUserSchema>;
 
@@ -606,6 +701,11 @@ export const bulkJobRevertPreviewSchema = z.object({
   }),
   /** The job's rows that failed or were skipped: they changed nothing to revert. */
   excluded: z.number().int(),
+  /**
+   * Groups AD protects (AdminSDHolder) that the revert puts users back
+   * in: starting it takes `acknowledgeProtected`, as a bulk add does.
+   */
+  protectedGroups: z.array(z.object({ id: z.string(), name: z.string() })),
   /** Starting the revert takes this back. */
   previewToken: z.string(),
 });
@@ -617,6 +717,7 @@ export type BulkJobRevertPreview = z.infer<typeof bulkJobRevertPreviewSchema>;
  */
 export const bulkJobRevertRequestSchema = z.object({
   previewToken: z.string().min(1),
+  acknowledgeProtected: z.boolean().default(false),
   include: z.union([z.literal('all'), z.array(z.guid()).max(MAX_BULK_JOB_ROWS)]).default([]),
 });
 export type BulkJobRevertRequest = z.input<typeof bulkJobRevertRequestSchema>;

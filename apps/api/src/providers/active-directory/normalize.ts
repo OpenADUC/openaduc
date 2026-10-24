@@ -8,6 +8,7 @@ import type {
   DirectoryGroup,
   DirectoryGroupPolicy,
   DirectoryGroupPolicyLink,
+  DirectoryObjectRef,
   DirectoryOu,
   DirectoryUser,
 } from '../types.js';
@@ -293,6 +294,29 @@ function parseGeneralizedTime(v: unknown): Date | null {
   const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export const OBJECT_REF_ATTRS = [
+  'objectGUID',
+  'distinguishedName',
+  'name',
+  'displayName',
+  'objectClass',
+  'isCriticalSystemObject',
+];
+
+export function normalizeObjectRef(entry: Entry): DirectoryObjectRef | null {
+  const guidBuf = asBuffer(entry.objectGUID);
+  if (!guidBuf) return null;
+  const dn = asString(entry.distinguishedName) ?? entry.dn;
+  const classes = asStringArray(entry.objectClass).map((c) => c.toLowerCase());
+  return {
+    objectGuid: objectGuidToString(guidBuf),
+    distinguishedName: dn,
+    name: asString(entry.displayName) ?? asString(entry.name) ?? leafRdnValue(dn) ?? dn,
+    isOu: classes.includes('organizationalunit'),
+    isCriticalSystemObject: asString(entry.isCriticalSystemObject)?.toUpperCase() === 'TRUE',
+  };
 }
 
 export function normalizeUser(entry: Entry): DirectoryUser {

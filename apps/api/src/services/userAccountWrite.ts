@@ -62,7 +62,13 @@ export async function writeUserAccount(
   id: string,
   writeCtx: WriteContext,
   audit: Omit<AuditEventInput, 'action' | 'result' | 'providerId' | 'targetType'>,
-): Promise<{ user: DirectoryUser; result: WriteOpResult; unchanged: boolean } | null> {
+): Promise<{
+  user: DirectoryUser;
+  result: WriteOpResult;
+  unchanged: boolean;
+  /** The account as read back after the write, when one was made and the read worked. */
+  refreshed: DirectoryUser | null;
+} | null> {
   const before = await services.userLiveRefresh.refresh(provider, id);
   if (!before) return null;
   const snapshot = asAsked?.(before.user) ?? null;
@@ -81,7 +87,7 @@ export async function writeUserAccount(
       { ...base, metadata: { ...audit.metadata, ...metadata, unchanged: true } },
       async () => ({ ok: true, before: snapshot, after: snapshot }),
     );
-    return { user: before.user, result, unchanged: true };
+    return { user: before.user, result, unchanged: true, refreshed: null };
   }
   const result = await withAudit(
     services.audit,
@@ -97,8 +103,8 @@ export async function writeUserAccount(
       };
     },
   );
-  if (result.ok) await services.userLiveRefresh.refresh(provider, id);
-  return { user: before.user, result, unchanged: false };
+  const refreshed = result.ok ? await services.userLiveRefresh.refresh(provider, id) : null;
+  return { user: before.user, result, unchanged: false, refreshed: refreshed?.user ?? null };
 }
 
 export const DISABLE_USER = {

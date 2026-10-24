@@ -157,6 +157,16 @@ function userAccountHandler(
   };
 }
 
+/**
+ * The account's uSNChanged as read back after the row's write, so a
+ * revert can tell it's been changed since even if changed back. It's per
+ * domain controller: read from another, it differs anyway.
+ */
+function changeStamp(user: DirectoryUser | null): { uSNChanged?: string } {
+  const usn = user ? rawScalarValue(user.rawAttributes['uSNChanged']) : null;
+  return usn ? { uSNChanged: usn } : {};
+}
+
 /** One user's account write, as the single-user route makes it, as the row's outcome. */
 export async function accountRow(
   row: {
@@ -176,11 +186,15 @@ export async function accountRow(
     ctx.audit,
   );
   if (!written) return { ok: false, errorCode: 'not_found', audited: false };
-  const { result, user, unchanged } = written;
+  const { result, user, unchanged, refreshed } = written;
   const targetDn = user.distinguishedName;
   // A no-op keeps what an earlier run changed, if one did, for a revert to restore.
   if (unchanged) return { ok: true, unchanged, before: row.before, after: row.after, targetDn };
-  const fields = { before: result.before ?? null, after: result.after ?? null, targetDn };
+  const fields = {
+    before: result.before ?? null,
+    after: result.after ? { ...result.after, ...changeStamp(refreshed) } : null,
+    targetDn,
+  };
   if (result.ok) return { ok: true, ...fields };
   const errorCode = result.errorCode ?? 'directory_error';
   const message = account.refused?.(errorCode, user);
@@ -551,7 +565,23 @@ export async function attributesRow(
       };
     }
     if (changes.length === 0) return { ok: true, unchanged: true, ...kept };
-    return { ok: true, ...rowSnapshots(changes), targetDn };
+    const { before, after } = rowSnapshots(changes);
+    if (changes.some((c) => c.field === 'manager')) {
+      // By GUID too, so a revert finds the manager however they're renamed or moved since.
+      const guidOf = async (dn: unknown) =>
+        typeof dn === 'string'
+          ? ((await ctx.provider.findObject({ kind: 'distinguishedName', value: dn }))
+              ?.objectGuid ?? null)
+          : null;
+      before['managerGuid'] = await guidOf(before['managerDn']);
+      after['managerGuid'] = await guidOf(after['managerDn']);
+    }
+    return {
+      ok: true,
+      before,
+      after: { ...after, ...changeStamp(result.refreshed) },
+      targetDn,
+    };
   } catch (err) {
     if (err instanceof UserAttributeRefusal && err.code === 'self_manager') {
       return {

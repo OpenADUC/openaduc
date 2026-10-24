@@ -9,11 +9,12 @@ import {
   bulkJobRevertPreviewSchema,
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
+  canRevert,
   type BulkJobSubject,
 } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
-import { canRevert, revertRunner, type BulkRevertRunner } from '../services/bulkJobs/reverts.js';
+import { revertRunner, type BulkRevertRunner } from '../services/bulkJobs/reverts.js';
 import type { JobActor, JobRecord } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -124,9 +125,6 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     },
   });
 
-  // ---- Reverting a job ---------------------------------------------------
-  // What reverting it would do, from the cache, then starting the revert on
-  // what was previewed.
   app.get('/api/bulk-jobs/:id/revert/preview', {
     config: { policy: { capability: null, stepUp: false, directory: 'caller' } },
     handler: async (req) => {
