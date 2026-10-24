@@ -4,6 +4,10 @@
 
 import type {
   AccountExpiryRequest,
+  BulkJob,
+  BulkJobAction,
+  BulkJobRow,
+  BulkJobRowStatus,
   ComputerDetail,
   ComputerSearchQuery,
   ComputerSearchResponse,
@@ -651,6 +655,34 @@ export const api = {
     },
     get(guid: string): Promise<{ computer: DeletedComputerDetail }> {
       return apiFetch(`/deleted-computers/${encodeURIComponent(guid)}`);
+    },
+  },
+  bulkJobs: {
+    start(action: BulkJobAction, ids: string[]): Promise<{ job: BulkJob }> {
+      return apiFetch(`/users/bulk-${action.slice('user.'.length)}`, {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      });
+    },
+    /** The operator's own jobs in this directory, newest first. */
+    list(limit = 10): Promise<{ jobs: BulkJob[] }> {
+      return apiFetch(`/bulk-jobs?limit=${limit}`);
+    },
+    get(id: string, init: Background = {}): Promise<{ job: BulkJob }> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}`, init);
+    },
+    rows(id: string, status?: BulkJobRowStatus): Promise<{ rows: BulkJobRow[] }> {
+      const qs = status ? `?status=${status}` : '';
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/rows${qs}`);
+    },
+    resume(id: string): Promise<{ job: BulkJob }> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+    },
+    retry(id: string): Promise<{ job: BulkJob }> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+    },
+    cancel(id: string): Promise<{ job: BulkJob }> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
     },
   },
   audit: {

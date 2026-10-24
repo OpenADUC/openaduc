@@ -1,38 +1,95 @@
+// @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
+import { flushPromises } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { ref } from 'vue';
-import { describe, expect, it, vi } from 'vitest';
-import { useBulkActions } from './useBulkActions.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BulkJob, BulkJobCounts, ElevatedSessionState } from '@openaduc/shared';
+import { ApiError } from '../../api/client.js';
 
-function setup(failing: Record<string, string> = {}) {
-  const disable = vi.fn(async (id: string) => {
-    if (failing[id]) throw new Error(failing[id]);
-  });
-  const selectedIds = ref(new Set(['a', 'b', 'c']));
-  const run = { disable, enable: vi.fn(), unlock: vi.fn() };
-  const bulk = useBulkActions({
-    selectedIds,
-    run,
-    toast: { add: vi.fn() },
-    reload: vi.fn(async () => {}),
-  });
-  return { bulk, run, selectedIds };
+const ELEVATED: ElevatedSessionState = {
+  active: true,
+  idleExpiresAt: '2999-01-01T00:15:00.000Z',
+  absoluteExpiresAt: '2999-01-01T04:00:00.000Z',
+};
+const NOT_ELEVATED: ElevatedSessionState = {
+  active: false,
+  idleExpiresAt: null,
+  absoluteExpiresAt: null,
+};
+
+const bulkJobs = {
+  start: vi.fn(),
+  list: vi.fn(),
+  get: vi.fn(),
+  rows: vi.fn(),
+  resume: vi.fn(),
+  retry: vi.fn(),
+  cancel: vi.fn(),
+};
+const stepUp = vi.fn(async () => ({ elevated: ELEVATED }));
+vi.mock('../../api/index.js', () => ({ api: { bulkJobs, auth: { stepUp } } }));
+
+const { useBulkActions } = await import('./useBulkActions.js');
+const { useAuthStore } = await import('../../stores/auth.js');
+
+const POLL_MS = 50;
+
+function aJob(
+  status: BulkJob['status'],
+  counts: Partial<BulkJobCounts> = {},
+  more: Partial<BulkJob> = {},
+): BulkJob {
+  return {
+    id: '7',
+    action: 'user.disable',
+    status,
+    pauseReason: null,
+    actorDisplayName: 'OpenADUC Operator',
+    createdAt: new Date().toISOString(),
+    finishedAt: status === 'finished' || status === 'cancelled' ? new Date().toISOString() : null,
+    counts: { total: 3, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0, ...counts },
+    ...more,
+  };
 }
 
+function setup(elevated = ELEVATED) {
+  setActivePinia(createPinia());
+  const auth = useAuthStore();
+  auth.actor = { capabilities: [], elevated } as never;
+  const selectedIds = ref(new Set(['a', 'b', 'c']));
+  const toast = { add: vi.fn() };
+  const reload = vi.fn(async () => {});
+  const bulk = useBulkActions({ selectedIds, toast, reload, pollMs: POLL_MS });
+  return { bulk, auth, selectedIds, toast, reload };
+}
+
+const tick = () => vi.advanceTimersByTimeAsync(POLL_MS);
+
 describe('bulk actions', () => {
-  it.each(['disable', 'enable', 'unlock'] as const)(
-    'ask for confirmation before they %s anyone',
-    async (action) => {
-      const { bulk, run } = setup();
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    bulkJobs.rows.mockResolvedValue({ rows: [] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-      bulk.requestBulk(action);
-      expect(bulk.confirming.value).toBe(action);
-      expect(run[action]).not.toHaveBeenCalled();
+  it('ask for confirmation, then start one job for the whole selection', async () => {
+    const { bulk } = setup();
+    bulkJobs.start.mockResolvedValue({ job: aJob('queued', { pending: 3 }) });
 
-      await bulk.startBulk(action);
-      expect(bulk.confirming.value).toBeNull();
-      expect(run[action]).toHaveBeenCalledTimes(3);
-    },
-  );
+    bulk.requestBulk('unlock');
+    expect(bulk.confirming.value).toBe('unlock');
+    expect(bulkJobs.start).not.toHaveBeenCalled();
+
+    bulk.startBulk('unlock');
+    await vi.waitFor(() => expect(bulk.job.value?.status).toBe('queued'));
+    expect(bulk.confirming.value).toBeNull();
+    expect(bulkJobs.start).toHaveBeenCalledExactlyOnceWith('user.unlock', ['a', 'b', 'c']);
+  });
 
   it('say how many accounts they change, and what that means', () => {
     const { bulk, selectedIds } = setup();
@@ -53,27 +110,181 @@ describe('bulk actions', () => {
   });
 
   it('do nothing when the operator cancels', () => {
-    const { bulk, run } = setup();
+    const { bulk } = setup();
 
     bulk.requestBulk('enable');
     bulk.cancelBulk();
     expect(bulk.confirming.value).toBeNull();
-    expect(run.enable).not.toHaveBeenCalled();
+    expect(bulkJobs.start).not.toHaveBeenCalled();
+  });
+
+  it('prompts step-up before starting, and starts once stepped up', async () => {
+    const { bulk, auth } = setup(NOT_ELEVATED);
+    bulkJobs.start.mockResolvedValue({ job: aJob('queued', { pending: 3 }) });
+
+    bulk.startBulk('disable');
+    expect(auth.stepUpRequested).toBe(true);
+    expect(bulkJobs.start).not.toHaveBeenCalled();
+
+    await auth.stepUp('pw');
+    await vi.waitFor(() => expect(bulkJobs.start).toHaveBeenCalledOnce());
+  });
+
+  it('follows the job’s progress, then clears the selection when every account succeeds', async () => {
+    const { bulk, selectedIds, toast, reload } = setup();
+    bulkJobs.start.mockResolvedValue({ job: aJob('running', { pending: 3 }) });
+    bulkJobs.get
+      .mockResolvedValueOnce({ job: aJob('running', { pending: 1, running: 1, succeeded: 1 }) })
+      .mockResolvedValueOnce({ job: aJob('finished', { succeeded: 3 }) });
+
+    bulk.startBulk('disable');
+    await flushPromises();
+    expect(bulk.job.value?.status).toBe('running');
+    expect(bulk.bulkRunning.value).toBe(true);
+    expect(bulk.pendingBulkAction.value).toBe('disable');
+
+    await tick();
+    expect(bulk.job.value?.counts.succeeded).toBe(1);
+    expect(bulkJobs.get).toHaveBeenCalledWith('7', { background: true });
+
+    await tick();
+    await flushPromises();
+    expect(reload).toHaveBeenCalled();
+    expect(selectedIds.value.size).toBe(0);
+    expect(toast.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', summary: 'Disabled 3 accounts' }),
+    );
+    expect(bulk.job.value).toBeNull();
+    expect(bulk.bulkRunning.value).toBe(false);
   });
 
   it('keeps only the failed accounts selected, each with its error', async () => {
-    const { bulk, selectedIds } = setup({ b: 'insufficient access' });
+    const { bulk, selectedIds } = setup();
+    bulkJobs.start.mockResolvedValue({ job: aJob('finished', { succeeded: 2, failed: 1 }) });
+    bulkJobs.rows.mockResolvedValue({
+      rows: [
+        {
+          targetId: 'b',
+          targetName: 'Bob',
+          status: 'failed',
+          errorCode: 'permission_denied',
+          errorMessage: 'The directory refused the change: insufficient access',
+        },
+      ],
+    });
 
-    await bulk.startBulk('disable');
+    bulk.startBulk('disable');
+    await vi.waitFor(() => expect([...selectedIds.value]).toEqual(['b']));
 
-    expect([...selectedIds.value]).toEqual(['b']);
-    expect(bulk.bulkErrors.value.get('b')).toBe('insufficient access');
+    expect(bulkJobs.rows).toHaveBeenCalledWith('7', 'failed');
+    expect(bulk.bulkErrors.value.get('b')).toBe(
+      'The directory refused the change: insufficient access',
+    );
     expect(bulk.bulkErrors.value.has('a')).toBe(false);
+    expect(bulk.job.value?.status).toBe('finished');
   });
 
-  it('clears the selection when every account succeeds', async () => {
-    const { bulk, selectedIds } = setup();
-    await bulk.startBulk('disable');
-    expect(selectedIds.value.size).toBe(0);
+  it('retries the failed rows of the same job', async () => {
+    const { bulk } = setup();
+    bulkJobs.start.mockResolvedValue({ job: aJob('finished', { succeeded: 2, failed: 1 }) });
+    bulkJobs.rows.mockResolvedValue({
+      rows: [
+        { targetId: 'b', targetName: null, status: 'failed', errorCode: 'x', errorMessage: 'no' },
+      ],
+    });
+    bulkJobs.retry.mockResolvedValue({ job: aJob('queued', { succeeded: 2, pending: 1 }) });
+    bulk.startBulk('disable');
+    await vi.waitFor(() => expect(bulk.bulkErrors.value.size).toBe(1));
+
+    bulk.retryFailed();
+
+    await vi.waitFor(() => expect(bulk.job.value?.status).toBe('queued'));
+    expect(bulkJobs.retry).toHaveBeenCalledExactlyOnceWith('7');
+    expect(bulk.bulkErrors.value.size).toBe(0);
+  });
+
+  it('shows the operator’s running job on coming back, and follows it', async () => {
+    const { bulk, toast } = setup();
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('running', { pending: 2, succeeded: 1 })] });
+    bulkJobs.get.mockResolvedValue({ job: aJob('finished', { succeeded: 3 }) });
+
+    await bulk.restore();
+    expect(bulk.job.value?.counts.succeeded).toBe(1);
+
+    await tick();
+    await vi.waitFor(() =>
+      expect(toast.add).toHaveBeenCalledWith(expect.objectContaining({ severity: 'success' })),
+    );
+  });
+
+  it('shows a job that finished while the operator was away, without a toast', async () => {
+    const { bulk, toast, selectedIds } = setup();
+    selectedIds.value = new Set();
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('finished', { succeeded: 3 })] });
+
+    await bulk.restore();
+
+    expect(bulk.job.value?.status).toBe('finished');
+    expect(toast.add).not.toHaveBeenCalled();
+
+    bulk.dismissJob();
+    expect(bulk.job.value).toBeNull();
+    await bulk.restore();
+    expect(bulk.job.value).toBeNull();
+  });
+
+  it('doesn’t bring back a result from more than a day ago', async () => {
+    const { bulk } = setup();
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('finished', {}, { finishedAt: old })] });
+
+    await bulk.restore();
+
+    expect(bulk.job.value).toBeNull();
+  });
+
+  it('continues a paused job after a step-up', async () => {
+    const { bulk, auth } = setup(NOT_ELEVATED);
+    bulkJobs.list.mockResolvedValue({
+      jobs: [aJob('paused', { pending: 2, succeeded: 1 }, { pauseReason: 'step_up_required' })],
+    });
+    bulkJobs.resume.mockResolvedValue({ job: aJob('queued', { pending: 2, succeeded: 1 }) });
+    await bulk.restore();
+    expect(bulk.bulkRunning.value).toBe(true);
+
+    bulk.continueJob();
+    expect(auth.stepUpRequested).toBe(true);
+    await auth.stepUp('pw');
+
+    await vi.waitFor(() => expect(bulk.job.value?.status).toBe('queued'));
+    expect(bulkJobs.resume).toHaveBeenCalledExactlyOnceWith('7');
+  });
+
+  it('asks for step-up again when the session ended before the server saw the request', async () => {
+    const { bulk, auth } = setup();
+    bulkJobs.start
+      .mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'))
+      .mockResolvedValueOnce({ job: aJob('queued', { pending: 3 }) });
+
+    bulk.startBulk('enable');
+    await vi.waitFor(() => expect(bulkJobs.start).toHaveBeenCalledOnce());
+    expect(bulk.jobFailure.value).toBeNull();
+
+    await auth.stepUp('pw');
+    await vi.waitFor(() => expect(bulk.job.value?.status).toBe('queued'));
+  });
+
+  it('stops a job without a step-up, and says why when that fails', async () => {
+    const { bulk } = setup(NOT_ELEVATED);
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('paused', { pending: 3 })] });
+    bulkJobs.cancel.mockRejectedValueOnce(
+      new ApiError(409, 'conflict', 'the job has already stopped'),
+    );
+    await bulk.restore();
+
+    bulk.stopJob();
+
+    await vi.waitFor(() => expect(bulk.jobFailure.value).toBe('the job has already stopped'));
+    expect(bulkJobs.cancel).toHaveBeenCalledExactlyOnceWith('7');
   });
 });
