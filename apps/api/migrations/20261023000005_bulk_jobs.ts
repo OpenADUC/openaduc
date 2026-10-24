@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Knex } from 'knex';
 
-// Bulk actions run as server-side jobs: one bulk_jobs row per run, one
+// Bulk actions run as server-side jobs: one bulk_jobs row per job, one
 // bulk_job_rows row per object it acts on, and every audit event the job
-// writes carries its id so the audit log can group them. No password is
-// stored here: a job runs on its operator's elevated session.
+// writes carries its id so the audit log can group them (the index on it
+// is built concurrently by the next migration). No password is stored
+// here: a job runs on its operator's elevated session.
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('bulk_jobs', (t) => {
     t.bigIncrements('id').primary();
@@ -14,10 +15,10 @@ export async function up(knex: Knex): Promise<void> {
       .inTable('directory_providers')
       .onDelete('CASCADE');
     t.text('action').notNullable();
-    // queued | running | paused | finished | cancelled
     t.text('status').notNullable();
     t.text('pause_reason');
-    t.jsonb('options_json').notNullable().defaultTo('{}');
+    // Set by the run that claims the job; only that run may change it.
+    t.uuid('run_token');
 
     t.text('actor_user_id').notNullable();
     t.text('actor_display_name');
@@ -45,8 +46,9 @@ export async function up(knex: Knex): Promise<void> {
     t.text('target_id').notNullable();
     t.text('target_dn');
     t.text('target_name');
-    // pending | running | succeeded | failed | skipped
     t.text('status').notNullable().defaultTo('pending');
+    // The run that claimed the row, so a stale run can't record over a newer one.
+    t.uuid('run_token');
     t.integer('attempts').notNullable().defaultTo(0);
     t.text('error_code');
     t.text('error_message');
@@ -60,17 +62,27 @@ export async function up(knex: Knex): Promise<void> {
     t.index(['job_id', 'status'], 'bulk_job_rows_job_status_idx');
   });
 
-  // Not a foreign key: audit rows outlive whatever they describe.
+  await knex.raw(`
+    ALTER TABLE bulk_jobs
+      ADD CONSTRAINT bulk_jobs_status_check
+        CHECK (status IN ('queued', 'running', 'paused', 'finished', 'cancelled')),
+      ADD CONSTRAINT bulk_jobs_pause_reason_check
+        CHECK (pause_reason IN ('step_up_required', 'interrupted', 'directory_unavailable'))
+  `);
+  await knex.raw(`
+    ALTER TABLE bulk_job_rows
+      ADD CONSTRAINT bulk_job_rows_status_check
+        CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'skipped'))
+  `);
+
+  // Not a foreign key: audit rows outlive whatever they describe. A
+  // nullable column without a default is a catalogue change only.
   await knex.schema.alterTable('audit_events', (t) => {
     t.bigInteger('bulk_job_id');
   });
-  await knex.raw(
-    'CREATE INDEX audit_bulk_job_idx ON audit_events (bulk_job_id, timestamp) WHERE bulk_job_id IS NOT NULL',
-  );
 }
 
 export async function down(knex: Knex): Promise<void> {
-  await knex.raw('DROP INDEX IF EXISTS audit_bulk_job_idx');
   await knex.schema.alterTable('audit_events', (t) => {
     t.dropColumn('bulk_job_id');
   });
