@@ -1979,6 +1979,19 @@ watch(user, (u) => {
   word-break: break-word;
 }
 
+/* On a phone a value beside its label would have a third of the card, so
+   each label sits above its value. */
+@media (max-width: 639.98px) {
+  .kv-grid {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
+
+  .kv-grid dd + dt {
+    margin-top: 10px;
+  }
+}
+
 /* Multi-line cells (address) want top alignment so the label sits next
    to the first line, not vertically centered with the whole block. */
 .kv-grid .kv-top {
