@@ -59,6 +59,13 @@ const api = {
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
     copySource: vi.fn(async () => COPY_SOURCE),
+    search: vi.fn(),
+    previewAttributeEdit: vi.fn(),
+  },
+  bulkJobs: {
+    startAttributeEdit: vi.fn(),
+    get: vi.fn(),
+    rows: vi.fn(async () => ({ rows: [] as unknown[] })),
   },
   directories: {
     naming: {
@@ -744,5 +751,212 @@ describe('copying the user', () => {
     await click(page, 'Actions');
 
     expect(page.findAll('[role="menuitem"]').map((i) => i.text())).not.toContain('Copy…');
+  });
+});
+
+describe('reassigning the direct reports', () => {
+  const MAX_ID = 'a0000000-0000-4000-8000-0000000000aa';
+  const report = (id: string, displayName: string, enabled = true) => ({
+    id,
+    distinguishedName: `CN=${displayName},OU=Staff,DC=corp,DC=example`,
+    displayName,
+    enabled,
+  });
+  const manager = aUserDetail({
+    directReports: [
+      report('r-cat', 'Cat Cole'),
+      report('r-ann', 'Ann Abbot'),
+      report('r-ben', 'Ben Baker', false),
+    ],
+  });
+  const managerChange = (id: string, name: string) => ({
+    id,
+    name,
+    changes: [{ field: 'manager' as const, before: 'Jane Doe', after: 'Max Boss' }],
+  });
+  const aPreview = (more: Record<string, unknown> = {}) => ({
+    current: {},
+    changed: { count: 0, offset: 0, users: [] },
+    unchanged: { count: 0, users: [] },
+    unread: { count: 0, users: [] },
+    skipped: { count: 0, users: [] },
+    fields: [],
+    unknownCount: 0,
+    previewToken: 'tok',
+    ...more,
+  });
+  const aJob = (counts: Record<string, number>) => ({
+    id: '9',
+    action: 'user.update',
+    subject: { attributes: [{ field: 'manager', value: 'Max Boss' }] },
+    status: 'finished',
+    pauseReason: null,
+    actorDisplayName: 'OpenADUC Operator',
+    createdAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    counts: {
+      total: 2,
+      pending: 0,
+      running: 0,
+      succeeded: 0,
+      partial: 0,
+      failed: 0,
+      skipped: 0,
+      ...counts,
+    },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user: manager });
+    api.users.search.mockResolvedValue({
+      rows: [{ id: MAX_ID, displayName: 'Max Boss', samAccountName: 'max.boss' }],
+      total: 1,
+    });
+  });
+
+  const dialog = (page: Page) => page.get('[role="dialog"]');
+  const ticked = (page: Page) =>
+    dialog(page)
+      .findAll('li')
+      .filter((li) => (li.find('input[type="checkbox"]').element as HTMLInputElement)?.checked)
+      .map((li) => li.find('.rr-report-name').text());
+
+  async function chooseNewManager(page: Page) {
+    await dialog(page).get('input[aria-label="Search for the new manager"]').setValue('max');
+    await new Promise((r) => setTimeout(r, 250));
+    await flushPromises();
+    await dialog(page)
+      .findAll('button')
+      .find((b) => b.text().includes('max.boss'))!
+      .trigger('click');
+  }
+
+  it('moves only the ticked reports to the manager picked, after previewing each change', async () => {
+    const { page, auth } = await openTab(
+      'organization',
+      ['read:user', 'write:user.attributes'],
+      false,
+    );
+
+    await runAction(page, 'Reassign direct reports…');
+    expect(ticked(page)).toEqual(['Ann Abbot', 'Ben Baker', 'Cat Cole']);
+    const ben = dialog(page)
+      .findAll('li')
+      .find((li) => li.text().includes('Ben Baker'))!;
+    expect(ben.text()).toContain('Disabled');
+
+    await dialog(page).get('#rr-r-cat').trigger('change');
+    expect(ticked(page)).toEqual(['Ann Abbot', 'Ben Baker']);
+    await chooseNewManager(page);
+    api.users.previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({
+        changed: {
+          count: 2,
+          offset: 0,
+          users: [managerChange('r-ann', 'Ann Abbot'), managerChange('r-ben', 'Ben Baker')],
+        },
+        fields: [{ field: 'manager', count: 2, unread: 0 }],
+      }),
+    );
+    await click(page, 'Preview');
+
+    expect(api.users.previewAttributeEdit).toHaveBeenCalledExactlyOnceWith({
+      ids: ['r-ann', 'r-ben'],
+      changes: { manager: MAX_ID },
+    });
+    const byUser = dialog(page).get('[aria-label="Changes by user"]').text();
+    expect(byUser).toContain('Ann Abbot');
+    expect(byUser).toContain('Ben Baker');
+    expect(byUser).not.toContain('Cat Cole');
+    expect(byUser).toContain('Jane Doe');
+    expect(byUser).toContain('Max Boss');
+    expect(api.bulkJobs.startAttributeEdit).not.toHaveBeenCalled();
+
+    api.bulkJobs.startAttributeEdit.mockResolvedValueOnce({ job: aJob({ succeeded: 2 }) });
+    await click(page, 'Reassign 2 reports');
+    expect(auth.stepUpRequested).toBe(true);
+    await auth.stepUp('pw');
+    await flushPromises();
+
+    expect(api.bulkJobs.startAttributeEdit).toHaveBeenCalledExactlyOnceWith({
+      ids: ['r-ann', 'r-ben'],
+      changes: { manager: MAX_ID },
+      previewToken: 'tok',
+    });
+    // The page shows them gone.
+    expect(api.users.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a report picked as the new manager as skipped in the preview', async () => {
+    const { page } = await openTab('organization', ['read:user', 'write:user.attributes'], true);
+    await runAction(page, 'Reassign direct reports…');
+    await chooseNewManager(page);
+    api.users.previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({
+        changed: { count: 2, offset: 0, users: [managerChange('r-ann', 'Ann Abbot')] },
+        skipped: {
+          count: 1,
+          users: [{ id: 'r-cat', name: 'Cat Cole', reason: 'would be their own manager' }],
+        },
+      }),
+    );
+
+    await click(page, 'Preview');
+
+    expect(dialog(page).text()).toContain('Skipped (1)');
+    expect(dialog(page).text()).toContain('Cat Cole: would be their own manager');
+  });
+
+  it('keeps a report the job couldn’t change ticked, with why', async () => {
+    const { page } = await openTab('organization', ['read:user', 'write:user.attributes'], true);
+    await runAction(page, 'Reassign direct reports…');
+    await chooseNewManager(page);
+    api.users.previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({ changed: { count: 3, offset: 0, users: [] } }),
+    );
+    await click(page, 'Preview');
+    api.bulkJobs.startAttributeEdit.mockResolvedValueOnce({
+      job: aJob({ total: 3, succeeded: 2, failed: 1 }),
+    });
+    api.bulkJobs.rows.mockResolvedValueOnce({
+      rows: [{ targetId: 'r-ben', errorMessage: 'Access denied', errorCode: 'permission_denied' }],
+    });
+
+    await click(page, 'Reassign 3 reports');
+    expect(page.text()).toContain('Edited 2 of 3 accounts (manager)');
+
+    await runAction(page, 'Reassign direct reports…');
+    expect(ticked(page)).toEqual(['Ben Baker']);
+    expect(dialog(page).text()).toContain('Access denied');
+  });
+
+  it('is offered from the reporting structure too', async () => {
+    const { page } = await openTab('organization', ['read:user', 'write:user.attributes'], true);
+
+    await click(page, 'Reassign…');
+
+    expect(dialog(page).text()).toContain('Jane Doe’s direct reports');
+  });
+
+  it('isn’t offered without the attribute-write capability, nor for a user with no reports', async () => {
+    const readOnly = await openTab('organization', ['read:user', 'write:user.move'], true);
+    await click(readOnly.page, 'Actions');
+    expect(readOnly.page.findAll('[role="menuitem"]').map((i) => i.text())).not.toContain(
+      'Reassign direct reports…',
+    );
+    expect(readOnly.page.findAll('button').map((b) => b.text())).not.toContain('Reassign…');
+    readOnly.page.unmount();
+
+    api.users.get.mockResolvedValue({ user: aUserDetail() });
+    const noReports = await openTab(
+      'organization',
+      ['read:user', 'write:user.attributes', 'write:user.move'],
+      true,
+    );
+    await click(noReports.page, 'Actions');
+    expect(noReports.page.findAll('[role="menuitem"]').map((i) => i.text())).not.toContain(
+      'Reassign direct reports…',
+    );
   });
 });

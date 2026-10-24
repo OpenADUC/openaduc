@@ -35,6 +35,7 @@ function nameOf(ref: ReportRef): string {
 
 <template>
   <SectionCard title="Reporting structure" icon="pi pi-sitemap" :cols="1">
+    <template v-if="$slots.actions" #actions><slot name="actions" /></template>
     <div v-if="isEmpty" class="rs-empty">
       <EmptyState
         icon="pi pi-sitemap"
