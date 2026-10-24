@@ -40,6 +40,7 @@ const CHECK_DELAY_MS = 300;
 export const STEP_LABEL: Record<UserCreateStep, string> = {
   create: 'create the account',
   password: 'set its password',
+  groups: 'add it to its groups',
   enable: 'enable it',
 };
 
@@ -264,12 +265,15 @@ export function useUserCreation(options: {
 
   // ---- Plan ----------------------------------------------------------------
 
+  const canAddGroups = computed(() => auth.hasCapability('write:group.membership'));
+
   const plan = computed(() =>
     planNewUser(form, {
       suggestion: suggestion.value,
       approved: approved.value,
       policy: policy.value,
       phoneCountry: settings.value.phoneCountry,
+      canAddGroups: canAddGroups.value,
     }),
   );
 

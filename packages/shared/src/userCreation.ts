@@ -7,9 +7,12 @@ import type { NamingDeviation, NamingSuggestion } from './naming.js';
 import { normalizePhone, type NormalizedPhone } from './phone.js';
 import { checkPassword, type PasswordCheck, type PasswordPolicy } from './password.js';
 import {
+  NEW_USER_ORGANISATION_FIELDS,
   PHONE_FIELDS,
+  type NewUserOrganisation,
   type PasswordMode,
   type PhoneField,
+  type UserCopySource,
   type UserCreatePassword,
   type UserCreateRequest,
 } from './schemas/userCreate.js';
@@ -30,6 +33,12 @@ export interface NewUserForm {
   password: string;
   mustChange: boolean;
   enabled: boolean;
+  /** Organisation attributes, as a copy carries them over. */
+  organisation?: NewUserOrganisation;
+  /** Groups to add the account to, by id. */
+  groups?: string[];
+  /** The user this one is a copy of. */
+  copiedFrom?: string | null;
 }
 
 export interface NewUserPlanContext {
@@ -39,6 +48,8 @@ export interface NewUserPlanContext {
   approved: ReadonlySet<string>;
   policy: PasswordPolicy | null;
   phoneCountry: string | null;
+  /** The operator may change group memberships (`write:group.membership`). */
+  canAddGroups: boolean;
 }
 
 export type NewUserField =
@@ -51,7 +62,8 @@ export type NewUserField =
   | 'personalEmail'
   | 'mobile'
   | 'telephoneNumber'
-  | 'password';
+  | 'password'
+  | 'groups';
 
 export interface NewUserIssue {
   field: NewUserField | null;
@@ -79,6 +91,8 @@ export interface NewUserPlan {
   passwordChecks: PasswordCheck[];
   /** The password part of the request, once the password is ready. */
   password: UserCreatePassword | null;
+  /** The groups the create adds the account to. */
+  groups: string[];
 }
 
 export const RANDOM_MODE_MUST_CHANGE_NOTE =
@@ -136,6 +150,15 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
       ? { mode: form.passwordMode as 'generate' | 'set', password: form.password, mustChange }
       : null;
 
+  const organisation = organisationToWrite(form.organisation);
+  const groups = ctx.canAddGroups ? (form.groups ?? []) : [];
+  if (!ctx.canAddGroups && form.groups?.length) {
+    warnings.push({
+      field: 'groups',
+      message: 'You can’t change group memberships, so the copy isn’t added to any groups.',
+    });
+  }
+
   const incomplete = !form.ouDn || !form.first.trim() || !form.last.trim() || !s || !password;
 
   const request: UserCreateRequest | null =
@@ -157,6 +180,9 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
           keepPhonesAsTyped: PHONE_FIELDS.filter((f) => !phones[f].readable),
           password: password!,
           enabled: form.enabled,
+          ...(organisation ? { organisation } : {}),
+          ...(groups.length > 0 ? { groups } : {}),
+          ...(form.copiedFrom ? { copiedFrom: form.copiedFrom } : {}),
         };
 
   return {
@@ -171,6 +197,37 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
     mustChangeNote: random ? RANDOM_MODE_MUST_CHANGE_NOTE : null,
     passwordChecks,
     password,
+    groups,
+  };
+}
+
+/** The organisation attributes that have a value, or null when none does. */
+function organisationToWrite(o: NewUserOrganisation | undefined): NewUserOrganisation | null {
+  if (!o) return null;
+  const out: NewUserOrganisation = {};
+  for (const field of NEW_USER_ORGANISATION_FIELDS) {
+    const value = o[field]?.trim();
+    if (value) out[field] = value;
+  }
+  if (o.managerId) out.managerId = o.managerId;
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * What a copy of a user starts with: the source's OU, organisation and
+ * groups, as ADUC's Copy does. The groups that grant administrative
+ * rights are left unticked, so adding the copy to one is a choice the
+ * operator makes. Names, email, phones, employee IDs and the description
+ * belong to the person, so the copy starts without them.
+ */
+export function copyToForm(
+  copy: UserCopySource,
+): Required<Pick<NewUserForm, 'ouDn' | 'organisation' | 'groups' | 'copiedFrom'>> {
+  return {
+    ouDn: copy.ouDn,
+    copiedFrom: copy.source.id,
+    organisation: { ...copy.organisation, managerId: copy.manager?.id ?? null },
+    groups: copy.groups.filter((g) => !g.privilege).map((g) => g.id),
   };
 }
 
