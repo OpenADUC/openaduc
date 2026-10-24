@@ -5,7 +5,11 @@ import { AppError, Conflict, NotFound } from '../../plugins/errorHandler.js';
 export class BulkJobRequestError extends Error {
   constructor(
     readonly code:
-      'group_not_found' | 'manager_not_found' | 'preview_mismatch' | 'protected_unacknowledged',
+      | 'group_not_found'
+      | 'manager_not_found'
+      | 'ou_not_found'
+      | 'preview_mismatch'
+      | 'protected_unacknowledged',
     message: string,
   ) {
     super(message);
@@ -19,6 +23,7 @@ export function refuseBulkRequest(err: unknown): never {
     switch (err.code) {
       case 'group_not_found':
       case 'manager_not_found':
+      case 'ou_not_found':
         throw NotFound(err.message);
       case 'preview_mismatch':
         throw Conflict(err.message);
