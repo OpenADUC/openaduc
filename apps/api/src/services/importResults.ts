@@ -7,6 +7,7 @@
 import {
   IMPORT_JOB_ACTION,
   IMPORT_ROW_STATUS_LABEL,
+  LICENSE_ERROR_TEXT,
   bulkJobStopped,
   csvRow,
   type BulkJob,
@@ -15,6 +16,7 @@ import {
   type HeldPasswords,
   type ImportJobResponse,
   type ImportJobRow,
+  type ImportRowLicenses,
 } from '@openaduc/shared';
 import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
@@ -23,6 +25,7 @@ import { progressOf } from './bulkJobs/importRows.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
 import type { JobRecord } from './bulkJobs/service.js';
 import { heldFor, takePasswords, type TakenPasswords } from './heldPasswords.js';
+import { rowLicenses } from './importLicenses/service.js';
 
 export const PASSWORD_RESET_ACTION = 'user.password.reset';
 
@@ -78,10 +81,23 @@ const passwordHeld = (held: Awaited<ReturnType<typeof heldFor>> | null, rowId: s
 /** An import's rows as its operator reads them, in spreadsheet order, with their ids for the CSV. */
 async function importRows(db: Kysely<DB>, jobId: string) {
   const rows = await db
-    .selectFrom('bulk_job_rows')
-    .select(['id', 'target_id', 'status', 'error_message', 'input_json', 'after_json'])
-    .where('job_id', '=', jobId)
-    .orderBy('ordinal')
+    .selectFrom('bulk_job_rows as r')
+    .leftJoin('import_license_checks as c', 'c.row_id', 'r.id')
+    .select([
+      'r.id',
+      'r.target_id',
+      'r.status',
+      'r.error_message',
+      'r.input_json',
+      'r.after_json',
+      'c.status as license_status',
+      'c.expected as license_expected',
+      'c.licenses',
+      'c.message as license_message',
+      'c.checked_at as license_checked_at',
+    ])
+    .where('r.job_id', '=', jobId)
+    .orderBy('r.ordinal')
     .execute();
   return rows
     .map((r) => {
@@ -101,6 +117,16 @@ async function importRows(db: Kysely<DB>, jobId: string) {
         completed,
         failed: progress?.failed ?? [],
         errorMessage: r.error_message,
+        licenses:
+          r.license_status && r.license_expected && r.target_id
+            ? rowLicenses({
+                status: r.license_status,
+                expected: r.license_expected,
+                licenses: r.licenses,
+                message: r.license_message,
+                checked_at: r.license_checked_at,
+              })
+            : null,
       };
     })
     .sort((a, b) => a.line - b.line);
@@ -164,6 +190,7 @@ export async function importJobView(
       failed: r.failed,
       errorMessage: r.errorMessage,
       needsPasswordReset: needsReset(r, results, held),
+      licenses: r.licenses,
     })),
     results,
     passwordReset,
@@ -211,6 +238,24 @@ async function resetResultRows(db: Kysely<DB>, job: Job) {
   }));
 }
 
+const LICENSE_STATE_TEXT: Record<ImportRowLicenses['licenses'][number]['state'], string> = {
+  pending: 'not assigned yet',
+  active: 'assigned',
+  activeWithError: 'assigned, with an error',
+  disabled: 'disabled',
+  error: 'not assigned',
+};
+
+/** What the CSV says of a row's licenses: each one's state and error, and what it waits for. */
+function licensesCell(l: ImportRowLicenses): string {
+  const each = l.licenses.map((x) =>
+    x.error || x.state === 'error'
+      ? `${x.name}: ${LICENSE_ERROR_TEXT[x.error ?? 'Other']}`
+      : `${x.name}: ${LICENSE_STATE_TEXT[x.state]}`,
+  );
+  return [...each, l.message].filter(Boolean).join(' ');
+}
+
 function passwordOf(taken: TakenPasswords | null, row: ResultRow): string {
   if (!taken || !row.passwordSet) return '';
   return taken.byRow.get(row.rowId) ?? taken.shared ?? '';
@@ -229,6 +274,8 @@ async function resultsCsv(
   const withPasswords = taken !== null;
   const reset = job.action === PASSWORD_RESET_ACTION;
   const mustChange = reset || (job.subject_json?.import?.mustChange ?? false);
+  const rows = reset ? null : await importRows(db, String(job.id));
+  const withLicenses = !!rows?.some((r) => r.licenses);
   const header = [
     ...(reset ? [] : ['Row']),
     'Status',
@@ -237,6 +284,7 @@ async function resultsCsv(
     'UPN',
     ...(withPasswords ? ['Password', 'Must change password'] : []),
     'Problems',
+    ...(withLicenses ? ['Licenses'] : []),
   ];
   const passwordCells = (row: ResultRow) => {
     if (!withPasswords) return [];
@@ -254,7 +302,7 @@ async function resultsCsv(
           r.errorMessage ?? '',
         ]),
       )
-    : (await importRows(db, String(job.id))).map((r) =>
+    : rows!.map((r) =>
         csvRow([
           r.line,
           IMPORT_ROW_STATUS_LABEL[r.status],
@@ -265,6 +313,7 @@ async function resultsCsv(
           [r.errorMessage, r.fallback ? 'Its password is random: reset it.' : null]
             .filter(Boolean)
             .join(' '),
+          ...(withLicenses ? [r.licenses ? licensesCell(r.licenses) : ''] : []),
         ]),
       );
   const day = new Date(job.created_at).toISOString().slice(0, 10);

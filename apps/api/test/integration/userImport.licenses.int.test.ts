@@ -5,8 +5,10 @@
 // has msExchUsageLocation, and the follow-up that reports each person's
 // license errors once they've synced. The follow-up's timer is stopped;
 // tests sweep it by hand.
+import { sql } from 'kysely';
 import type {
   BulkJob,
+  BulkJobResultsDownload,
   ImportCheckResponse,
   ImportJobResponse,
   ImportRequest,
@@ -30,7 +32,15 @@ import {
 
 const STAFF_OU = 'OU=Staff,OU=OpenADUC Test,DC=openaduc,DC=test';
 const E3 = '05e9a617-0261-4cee-bb44-138d3ef5d965';
-const NEW_SAMS = ['lia.lane', 'max.mohr', 'nia.nash', 'oto.ortiz', 'pia.park', 'quin.quay'];
+const NEW_SAMS = [
+  'lia.lane',
+  'max.mohr',
+  'nia.nash',
+  'oto.ortiz',
+  'pia.park',
+  'quin.quay',
+  'rex.reed',
+];
 
 interface FakeUser {
   id: string;
@@ -167,6 +177,32 @@ describe('an import’s licenses', () => {
     expect(res.statusCode, res.body).toBe(200);
     return res.json<ImportJobResponse>();
   };
+  /** Sweep the follow-up with every waiting check due now, however long its wait. */
+  const sweepDue = async () => {
+    await api.app.db
+      .updateTable('import_license_checks')
+      .set({ next_attempt_at: sql`now()` })
+      .where('status', '=', 'waiting')
+      .execute();
+    await api.app.services.importLicenses.sweep(5_000);
+  };
+  /** Connect Sync brings `sam` to Entra, holding these license states. */
+  const sync = async (sam: string, states: FakeUser['licenseAssignmentStates']) => {
+    const user = await api.app.db
+      .selectFrom('user_cache_records')
+      .select('sid')
+      .where('sam_account_name', '=', sam)
+      .executeTakeFirstOrThrow();
+    graph.users.set(user.sid!, { id: `entra-${sam}`, licenseAssignmentStates: states });
+  };
+  const e3 = (state: string, error = 'None') => ({
+    skuId: E3,
+    assignedByGroup: 'entra-all-staff',
+    state,
+    error,
+  });
+  const rowOf = async (jobId: string, sam: string) =>
+    (await view(jobId)).rows.find((r) => r.samAccountName === sam)!;
   const check = async (body: ImportRequest) => {
     const res = await operator.post('/api/users/import/check', body);
     expect(res.statusCode, res.body).toBe(200);
@@ -177,6 +213,7 @@ describe('an import’s licenses', () => {
     await removeNewUsers();
     api = await startApi();
     await configureDirectory(api);
+    await api.app.services.importLicenses.stop();
     await api.app.services.entraIntegration.create(api.directoryId!, {
       tenantId: '11111111-2222-4333-8444-555555555555',
       clientId: 'client',
@@ -329,6 +366,133 @@ describe('an import’s licenses', () => {
         .executeTakeFirstOrThrow();
       expect(audit.after_json).toMatchObject({ usageLocation: 'DE' });
       expect((await view(job.id)).rows[0]?.status).toBe('succeeded');
+    });
+  });
+
+  describe('the follow-up', () => {
+    it('shows each person’s license errors once they sync, on the page and in the CSV', async () => {
+      const allStaff = groups['All Staff']!.id;
+      const job = await runImport([
+        row('lia.lane', 2, [allStaff]),
+        row('max.mohr', 3, [allStaff]),
+        row('quin.quay', 4, []),
+      ]);
+      expect(job.counts.succeeded).toBe(3);
+      expect((await rowOf(job.id, 'quin.quay')).licenses).toBeNull();
+      expect((await rowOf(job.id, 'lia.lane')).licenses).toEqual({
+        status: 'waiting',
+        message: 'Waiting for the account to sync.',
+        licenses: [
+          {
+            skuId: E3,
+            skuPartNumber: 'SPE_E3',
+            name: 'Microsoft 365 E3',
+            group: 'All Staff',
+            state: 'pending',
+            error: null,
+          },
+        ],
+        checkedAt: null,
+      });
+
+      // Not in Entra yet: it waits for Connect Sync.
+      await sweepDue();
+      expect((await rowOf(job.id, 'lia.lane')).licenses).toMatchObject({
+        status: 'waiting',
+        message: 'Waiting for Connect Sync to bring them to Microsoft Entra.',
+      });
+
+      await sync('lia.lane', [e3('Error', 'CountViolation')]);
+      await sync('max.mohr', [e3('Active')]);
+      await sweepDue();
+      const lia = (await rowOf(job.id, 'lia.lane')).licenses!;
+      expect(lia).toMatchObject({ status: 'settled', message: null });
+      expect(lia.licenses).toEqual([
+        expect.objectContaining({
+          name: 'Microsoft 365 E3',
+          state: 'error',
+          error: 'CountViolation',
+        }),
+      ]);
+      expect(lia.checkedAt).not.toBeNull();
+      expect((await rowOf(job.id, 'max.mohr')).licenses?.licenses).toEqual([
+        expect.objectContaining({ state: 'active', error: null }),
+      ]);
+
+      // Settled checks aren't looked at again.
+      graph.requests = [];
+      await sweepDue();
+      expect(graph.requests).toEqual([]);
+
+      const res = await operator.post(`/api/bulk-jobs/${job.id}/results`);
+      expect(res.statusCode, res.body).toBe(200);
+      const lines = res.json<BulkJobResultsDownload>().csv.trim().split('\r\n');
+      expect(lines[0]).toBe('Row,Status,Display name,Username,UPN,Problems,Licenses');
+      expect(lines[1]).toContain(
+        'Microsoft 365 E3: Not enough licenses: every one the tenant has of this product is assigned.',
+      );
+      expect(lines[2]).toMatch(/,Microsoft 365 E3: assigned$/);
+      expect(lines[3]).toMatch(/,,$/);
+    });
+
+    it('waits for group-based licensing to settle, within a window', async () => {
+      const job = await runImport([row('nia.nash', 2, [groups['All Staff']!.id])]);
+      await sync('nia.nash', []);
+      await sweepDue();
+      expect((await rowOf(job.id, 'nia.nash')).licenses).toMatchObject({
+        status: 'waiting',
+        message: 'Waiting for Entra to assign Microsoft 365 E3.',
+        licenses: [expect.objectContaining({ state: 'pending' })],
+      });
+      const check = await api.app.db
+        .selectFrom('import_license_checks')
+        .select(['next_attempt_at', 'synced_at'])
+        .where('job_id', '=', job.id)
+        .executeTakeFirstOrThrow();
+      // The first look after their sync comes a minute on.
+      expect(new Date(check.next_attempt_at).getTime() - Date.now()).toBeGreaterThan(50_000);
+      expect(new Date(check.next_attempt_at).getTime() - Date.now()).toBeLessThan(70_000);
+
+      // Graph throttling holds the directory's checks back.
+      graph.throttled.set('/users/entra-nia.nash', 60);
+      await sweepDue();
+      expect((await rowOf(job.id, 'nia.nash')).licenses?.message).toBe(
+        'Microsoft Graph is busy: their licenses are read again shortly.',
+      );
+      graph.throttled.clear();
+      graph.requests = [];
+      await sweepDue();
+      expect(graph.requests).toEqual([]);
+      (
+        api.app.services.importLicenses as unknown as { throttledUntil: Map<number, number> }
+      ).throttledUntil.clear();
+
+      // Past two hours since they synced, it stops waiting and says so.
+      await api.app.db
+        .updateTable('import_license_checks')
+        .set({ synced_at: sql`now() - interval '3 hours'` })
+        .where('job_id', '=', job.id)
+        .execute();
+      await sweepDue();
+      expect((await rowOf(job.id, 'nia.nash')).licenses).toMatchObject({
+        status: 'timedOut',
+        message:
+          'Entra still hadn’t assigned Microsoft 365 E3 two hours after they synced. Their Licenses tab shows how it stands now.',
+      });
+    });
+
+    it('leaves no check while licenses are off', async () => {
+      await api.app.services.entraIntegration.update(api.directoryId!, {
+        features: { licenses: false },
+      });
+      try {
+        const job = await runImport([row('rex.reed', 2, [groups['All Staff']!.id])]);
+        expect((await rowOf(job.id, 'rex.reed')).licenses).toBeNull();
+      } finally {
+        await api.app.services.entraIntegration.update(api.directoryId!, {
+          features: { licenses: true },
+        });
+      }
     });
   });
 });

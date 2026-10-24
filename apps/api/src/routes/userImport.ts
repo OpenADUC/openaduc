@@ -253,10 +253,14 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
             `Adding users to ${guarded.name} gives them admin rights in AD. Confirm that they need them.`,
           );
         }
+        const checkLicenses = await app.services.entraIntegration.isFeatureEnabled(
+          directory.id,
+          'licenses',
+        );
         return jobs.create(
           actorFrom(req),
           IMPORT_JOB_ACTION,
-          importPlan(body.import, directory.newUsers.phoneCountry),
+          importPlan(body.import, directory.newUsers.phoneCountry, checkLicenses),
           (subject) => requireFor(app, req, jobs.handlers[IMPORT_JOB_ACTION], subject),
         );
       })().catch(refuseBulkRequest);

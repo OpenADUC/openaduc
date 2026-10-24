@@ -12,6 +12,7 @@ import {
   type BulkJobRowStatus,
 } from './bulkJob.js';
 import { classAlertsSchema, classTapRequestSchema } from './classTap.js';
+import { LICENSE_ASSIGNMENT_ERRORS, licenseSkuSchema } from './licenses.js';
 import { startsLikeFormula } from '../csv.js';
 import {
   CONTROL_CHARS,
@@ -285,6 +286,29 @@ export const IMPORT_ROW_STATUS_LABEL: Record<BulkJobRowStatus, string> = {
   skipped: 'Skipped',
 };
 
+/**
+ * How the licenses a row's groups grant stand in Entra, as the follow-up
+ * last read them once the person synced: waiting (for Connect Sync, or
+ * for group-based licensing to assign each), settled, or given up on.
+ */
+export const importRowLicensesSchema = z.object({
+  status: z.enum(['waiting', 'settled', 'timedOut']),
+  /** What it waits for, or why it stopped; null once settled. */
+  message: z.string().nullable(),
+  licenses: z.array(
+    licenseSkuSchema.extend({
+      /** The group it comes from, by its AD name. */
+      group: z.string(),
+      /** `pending` until Entra lists it on the user. */
+      state: z.enum(['pending', 'active', 'activeWithError', 'disabled', 'error']),
+      error: z.enum(LICENSE_ASSIGNMENT_ERRORS).nullable(),
+    }),
+  ),
+  /** When Entra was last read for them. */
+  checkedAt: z.string().nullable(),
+});
+export type ImportRowLicenses = z.infer<typeof importRowLicensesSchema>;
+
 /** One row of an import's job, as its results show it. */
 export const importJobRowSchema = z.object({
   /** Its row in the spreadsheet. */
@@ -304,6 +328,8 @@ export const importJobRowSchema = z.object({
    * downloaded or purged, so it's random, or it was purged unseen.
    */
   needsPasswordReset: z.boolean(),
+  /** Its groups grant licenses, and the account exists: how they stand in Entra. */
+  licenses: importRowLicensesSchema.nullable(),
 });
 export type ImportJobRow = z.infer<typeof importJobRowSchema>;
 

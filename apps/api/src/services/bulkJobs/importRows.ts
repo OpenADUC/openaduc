@@ -33,6 +33,7 @@ import {
 import { withAudit } from '../auditContext.js';
 import { storeClass } from '../classPasses/service.js';
 import { findCachedGroupsById } from '../groupCache.js';
+import { storeLicenseChecks } from '../importLicenses/service.js';
 import { membershipRequirements } from '../groupMembershipWrite.js';
 import {
   handedOutPassword,
@@ -89,6 +90,8 @@ export const importPlanSchema = z.object({
   enabled: z.boolean(),
   /** Temporary Access Passes for the onboarding class, made once each account is in Entra. */
   classTap: classTapRequestSchema.optional(),
+  /** Check in Entra, once each person syncs, the licenses their groups grant. */
+  checkLicenses: z.boolean().optional(),
 });
 export type ImportPlan = z.infer<typeof importPlanSchema>;
 
@@ -225,6 +228,7 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
     secret: (plan) => (plan.password.mode === 'set' ? plan.password.password : null),
     async stored(trx, jobId, plan) {
       if (plan.classTap) await storeClass(trx, jobId, plan.classTap);
+      if (plan.checkLicenses) await storeLicenseChecks(trx, jobId);
     },
     async prepare(plan, { db, directoryId }) {
       const ids = [...new Set(plan.rows.flatMap((r) => r.groupIds.map((id) => id.toLowerCase())))];

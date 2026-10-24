@@ -9,6 +9,7 @@ import { CredentialCacheService } from '../services/credentialCache.js';
 import { DirectoryConfigService } from '../services/directoryConfig.js';
 import { EntraIntegrationService } from '../services/entraIntegration.js';
 import { GraphClientFactory } from '../services/graphClient.js';
+import { ImportLicenseService } from '../services/importLicenses/service.js';
 import { LoginBackoffService } from '../services/loginBackoff.js';
 import { PhotoCacheService } from '../services/photoCache.js';
 import { SessionsService } from '../services/sessions.js';
@@ -33,6 +34,7 @@ declare module 'fastify' {
       directoryConfig: DirectoryConfigService;
       entraIntegration: EntraIntegrationService;
       graphClient: GraphClientFactory;
+      importLicenses: ImportLicenseService;
       loginBackoff: LoginBackoffService;
       photos: PhotoCacheService;
       sessions: SessionsService;
@@ -89,6 +91,14 @@ export default fp(async (app) => {
     logger: app.log,
   });
 
+  const importLicenses = new ImportLicenseService({
+    db: app.db,
+    entra: entraIntegration,
+    graph: graphClient,
+    providers,
+    logger: app.log,
+  });
+
   const sync = new SyncTaskScheduler(
     app.db,
     app.pgLockPool,
@@ -113,6 +123,7 @@ export default fp(async (app) => {
     directoryConfig,
     entraIntegration,
     graphClient,
+    importLicenses,
     loginBackoff,
     photos,
     sessions,
@@ -133,12 +144,14 @@ export default fp(async (app) => {
     if (env.SYNC_SCHEDULER_ENABLED) sync.start();
     bulkJobs.start();
     classPasses.start();
+    importLicenses.start();
   });
 
   app.addHook('onClose', async () => {
     // Before the credential cache is wiped, so rows in flight can finish.
     await bulkJobs.stop();
     await classPasses.stop();
+    await importLicenses.stop();
     sync.stop();
     credentialCache.stop();
     loginBackoff.stop();

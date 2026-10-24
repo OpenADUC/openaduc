@@ -72,6 +72,7 @@ const ROWS: ImportJobRow[] = [
     failed: [{ step: 'groups', message: 'Not added to Sales: the directory refused the change.' }],
     errorMessage: 'Not added to Sales: the directory refused the change.',
     needsPasswordReset: false,
+    licenses: null,
   },
 ];
 
