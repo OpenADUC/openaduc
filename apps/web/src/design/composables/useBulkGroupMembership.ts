@@ -36,6 +36,16 @@ export interface GroupPreviewLine {
   warning: string | null;
   /** The heading over the users the job leaves alone. */
   unchangedLabel: string;
+  /** How many of those the preview doesn't list. */
+  unlisted: number;
+}
+
+/** A membership job as previewed, ready to start. */
+export interface GroupChange {
+  op: BulkMembershipOp;
+  ids: string[];
+  groupIds: string[];
+  previewToken: string;
 }
 
 export function describeGroupPreview(
@@ -45,9 +55,9 @@ export function describeGroupPreview(
   const { changes, unchanged, indirect } = group;
   const summary =
     op === 'add'
-      ? `${changes} will be added · ${unchanged.length} ${unchanged.length === 1 ? 'is already a member' : 'are already members'}`
-      : `${changes} will be removed · ${unchanged.length} ${unchanged.length === 1 ? 'isn’t a member' : 'aren’t members'}`;
-  const n = indirect.length;
+      ? `${changes} will be added · ${unchanged.count} ${unchanged.count === 1 ? 'is already a member' : 'are already members'}`
+      : `${changes} will be removed · ${unchanged.count} ${unchanged.count === 1 ? 'isn’t a member' : 'aren’t members'}`;
+  const n = indirect.count;
   const indirectNote =
     n === 0
       ? null
@@ -60,19 +70,22 @@ export function describeGroupPreview(
     indirect: indirectNote,
     warning: group.privilege ? privilegeNote(group.privilege) : null,
     unchangedLabel: op === 'add' ? 'Already members' : 'Not members',
+    unlisted: unchanged.count - unchanged.users.length,
   };
 }
 
 export function useBulkGroupMembership(options: {
   /** The selected users, read when the preview is asked for. */
   ids: () => string[];
-  /** Start the job; useBulkActions prompts step-up first. */
-  start: (op: BulkMembershipOp, groupIds: string[]) => void;
+  /** Start the job on what was previewed; useBulkActions prompts step-up first. */
+  start: (change: GroupChange) => void;
 }) {
   const visible = ref(false);
   const op = ref<BulkMembershipOp>('add');
   const chosen = ref<GroupSummary[]>([]);
   const preview = shallowRef<BulkGroupMembershipPreview | null>(null);
+  // What the preview was asked for, which the job then runs on.
+  let previewed: { ids: string[]; groupIds: string[] } | null = null;
   const previewing = ref(false);
   const previewError = ref<string | null>(null);
   const previews = latestRequest();
@@ -111,6 +124,7 @@ export function useBulkGroupMembership(options: {
   function forgetPreview(): void {
     previews.begin();
     preview.value = null;
+    previewed = null;
     previewing.value = false;
     previewError.value = null;
   }
@@ -151,13 +165,13 @@ export function useBulkGroupMembership(options: {
     const isCurrent = previews.begin();
     previewing.value = true;
     previewError.value = null;
+    const asked = { ids: options.ids(), groupIds: chosen.value.map((g) => g.id) };
     try {
-      const result = await api.users.previewGroupChange({
-        op: op.value,
-        ids: options.ids(),
-        groupIds: chosen.value.map((g) => g.id),
-      });
-      if (isCurrent()) preview.value = result;
+      const result = await api.users.previewGroupChange({ op: op.value, ...asked });
+      if (isCurrent()) {
+        preview.value = result;
+        previewed = asked;
+      }
     } catch (err) {
       if (isCurrent()) previewError.value = err instanceof ApiError ? err.message : String(err);
     } finally {
@@ -171,11 +185,17 @@ export function useBulkGroupMembership(options: {
   }
 
   function confirm(): void {
-    if (!preview.value || changes.value === 0) return;
-    const groupIds = chosen.value.map((g) => g.id);
-    const action = op.value;
+    const shown = preview.value;
+    if (!shown || !previewed || changes.value === 0) return;
+    const { ids, groupIds } = previewed;
+    const now = new Set(options.ids());
+    if (now.size !== ids.length || ids.some((id) => !now.has(id))) {
+      forgetPreview();
+      previewError.value = 'The selection changed since the preview. Preview it again.';
+      return;
+    }
     close();
-    options.start(action, groupIds);
+    options.start({ op: shown.op, ids, groupIds, previewToken: shown.previewToken });
   }
 
   return {

@@ -120,7 +120,7 @@ export class BulkJobService {
     const request = handler.request.parse(body);
     const rows = handler.rows(request);
     const subject =
-      (await handler.subject?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
+      (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])

@@ -144,11 +144,11 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
             : `${hiddenCount} of them are hidden by the current filters.`
         }}
       </p>
-      <p v-if="preview.unknownIds.length > 0" class="bg-note">
+      <p v-if="preview.unknownCount > 0" class="bg-note">
         {{
-          preview.unknownIds.length === 1
+          preview.unknownCount === 1
             ? '1 selected account isn’t in the directory any more; it will fail.'
-            : `${preview.unknownIds.length} selected accounts aren’t in the directory any more; they will fail.`
+            : `${preview.unknownCount} selected accounts aren’t in the directory any more; they will fail.`
         }}
       </p>
       <section v-for="line in lines" :key="line.group.id" class="bg-group">
@@ -158,11 +158,15 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
         </Message>
         <p class="bg-summary">{{ line.summary }}</p>
         <p v-if="line.indirect" class="bg-note">{{ line.indirect }}</p>
-        <details v-if="line.group.unchanged.length > 0" class="bg-unchanged">
-          <summary>{{ line.unchangedLabel }} ({{ line.group.unchanged.length }})</summary>
+        <details v-if="line.group.unchanged.count > 0" class="bg-unchanged">
+          <summary>{{ line.unchangedLabel }} ({{ line.group.unchanged.count }})</summary>
           <ul>
-            <li v-for="u in line.group.unchanged" :key="u.id">{{ u.name }}</li>
+            <li v-for="u in line.group.unchanged.users" :key="u.id">{{ u.name }}</li>
           </ul>
+          <p v-if="line.unlisted > 0" class="bg-note">
+            The first {{ line.group.unchanged.users.length }} are listed; {{ line.unlisted }} more
+            aren’t.
+          </p>
         </details>
       </section>
       <Message v-if="changes === 0" severity="info" :closable="false">

@@ -1,15 +1,46 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { createHash } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
-import type {
-  BulkGroupMembershipPreview,
-  BulkGroupMembershipPreviewRequest,
-  BulkGroupPreviewUser,
+import {
+  PREVIEW_LIST_LIMIT,
+  type BulkGroupMembershipPreview,
+  type BulkGroupMembershipPreviewRequest,
+  type BulkGroupPreviewUser,
+  type BulkMembershipOp,
 } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import { groupPrivilege, type RoleGroup } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import { findCachedGroupsById } from './groupCache.js';
 import { alreadyAsAsked, membershipState } from './membershipState.js';
+
+/**
+ * Names this op on these users and groups, whatever their order or case,
+ * so the job can check it runs on what the operator previewed. Not a
+ * secret: it guards against a stale preview, not a forged one.
+ */
+export function previewToken(
+  op: BulkMembershipOp,
+  ids: readonly string[],
+  groupIds: readonly string[],
+): string {
+  const set = (xs: readonly string[]) => [...xs.map((x) => x.toLowerCase())].sort().join(',');
+  return createHash('sha256')
+    .update(`${op}\n${set(ids)}\n${set(groupIds)}`)
+    .digest('base64url');
+}
+
+/** Users counted in full, and listed up to the preview's limit (they come sorted by name). */
+function listed() {
+  const list = { count: 0, users: [] as BulkGroupPreviewUser[] };
+  return {
+    list,
+    add(user: BulkGroupPreviewUser): void {
+      list.count++;
+      if (list.users.length < PREVIEW_LIST_LIMIT) list.users.push(user);
+    },
+  };
+}
 
 /**
  * What adding these users to these groups, or removing them, would change,
@@ -83,11 +114,12 @@ export async function previewGroupMembership(
 
   return {
     op: request.op,
-    unknownIds: request.ids.filter((id) => !knownIds.has(id.toLowerCase())),
+    unknownCount: request.ids.filter((id) => !knownIds.has(id.toLowerCase())).length,
+    previewToken: previewToken(request.op, request.ids, request.groupIds),
     groups: groupIds.map((groupId) => {
       const group = byGroupId.get(groupId)!;
-      const unchanged: BulkGroupPreviewUser[] = [];
-      const indirect: BulkGroupPreviewUser[] = [];
+      const unchanged = listed();
+      const indirect = listed();
       let changes = 0;
       for (const user of known) {
         const state = membershipState(group, {
@@ -96,10 +128,10 @@ export async function previewGroupMembership(
           nested: nestedSet.has(key(user.id, groupId)),
         });
         const entry = { id: user.id, name: user.name };
-        if (alreadyAsAsked(request.op, state)) unchanged.push(entry);
+        if (alreadyAsAsked(request.op, state)) unchanged.add(entry);
         else changes++;
         if (state === 'nested' || (request.op === 'remove' && state === 'primary')) {
-          indirect.push(entry);
+          indirect.add(entry);
         }
       }
       return {
@@ -108,8 +140,8 @@ export async function previewGroupMembership(
         distinguishedName: group.distinguishedName,
         privilege: groupPrivilege(group, roleGroups),
         changes,
-        unchanged,
-        indirect,
+        unchanged: unchanged.list,
+        indirect: indirect.list,
       };
     }),
   };

@@ -24,6 +24,7 @@ import {
   writeGroupMembership,
   type MembershipCacheDeps,
 } from '../groupMembershipWrite.js';
+import { previewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
 import { BulkJobRequestError } from './errors.js';
 import { failureMessage } from './rowMessages.js';
@@ -83,16 +84,17 @@ export interface BulkJobRowInput<Input> {
  * runs. `run` makes the row's write, audits it as the single-object route
  * would (else returns `audited: false` and the job audits the failure),
  * and reports the before/after a revert would restore. Throwing
- * DirectoryUnavailableError pauses the job. `subject`, for a job that acts
- * with more than its rows, names what with (throwing BulkJobRequestError
- * when it can't), so the job's progress and its audit entry can say it.
+ * DirectoryUnavailableError pauses the job. `prepare`, for a job that acts
+ * with more than its rows, checks the request against the directory
+ * (throwing BulkJobRequestError when it can't start) and names what the
+ * job acts with, so its progress and its audit entry can say it.
  */
 export interface BulkJobHandler<Request = unknown, Input = unknown> {
   action: BulkJobAction;
   capability: Capability;
   request: z.ZodType<Request>;
   rows(request: Request): BulkJobRowInput<Input>[];
-  subject?(
+  prepare?(
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },
   ): Promise<BulkJobSubject>;
@@ -174,7 +176,13 @@ function groupMembershipHandler(
       return ids.map((id) => ({ targetId: id.toLowerCase(), input }));
     },
     input: groupIdsInputSchema,
-    async subject({ groupIds }, { db, directoryId }) {
+    async prepare({ ids: userIds, groupIds, previewToken: token }, { db, directoryId }) {
+      if (token !== previewToken(op, userIds, groupIds)) {
+        throw new BulkJobRequestError(
+          'preview_mismatch',
+          'The users or groups aren’t the ones previewed. Preview the change again.',
+        );
+      }
       const ids = groupIds.map((id) => id.toLowerCase());
       const found = await findCachedGroupsById(db, directoryId, ids);
       return {

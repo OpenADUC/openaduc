@@ -4,6 +4,7 @@ import { sql, type RawBuilder, type Selectable } from 'kysely';
 import {
   accountExpiryRequestSchema,
   bulkGroupMembershipPreviewRequestSchema,
+  bulkGroupMembershipPreviewSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -1088,7 +1089,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         await app.services.authorization.roleGroups(),
       );
       if (!preview) throw NotFound('group not found');
-      return preview;
+      return bulkGroupMembershipPreviewSchema.parse(preview);
     },
   });
 

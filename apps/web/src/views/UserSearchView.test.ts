@@ -234,7 +234,8 @@ describe('the user list, adding the selection to groups', () => {
     api.groups.search.mockResolvedValue({ rows: [sales], total: 1 });
     const preview: BulkGroupMembershipPreview = {
       op: 'add',
-      unknownIds: [],
+      unknownCount: 0,
+      previewToken: 'tok',
       groups: [
         {
           id: 'g1',
@@ -242,8 +243,8 @@ describe('the user list, adding the selection to groups', () => {
           distinguishedName: sales.distinguishedName,
           privilege: { reason: 'protected' },
           changes: 1,
-          unchanged: [{ id: 'jdoe', name: 'Jane Doe' }],
-          indirect: [],
+          unchanged: { count: 1, users: [{ id: 'jdoe', name: 'Jane Doe' }] },
+          indirect: { count: 0, users: [] },
         },
       ],
     };
@@ -290,11 +291,12 @@ describe('the user list, adding the selection to groups', () => {
 
     await button(page, 'Add to group').trigger('click');
     await flushPromises();
-    expect(api.bulkJobs.startGroupChange).toHaveBeenCalledExactlyOnceWith(
-      'add',
-      ['jdoe', 'bsmith'],
-      ['g1'],
-    );
+    expect(api.bulkJobs.startGroupChange).toHaveBeenCalledExactlyOnceWith({
+      op: 'add',
+      ids: ['jdoe', 'bsmith'],
+      groupIds: ['g1'],
+      previewToken: 'tok',
+    });
     expect(page.get('.bulk-job').text()).toContain('Adding 2 accounts to Sales…');
   });
 });
