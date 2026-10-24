@@ -1565,7 +1565,9 @@ watch(user, (u) => {
           <EmptyState
             v-if="user.groupMemberships.length === 0"
             icon="pi pi-users"
-            title="Not a member of any groups"
+            :title="
+              user.freshness.isStale ? 'No groups in the cache' : 'Not a member of any groups'
+            "
             :message="
               user.freshness.isStale
                 ? 'The cache is stale. Run a sync if this seems wrong.'

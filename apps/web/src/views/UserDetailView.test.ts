@@ -480,7 +480,7 @@ describe('the Groups tab of a user in no groups', () => {
     expect(page.get('.ds-empty').text()).not.toContain('sync');
   });
 
-  it('suggests a sync when the cache is stale', async () => {
+  it('says the cache has none, and suggests a sync, when it’s stale', async () => {
     api.users.get.mockResolvedValue({
       user: aUserDetail({
         groupMemberships: [],
@@ -489,7 +489,7 @@ describe('the Groups tab of a user in no groups', () => {
     });
     const { page } = await openTab('groups', ['read:user'], false);
 
-    expect(page.get('.ds-empty').text()).toContain('Not a member of any groups');
+    expect(page.get('.ds-empty').text()).toContain('No groups in the cache');
     expect(page.get('.ds-empty').text()).toContain('Run a sync if this seems wrong');
   });
 });
