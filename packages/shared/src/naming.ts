@@ -8,9 +8,19 @@
 export const NAMING_TOKENS = ['first', 'last', 'f', 'l', 'mi'] as const;
 export type NamingToken = (typeof NAMING_TOKENS)[number];
 export const DEFAULT_NAMING_PATTERN = '{first}.{last}';
-export const SAM_ACCOUNT_NAME_MAX = 20;
 export const NAMING_PATTERN_MAX = 64;
-// Suffixes run to 999, so a candidate sAMAccountName may lose 3 characters.
+
+/** AD's and Entra's hard limits on the names a new account gets. */
+export const NAME_LIMITS = {
+  samAccountName: 20,
+  // Before the @: Entra's limit for a synced account's UPN.
+  userPrincipalName: 64,
+  cn: 64,
+  displayName: 256,
+} as const;
+export type LimitedAttribute = keyof typeof NAME_LIMITS;
+
+// Suffixes run to 999, so a candidate may lose 3 characters to one.
 const MAX_SUFFIX = 999;
 
 export interface PersonName {
@@ -28,8 +38,15 @@ export interface NamingSettings {
   upnSuffix: string;
 }
 
+/** A CN within an OU: the CN is unique among the OU's children. */
+export interface OuName {
+  ouDn: string;
+  cn: string;
+}
+
 export type NameField = 'first' | 'last';
-export type NormalizationRule = 'diacritics' | 'apostrophes' | 'spaces';
+export type NormalizationRule =
+  'invisible' | 'letterforms' | 'diacritics' | 'apostrophes' | 'periods' | 'spaces';
 export type NamingAttribute = 'samAccountName' | 'userPrincipalName' | 'mail';
 
 /**
@@ -39,11 +56,13 @@ export type NamingAttribute = 'samAccountName' | 'userPrincipalName' | 'mail';
  */
 export type NamingApproval = 'none' | 'together' | 'individual' | 'blocked';
 
+// Each deviation's `from` and `to` are the values either side of the one
+// step it describes, and its reason quotes them.
 export type NamingDeviation =
   | {
       kind: 'normalized';
       field: NameField;
-      rules: NormalizationRule[];
+      rule: NormalizationRule;
       from: string;
       to: string;
       approval: 'none';
@@ -52,17 +71,29 @@ export type NamingDeviation =
   | {
       kind: 'dropped';
       field: NameField;
+      /** `letters` outside the Latin alphabet, or other `characters`. */
+      what: 'letters' | 'characters';
       characters: string[];
       from: string;
       to: string;
       approval: 'individual';
       reason: string;
     }
-  | { kind: 'truncated'; from: string; to: string; approval: 'together'; reason: string }
+  | {
+      kind: 'truncated';
+      attribute: LimitedAttribute;
+      from: string;
+      to: string;
+      approval: 'together';
+      reason: string;
+    }
   | {
       kind: 'collision';
       source: 'directory' | 'batch';
+      /** What was already held. */
       taken: NamingAttribute[];
+      /** What took the suffix. */
+      changed: NamingAttribute[];
       suffix: number;
       from: string;
       to: string;
@@ -74,14 +105,15 @@ export type NamingDeviation =
       source: 'directory' | 'batch';
       from: string;
       to: string;
-      approval: 'none';
+      /** `blocked` when the bracketed fallback is taken too. */
+      approval: 'none' | 'blocked';
       reason: string;
     }
-  | { kind: 'unusable'; approval: 'blocked'; reason: string };
+  | { kind: 'unusable'; field?: NameField; approval: 'blocked'; reason: string };
 
 export interface NamingSuggestion {
   samAccountName: string;
-  /** The username before `@`: the full pattern, never truncated. */
+  /** The username before `@`, cut only at 64 characters. */
   upnLocal: string;
   upn: string;
   mail: string;
@@ -102,7 +134,7 @@ export interface TakenNames {
   userPrincipalNames: Iterable<string>;
   /** `mail` values and SMTP proxy addresses, without the `smtp:` prefix. */
   mailAddresses: Iterable<string>;
-  cns: Iterable<{ ouDn: string; cn: string }>;
+  cns: Iterable<OuName>;
 }
 
 // ---- Pattern ------------------------------------------------------------
@@ -111,30 +143,49 @@ type Segment = { token: NamingToken } | { literal: string };
 
 const SEGMENT = /\{([^{}]*)\}|([^{}]+)|([{}])/g;
 const LITERAL = /^[a-z0-9._-]+$/;
+const SEPARATOR = /[._-]/;
 
 function parsePattern(pattern: string): { segments: Segment[]; problem: string | null } {
   const segments: Segment[] = [];
+  const fail = (problem: string) => ({ segments, problem });
   for (const m of pattern.matchAll(SEGMENT)) {
     const [, token, literal, brace] = m;
     if (token !== undefined) {
       if (!(NAMING_TOKENS as readonly string[]).includes(token)) {
-        return {
-          segments,
-          problem: `{${token}} isn't a token. Use ${NAMING_TOKENS.map((t) => `{${t}}`).join(', ')}.`,
-        };
+        return fail(
+          `{${token}} isn't a token. Use ${NAMING_TOKENS.map((t) => `{${t}}`).join(', ')}.`,
+        );
       }
       segments.push({ token: token as NamingToken });
     } else if (literal !== undefined && LITERAL.test(literal)) {
+      const doubled = /[._-]{2,}/.exec(literal);
+      if (doubled) {
+        return fail(
+          `"${doubled[0]}": use one separator at a time. A username can't hold two in a row.`,
+        );
+      }
       segments.push({ literal });
     } else {
-      return {
-        segments,
-        problem: `"${literal ?? brace}" can't go in a username. Between tokens, use lowercase letters, digits, dots, hyphens or underscores.`,
-      };
+      return fail(
+        `"${literal ?? brace}" can't go in a username. Between tokens, use lowercase letters, digits, dots, hyphens or underscores.`,
+      );
     }
   }
   if (!segments.some((s) => 'token' in s && s.token !== 'mi')) {
-    return { segments, problem: 'The pattern needs a first or last name token.' };
+    return fail('The pattern needs a first or last name token.');
+  }
+  const head = segments[0];
+  const tail = segments.at(-1);
+  if (
+    (head && 'literal' in head && SEPARATOR.test(head.literal[0]!)) ||
+    (tail && 'literal' in tail && SEPARATOR.test(tail.literal.at(-1)!))
+  ) {
+    return fail("The pattern can't start or end with a separator.");
+  }
+  if (tail && 'literal' in tail && /\d$/.test(tail.literal)) {
+    return fail(
+      'The pattern can\'t end in a digit: a taken name gets a number on the end, so "smith1" would become "smith12".',
+    );
   }
   return { segments, problem: null };
 }
@@ -177,10 +228,9 @@ function render(segments: Segment[], v: TokenValues): string {
 
 // ---- Normalization ------------------------------------------------------
 
-// Letters NFD doesn't split into a base letter and a mark.
+// Latin letters that NFD doesn't split into a base letter and a mark.
 const TRANSLITERATIONS: Record<string, string> = {
   ß: 'ss',
-  ẞ: 'ss',
   æ: 'ae',
   œ: 'oe',
   ø: 'o',
@@ -195,83 +245,117 @@ const TRANSLITERATIONS: Record<string, string> = {
   ŋ: 'n',
   ĸ: 'k',
 };
+// Format characters (zero-width spaces and joiners, soft hyphens, marks of
+// direction) and control characters other than whitespace.
+// eslint-disable-next-line no-control-regex -- matching them is the point
+const INVISIBLE = /\p{Cf}|[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/gu;
 const APOSTROPHES = /['’‘ʼʻ`´]/g;
 const DASHES = /[‐‑‒–—]/g;
 
+function transliterate(c: string): string {
+  const mapped = TRANSLITERATIONS[c.toLowerCase()];
+  if (mapped === undefined) return c;
+  return c === c.toLowerCase() ? mapped : mapped.charAt(0).toUpperCase() + mapped.slice(1);
+}
+
 interface Normalized {
   value: string;
-  rules: NormalizationRule[];
-  dropped: string[];
+  deviations: NamingDeviation[];
 }
 
-function normalizePart(raw: string): Normalized {
-  const rules: NormalizationRule[] = [];
-  let v = raw.trim().toLowerCase();
-
-  const stripped = Array.from(v.normalize('NFD').replace(/\p{M}/gu, ''))
-    .map((c) => TRANSLITERATIONS[c] ?? c)
-    .join('');
-  if (stripped !== v) rules.push('diacritics');
-  v = stripped;
-
-  const noApostrophes = v.replace(APOSTROPHES, '');
-  if (noApostrophes !== v) rules.push('apostrophes');
-  v = noApostrophes;
-
-  const noSpaces = v.replace(/\s+/gu, '');
-  if (noSpaces !== v) rules.push('spaces');
-  v = noSpaces.replace(DASHES, '-');
-
-  const dropped: string[] = [];
-  let kept = '';
-  for (const c of v) {
-    if (/[a-z-]/.test(c)) kept += c;
-    else if (!dropped.includes(c)) dropped.push(c);
-  }
-  return { value: kept.replace(/-+/g, '-').replace(/^-+|-+$/g, ''), rules, dropped };
-}
-
-const RULE_WORDS: Record<NormalizationRule, string> = {
-  diacritics: 'accents',
-  apostrophes: 'apostrophes',
-  spaces: 'spaces',
+const RULE_REASON: Record<NormalizationRule, string> = {
+  invisible: 'Invisible characters are removed',
+  letterforms: 'Letter forms are simplified',
+  diacritics: 'Accents are removed',
+  apostrophes: 'Apostrophes are removed',
+  periods: 'Periods are removed',
+  spaces: 'Spaces are removed',
 };
 
-function listOf(words: string[]): string {
-  if (words.length <= 1) return words.join('');
-  return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
-}
+/**
+ * A name part as a username can hold it: Latin letters and hyphens,
+ * lowercase. Each step that changes it is reported with the value before
+ * and after that step, in the case the operator typed.
+ */
+function normalizePart(field: NameField, raw: string): Normalized {
+  const deviations: NamingDeviation[] = [];
+  let v = raw.trim();
+  const step = (rule: NormalizationRule, next: string, changed = next !== v) => {
+    if (changed) {
+      deviations.push({
+        kind: 'normalized',
+        field,
+        rule,
+        from: v,
+        to: next,
+        approval: 'none',
+        reason: next
+          ? `${RULE_REASON[rule]}: "${v}" becomes "${next}".`
+          : `${RULE_REASON[rule]} from "${v}", leaving nothing.`,
+      });
+    }
+    v = next;
+  };
 
-function sentenceCase(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
+  step('invisible', v.replace(INVISIBLE, ''));
+  // Full-width letters, ligatures (ﬁ) and digraphs (Ĳ) fold to plain ones;
+  // NFC's own recomposition isn't a change worth showing.
+  const folded = v.normalize('NFKC');
+  step('letterforms', folded, folded !== v.normalize('NFC'));
+  // Only Latin letters lose their accents; other scripts are dropped whole
+  // below, so stripping theirs would be noise.
+  step(
+    'diacritics',
+    Array.from(v.normalize('NFD').replace(/([A-Za-z])\p{M}+/gu, '$1'), transliterate)
+      .join('')
+      .normalize('NFC'),
+  );
+  step('apostrophes', v.replace(APOSTROPHES, ''));
+  step('periods', v.replace(/\./g, ''));
+  step('spaces', v.replace(/\s+/gu, ''));
+  v = v.replace(DASHES, '-');
 
-function partDeviations(field: NameField, raw: string, n: Normalized): NamingDeviation[] {
-  const out: NamingDeviation[] = [];
-  const from = raw.trim();
-  if (n.rules.length > 0) {
-    out.push({
-      kind: 'normalized',
-      field,
-      rules: n.rules,
-      from,
-      to: n.value,
-      approval: 'none',
-      reason: `${sentenceCase(listOf(n.rules.map((r) => RULE_WORDS[r])))} are removed: "${from}" becomes "${n.value}".`,
-    });
+  const letters: string[] = [];
+  const others: string[] = [];
+  let kept = '';
+  for (const c of v) {
+    if (/[A-Za-z-]/.test(c)) kept += c;
+    else {
+      const list = /\p{L}/u.test(c) ? letters : others;
+      if (!list.includes(c)) list.push(c);
+    }
   }
-  if (n.dropped.length > 0) {
-    out.push({
+  for (const [what, characters] of [
+    ['letters', letters],
+    ['characters', others],
+  ] as const) {
+    if (characters.length === 0) continue;
+    const next = Array.from(v)
+      .filter((c) => !characters.includes(c))
+      .join('');
+    const lead =
+      what === 'letters'
+        ? 'Letters outside the Latin alphabet are dropped'
+        : "Characters a username can't use are dropped";
+    deviations.push({
       kind: 'dropped',
       field,
-      characters: n.dropped,
-      from,
-      to: n.value,
+      what,
+      characters,
+      from: v,
+      to: next,
       approval: 'individual',
-      reason: `Characters a username can't use are dropped from "${from}": ${n.dropped.join(' ')}`,
+      reason: next ? `${lead}: "${v}" becomes "${next}".` : `${lead} from "${v}", leaving nothing.`,
     });
+    v = next;
   }
-  return out;
+  return {
+    value: kept
+      .toLowerCase()
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, ''),
+    deviations,
+  };
 }
 
 // ---- Suggestion ---------------------------------------------------------
@@ -280,49 +364,74 @@ interface Prepared {
   segments: Segment[];
   values: TokenValues;
   username: string;
+  /** Before the 256-character cut. */
+  fullDisplayName: string;
   displayName: string;
   deviations: NamingDeviation[];
 }
+
+const FIELD_LABEL: Record<NameField, string> = { first: 'first name', last: 'last name' };
 
 function prepare(name: PersonName, pattern: string): Prepared {
   const { segments, problem } = parsePattern(pattern);
   if (problem) throw new Error(`invalid naming pattern: ${problem}`);
   const uses = (t: NamingToken) => segments.some((s) => 'token' in s && s.token === t);
 
-  const first = normalizePart(name.first);
-  const last = normalizePart(name.last);
+  const parts = {
+    first: normalizePart('first', name.first),
+    last: normalizePart('last', name.last),
+  };
   const values: TokenValues = {
-    first: first.value,
-    last: last.value,
-    mi: normalizePart(name.middleInitial ?? '')
+    first: parts.first.value,
+    last: parts.last.value,
+    mi: normalizePart('first', name.middleInitial ?? '')
       .value.replace(/-/g, '')
       .slice(0, 1),
   };
 
   const deviations: NamingDeviation[] = [];
-  // A field the pattern only takes an initial from is reported only when
-  // nothing is left to take it from: otherwise the initial is all that shows.
-  const reported = (full: NamingToken, initial: NamingToken, n: Normalized) =>
-    uses(full) || (uses(initial) && !n.value);
-  if (reported('first', 'f', first)) deviations.push(...partDeviations('first', name.first, first));
-  if (reported('last', 'l', last)) deviations.push(...partDeviations('last', name.last, last));
+  for (const [field, initial] of [
+    ['first', 'f'],
+    ['last', 'l'],
+  ] as const) {
+    const part = parts[field];
+    // A field the pattern only takes an initial from is reported only when
+    // nothing is left to take it from: otherwise the initial is all that shows.
+    if (!uses(field) && !(uses(initial) && !part.value)) continue;
+    deviations.push(...part.deviations);
+    if (!part.value) {
+      deviations.push({
+        kind: 'unusable',
+        field,
+        approval: 'blocked',
+        reason: `Nothing is left of the ${FIELD_LABEL[field]} "${name[field].trim()}" to build a username from. Enter it in Latin letters.`,
+      });
+    }
+  }
 
   const displayFirst = name.preferredFirst?.trim() || name.first.trim();
+  const fullDisplayName = `${displayFirst} ${name.last.trim()}`.replace(/\s+/g, ' ').trim();
   return {
     segments,
     values,
     username: render(segments, values),
-    displayName: `${displayFirst} ${name.last.trim()}`.replace(/\s+/g, ' ').trim(),
+    fullDisplayName,
+    displayName: cutText(fullDisplayName, NAME_LIMITS.displayName),
     deviations,
   };
 }
 
+function cutText(value: string, limit: number, tail = ''): string {
+  if (value.length + tail.length <= limit) return value + tail;
+  return value.slice(0, limit - tail.length).trimEnd() + tail;
+}
+
 /**
- * Shorten a rendered username to `budget` characters for sAMAccountName:
- * keep the first name, drop hyphenated surname parts from the right, then
- * trim the surname (down to its initial), then the first name.
+ * Shorten the username to `budget` characters: keep the first name, drop
+ * hyphenated surname parts from the right, then trim the surname (down to
+ * its initial), then the first name.
  */
-function fitSam(p: Prepared, budget: number): string {
+function fit(p: Prepared, budget: number): string {
   let v = { ...p.values };
   let out = render(p.segments, v);
   if (out.length <= budget) return out;
@@ -342,51 +451,46 @@ function fitSam(p: Prepared, budget: number): string {
   return out.slice(0, budget).replace(/[._-]+$/, '');
 }
 
-interface SuffixedNames {
+const tailOf = (suffix: number) => (suffix > 1 ? String(suffix) : '');
+const samWith = (p: Prepared, suffix: number) =>
+  fit(p, NAME_LIMITS.samAccountName - tailOf(suffix).length) + tailOf(suffix);
+const upnLocalWith = (p: Prepared, suffix: number) =>
+  fit(p, NAME_LIMITS.userPrincipalName - tailOf(suffix).length) + tailOf(suffix);
+
+interface AccountNames {
   samAccountName: string;
   upnLocal: string;
   upn: string;
   mail: string;
 }
 
-const ATTRIBUTES: NamingAttribute[] = ['samAccountName', 'userPrincipalName', 'mail'];
-
-function valueOf(names: SuffixedNames, attr: NamingAttribute): string {
-  return attr === 'userPrincipalName' ? names.upn : names[attr];
-}
-
-function withSuffix(p: Prepared, upnSuffix: string, suffix: number): SuffixedNames {
-  const tail = suffix > 1 ? String(suffix) : '';
-  const upnLocal = `${p.username}${tail}`;
+function accountNames(samAccountName: string, upnLocal: string, upnSuffix: string): AccountNames {
   const upn = `${upnLocal}@${upnSuffix}`;
-  return {
-    samAccountName: `${fitSam(p, SAM_ACCOUNT_NAME_MAX - tail.length)}${tail}`,
-    upnLocal,
-    upn,
-    mail: upn,
-  };
+  return { samAccountName, upnLocal, upn, mail: upn };
 }
 
-function truncation(p: Prepared, sam: string): NamingDeviation[] {
-  if (sam === p.username) return [];
+function truncation(
+  attribute: LimitedAttribute,
+  from: string,
+  to: string,
+  note: string,
+): NamingDeviation[] {
+  if (from === to) return [];
+  const label = { samAccountName: 'sAMAccountName', cn: 'The CN', displayName: 'The display name' };
+  const what =
+    attribute === 'userPrincipalName'
+      ? `The UPN and email are limited to ${NAME_LIMITS.userPrincipalName} characters before the @`
+      : `${label[attribute]} is limited to ${NAME_LIMITS[attribute]} characters`;
   return [
     {
       kind: 'truncated',
-      from: p.username,
-      to: sam,
+      attribute,
+      from,
+      to,
       approval: 'together',
-      reason: `sAMAccountName is limited to ${SAM_ACCOUNT_NAME_MAX} characters, so "${p.username}" becomes "${sam}". The UPN and email keep the full name.`,
+      reason: `${what}, so "${from}" becomes "${to}".${note ? ` ${note}` : ''}`,
     },
   ];
-}
-
-function unusable(p: Prepared): NamingDeviation | null {
-  if (p.username) return null;
-  return {
-    kind: 'unusable',
-    approval: 'blocked',
-    reason: 'No letters are left to build a username from. Enter the name in Latin letters.',
-  };
 }
 
 const NOTHING_TAKEN: TakenNames = {
@@ -410,7 +514,7 @@ const ATTRIBUTE_LABEL: Record<NamingAttribute, string> = {
 };
 
 const dnKey = (dn: string) => dn.toLowerCase().replace(/\s*,\s*/g, ',');
-const cnKey = (ouDn: string, cn: string) => `${dnKey(ouDn)}\n${cn.toLowerCase()}`;
+const cnKey = ({ ouDn, cn }: OuName) => `${dnKey(ouDn)}\n${cn.toLowerCase()}`;
 
 class NameSet {
   private readonly directory: Set<string>;
@@ -428,50 +532,78 @@ class NameSet {
   }
 }
 
+type Clash = { attr: NamingAttribute; source: 'directory' | 'batch' };
+
 /**
  * Suggest names for each request in order, making each unique against the
- * directory and against the requests before it: a taken name gets the
- * lowest free numeric suffix (the same one in sAMAccountName, UPN and
- * mail), and a CN taken in the target OU gets the username in brackets.
+ * directory and against the requests before it. A taken name gets the
+ * lowest free numeric suffix, only where it clashes:
+ *
+ * - a UPN or email clash suffixes the UPN and email together (mail is the
+ *   UPN), and the sAMAccountName takes the same suffix so the person has
+ *   one username;
+ * - a clash of the sAMAccountName alone (often a truncated one) suffixes
+ *   just that, keeping the UPN and email the person would otherwise get.
+ *
+ * A CN taken in the target OU gets the sAMAccountName in brackets.
  */
 export function resolveNames(
   requests: NamingRequest[],
   settings: NamingSettings,
   taken: TakenNames,
 ): NamingSuggestion[] {
-  const sets: Record<NamingAttribute, NameSet> = {
+  const held: Record<NamingAttribute, NameSet> = {
     samAccountName: new NameSet(taken.samAccountNames),
     userPrincipalName: new NameSet(taken.userPrincipalNames),
     mail: new NameSet(taken.mailAddresses),
   };
-  const cns = new NameSet(Array.from(taken.cns, (c) => cnKey(c.ouDn, c.cn)));
-  const clashes = (names: SuffixedNames) =>
-    ATTRIBUTES.flatMap((attr) => {
-      const source = sets[attr].holder(valueOf(names, attr));
+  const heldCns = new NameSet(Array.from(taken.cns, cnKey));
+  const clashesOf = (names: AccountNames, attrs: NamingAttribute[]): Clash[] =>
+    attrs.flatMap((attr) => {
+      const source = held[attr].holder(valueOf(names, attr));
       return source ? [{ attr, source }] : [];
     });
+  const ALL: NamingAttribute[] = ['samAccountName', 'userPrincipalName', 'mail'];
 
   return requests.map(({ name, ouDn }) => {
     const p = prepare(name, settings.pattern);
-    const first = withSuffix(p, settings.upnSuffix, 1);
-    const deviations = [...p.deviations, ...truncation(p, first.samAccountName)];
-    const result = (names: SuffixedNames, cn = p.displayName): NamingSuggestion => ({
+    const base = accountNames(samWith(p, 1), upnLocalWith(p, 1), settings.upnSuffix);
+    const deviations = [
+      ...p.deviations,
+      ...truncation(
+        'samAccountName',
+        p.username,
+        base.samAccountName,
+        base.upnLocal === p.username ? 'The UPN and email keep the full name.' : '',
+      ),
+      ...truncation('userPrincipalName', p.username, base.upnLocal, ''),
+      ...truncation('displayName', p.fullDisplayName, p.displayName, ''),
+    ];
+    const result = (names: AccountNames, cn: string): NamingSuggestion => ({
       ...names,
       cn,
       displayName: p.displayName,
       deviations,
     });
-    const blocked = unusable(p);
-    if (blocked) {
-      deviations.push(blocked);
-      return result(first);
+    if (deviations.some((d) => d.approval === 'blocked')) {
+      return result(base, cutText(p.displayName, NAME_LIMITS.cn));
     }
 
-    let names = first;
-    const taken = clashes(first);
-    if (taken.length > 0) {
+    let names = base;
+    const clashes = clashesOf(base, ALL);
+    if (clashes.length > 0) {
+      const addressesClash = clashes.some((c) => c.attr !== 'samAccountName');
+      const candidate = (n: number) =>
+        accountNames(
+          samWith(p, n),
+          addressesClash ? upnLocalWith(p, n) : base.upnLocal,
+          settings.upnSuffix,
+        );
       let suffix = 2;
-      while (suffix <= MAX_SUFFIX && clashes(withSuffix(p, settings.upnSuffix, suffix)).length) {
+      while (
+        suffix <= MAX_SUFFIX &&
+        clashesOf(candidate(suffix), addressesClash ? ALL : ['samAccountName']).length
+      ) {
         suffix++;
       }
       if (suffix > MAX_SUFFIX) {
@@ -480,58 +612,78 @@ export function resolveNames(
           approval: 'blocked',
           reason: `Every suffix up to ${MAX_SUFFIX} is taken for "${p.username}". Enter a different username.`,
         });
-        return result(first);
+        return result(base, cutText(p.displayName, NAME_LIMITS.cn));
       }
-      names = withSuffix(p, settings.upnSuffix, suffix);
-      deviations.push(collision(first, names, suffix, taken));
+      names = candidate(suffix);
+      deviations.push(collision(base, names, suffix, clashes, addressesClash));
     }
-    for (const attr of ATTRIBUTES) sets[attr].claim(valueOf(names, attr));
+    for (const attr of ALL) held[attr].claim(valueOf(names, attr));
 
-    let cn = p.displayName;
+    let cn = cutText(p.displayName, NAME_LIMITS.cn);
+    let intended = p.displayName;
     if (ouDn) {
-      const source = cns.holder(cnKey(ouDn, cn));
+      const source = heldCns.holder(cnKey({ ouDn, cn }));
       if (source) {
-        cn = `${p.displayName} (${names.samAccountName})`;
+        const tail = ` (${names.samAccountName})`;
+        const fallback = cutText(p.displayName, NAME_LIMITS.cn, tail);
+        const alsoTaken = heldCns.holder(cnKey({ ouDn, cn: fallback })) !== null;
         deviations.push({
           kind: 'cn_collision',
           source,
-          from: p.displayName,
-          to: cn,
-          approval: 'none',
-          reason: `"${p.displayName}" already exists in this OU, so the account is named "${cn}".`,
+          from: cn,
+          to: fallback,
+          approval: alsoTaken ? 'blocked' : 'none',
+          reason: alsoTaken
+            ? `"${cn}" and "${fallback}" both already exist in this OU. Enter a different name for the account.`
+            : `"${cn}" already exists in this OU, so the account is named "${fallback}".`,
         });
+        cn = fallback;
+        intended = p.displayName + tail;
       }
-      cns.claim(cnKey(ouDn, cn));
+      heldCns.claim(cnKey({ ouDn, cn }));
     }
+    deviations.push(...truncation('cn', intended, cn, 'The display name keeps the full name.'));
     return result(names, cn);
   });
 }
 
+function valueOf(names: AccountNames, attr: NamingAttribute): string {
+  return attr === 'userPrincipalName' ? names.upn : names[attr];
+}
+
 function collision(
-  first: SuffixedNames,
-  names: SuffixedNames,
+  base: AccountNames,
+  names: AccountNames,
   suffix: number,
-  taken: { attr: NamingAttribute; source: 'directory' | 'batch' }[],
+  clashes: Clash[],
+  addressesClash: boolean,
 ): NamingDeviation {
-  const source = taken.some((t) => t.source === 'directory') ? 'directory' : 'batch';
-  const many = taken.length > 1;
+  const source = clashes.some((c) => c.source === 'directory') ? 'directory' : 'batch';
+  const many = clashes.length > 1;
   const values = listOf(
-    taken.map(({ attr }) => `${ATTRIBUTE_LABEL[attr]} "${valueOf(first, attr)}"`),
+    clashes.map(({ attr }) => `${ATTRIBUTE_LABEL[attr]} "${valueOf(base, attr)}"`),
   );
   const where =
     source === 'directory' ? 'used in the directory' : 'taken by another person in this list';
+  const taken = `The ${values} ${many ? 'are' : 'is'} already ${where}.`;
   return {
     kind: 'collision',
     source,
-    taken: taken.map((t) => t.attr),
+    taken: clashes.map((c) => c.attr),
+    changed: addressesClash ? ['samAccountName', 'userPrincipalName', 'mail'] : ['samAccountName'],
     suffix,
-    from: first.upnLocal,
-    to: names.upnLocal,
+    from: addressesClash ? base.upnLocal : base.samAccountName,
+    to: addressesClash ? names.upnLocal : names.samAccountName,
     approval: 'individual',
-    reason: `The ${values} ${many ? 'are' : 'is'} already ${where}. Adding ${suffix} makes ${
-      many ? 'them' : 'it'
-    } unique; the UPN and email get the same suffix (${names.upn}).`,
+    reason: addressesClash
+      ? `${taken} With ${suffix} added, the UPN and email become "${names.upn}" and the sAMAccountName "${names.samAccountName}".`
+      : `${taken} With ${suffix} added it becomes "${names.samAccountName}"; the UPN and email are free and stay "${names.upn}".`,
   };
+}
+
+function listOf(words: string[]): string {
+  if (words.length <= 1) return words.join('');
+  return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 }
 
 function commonPrefix(values: string[]): string {
@@ -546,25 +698,47 @@ export interface NamingLookups {
   samAccountNamePrefixes: string[];
   /** Local parts; UPNs and mail addresses starting with them. */
   upnLocalPrefixes: string[];
-  cns: { ouDn: string; cn: string }[];
+  /** CNs to look for in each OU, exactly. */
+  cns: OuName[];
+  /** CNs to look for in each OU starting with these: the bracketed fallbacks. */
+  cnPrefixes: OuName[];
 }
 
 /**
  * What to look up in the directory so `resolveNames` sees every value a
  * request could end up taking: each sAMAccountName and UPN/mail local part
- * starting with these prefixes, and each CN in its OU.
+ * starting with these prefixes, and each CN, or its fallback, in its OU.
  */
 export function namingLookups(requests: NamingRequest[], settings: NamingSettings): NamingLookups {
   const sam = new Set<string>();
   const upn = new Set<string>();
-  const cns = new Map<string, { ouDn: string; cn: string }>();
+  const cns = new Map<string, OuName>();
+  const cnPrefixes = new Map<string, OuName>();
+  // A fallback's tail is " (" + a sAMAccountName + ")".
+  const longestTail = NAME_LIMITS.samAccountName + 3;
   for (const { name, ouDn } of requests) {
     const p = prepare(name, settings.pattern);
     if (!p.username) continue;
-    const budgets = [0, 1, 2, 3].map((digits) => fitSam(p, SAM_ACCOUNT_NAME_MAX - digits));
-    sam.add(commonPrefix(budgets));
-    upn.add(p.username);
-    if (ouDn) cns.set(cnKey(ouDn, p.displayName), { ouDn, cn: p.displayName });
+    const budgets = (limit: number) => [0, 1, 2, 3].map((digits) => fit(p, limit - digits));
+    sam.add(commonPrefix(budgets(NAME_LIMITS.samAccountName)));
+    upn.add(commonPrefix(budgets(NAME_LIMITS.userPrincipalName)));
+    if (ouDn) {
+      const cn = { ouDn, cn: cutText(p.displayName, NAME_LIMITS.cn) };
+      cns.set(cnKey(cn), cn);
+      const prefix = {
+        ouDn,
+        cn:
+          p.displayName.length + longestTail <= NAME_LIMITS.cn
+            ? `${p.displayName} (`
+            : p.displayName.slice(0, NAME_LIMITS.cn - longestTail).trimEnd(),
+      };
+      cnPrefixes.set(cnKey(prefix), prefix);
+    }
   }
-  return { samAccountNamePrefixes: [...sam], upnLocalPrefixes: [...upn], cns: [...cns.values()] };
+  return {
+    samAccountNamePrefixes: [...sam],
+    upnLocalPrefixes: [...upn],
+    cns: [...cns.values()],
+    cnPrefixes: [...cnPrefixes.values()],
+  };
 }
