@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Bulk unlock / enable / disable over a selection of users, and adding
-// them to groups or removing them from groups, run as a job on the server.
+// Bulk unlock / enable / disable over a selection of users, adding them
+// to groups or removing them from groups, and editing their attributes,
+// run as a job on the server.
 //
 // Every bulk action asks first: it changes more than one account, and
 // there's no undo for a whole run. The job carries on if the operator
@@ -10,7 +11,7 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type { BulkJob } from '@openaduc/shared';
+import type { BulkJob, BulkUserAttributesRequest } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { accounts, BULK_VERBS, bulkJobActive, bulkJobTarget } from '../lib/bulkJob.js';
@@ -229,6 +230,13 @@ export function useBulkActions(opts: {
     write(() => api.bulkJobs.startGroupChange(change), true);
   }
 
+  /** Edit the users' attributes as the operator previewed it. */
+  function startAttributeEdit(edit: BulkUserAttributesRequest): void {
+    if (edit.ids.length === 0) return;
+    bulkErrors.value = new Map();
+    write(() => api.bulkJobs.startAttributeEdit(edit), true);
+  }
+
   function continueJob(): void {
     const current = job.value;
     if (current) write(() => api.bulkJobs.resume(current.id), true);
@@ -280,6 +288,7 @@ export function useBulkActions(opts: {
     cancelBulk,
     startBulk,
     startGroupChange,
+    startAttributeEdit,
     continueJob,
     retryFailed,
     stopJob,
