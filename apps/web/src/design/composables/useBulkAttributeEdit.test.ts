@@ -20,8 +20,10 @@ const CURRENT = {
 
 const aPreview = (more: Partial<BulkUserAttributesPreview> = {}): BulkUserAttributesPreview => ({
   current: CURRENT,
-  changed: { count: 0, users: [] },
+  changed: { count: 0, offset: 0, users: [] },
   unchanged: { count: 0, users: [] },
+  unread: { count: 0, users: [] },
+  skipped: { count: 0, users: [] },
   fields: [],
   unknownCount: 0,
   previewToken: 'tok',
@@ -41,7 +43,8 @@ vi.mock('../../api/index.js', () => ({
   api: { users: { search, previewAttributeEdit } },
 }));
 
-const { MULTIPLE_VALUES, useBulkAttributeEdit } = await import('./useBulkAttributeEdit.js');
+const { MULTIPLE_VALUES, NOT_READ_YET, useBulkAttributeEdit } =
+  await import('./useBulkAttributeEdit.js');
 
 async function setup(initial = ['u1', 'u2', 'u3']) {
   let ids = initial;
@@ -94,6 +97,66 @@ describe('useBulkAttributeEdit', () => {
     expect(flow.canPreview.value).toBe(true);
   });
 
+  it('says when a value isn’t known yet for some of them', async () => {
+    previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({ current: { ...CURRENT, physicalDeliveryOfficeName: { kind: 'unknown' } } }),
+    );
+    const { flow } = await setup();
+
+    expect(flow.shown('physicalDeliveryOfficeName')).toBe(NOT_READ_YET);
+  });
+
+  it('sets PO boxes one per line, replacing all of them', async () => {
+    const { flow } = await setup();
+    flow.setMode('postOfficeBox', 'set');
+    expect(flow.problems.value).toEqual({ postOfficeBox: 'Enter a value, or clear it' });
+
+    flow.setValue('postOfficeBox', 'PO 1\n\n  PO 2 ');
+
+    expect(flow.changes.value).toEqual({ postOfficeBox: ['PO 1', 'PO 2'] });
+    expect(flow.problems.value).toEqual({});
+  });
+
+  it('pages through every user it changes', async () => {
+    const { flow } = await setup();
+    flow.setMode('title', 'clear');
+    const user = (id: string) => ({
+      id,
+      name: id,
+      changes: [{ field: 'title' as const, before: 'Lead', after: null }],
+    });
+    previewAttributeEdit
+      .mockResolvedValueOnce(aPreview({ changed: { count: 3, offset: 0, users: [user('a')] } }))
+      .mockResolvedValueOnce(
+        aPreview({ changed: { count: 3, offset: 1, users: [user('b'), user('c')] } }),
+      );
+    await flow.review();
+    expect(flow.hasMore.value).toBe(true);
+
+    await flow.showMore();
+
+    expect(previewAttributeEdit).toHaveBeenLastCalledWith({
+      ids: ['u1', 'u2', 'u3'],
+      changes: { title: null },
+      offset: 1,
+    });
+    expect(flow.preview.value?.changed.users.map((u) => u.id)).toEqual(['a', 'b', 'c']);
+    expect(flow.hasMore.value).toBe(false);
+  });
+
+  it('can start a job that changes only values the cache hasn’t read', async () => {
+    const { flow } = await setup();
+    flow.setMode('physicalDeliveryOfficeName', 'set');
+    flow.setValue('physicalDeliveryOfficeName', 'Leeds');
+    previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({ unread: { count: 2, users: [] }, unchanged: { count: 1, users: [] } }),
+    );
+    await flow.review();
+
+    expect(flow.canConfirm.value).toBe(true);
+    expect(flow.confirmLabel.value).toBe('Edit 2 accounts');
+  });
+
   it('says what’s wrong with a value before the preview', async () => {
     const { flow } = await setup();
     flow.setMode('department', 'set');
@@ -134,6 +197,7 @@ describe('useBulkAttributeEdit', () => {
       aPreview({
         changed: {
           count: 2,
+          offset: 0,
           users: [
             {
               id: 'u1',
@@ -148,7 +212,7 @@ describe('useBulkAttributeEdit', () => {
           ],
         },
         unchanged: { count: 1, users: [{ id: 'u3', name: 'Cat' }] },
-        fields: [{ field: 'department', count: 2 }],
+        fields: [{ field: 'department', count: 2, unread: 0 }],
       }),
     );
 
@@ -176,7 +240,10 @@ describe('useBulkAttributeEdit', () => {
     const { flow } = await setup();
     flow.setMode('company', 'set');
     previewAttributeEdit.mockResolvedValueOnce(
-      aPreview({ unchanged: { count: 3, users: [] }, fields: [{ field: 'company', count: 0 }] }),
+      aPreview({
+        unchanged: { count: 3, users: [] },
+        fields: [{ field: 'company', count: 0, unread: 0 }],
+      }),
     );
     await flow.review();
 
@@ -186,7 +253,9 @@ describe('useBulkAttributeEdit', () => {
   it('asks again after the fields or the selection change', async () => {
     const { flow, start, select } = await setup();
     flow.setMode('title', 'clear');
-    previewAttributeEdit.mockResolvedValue(aPreview({ changed: { count: 3, users: [] } }));
+    previewAttributeEdit.mockResolvedValue(
+      aPreview({ changed: { count: 3, offset: 0, users: [] } }),
+    );
     await flow.review();
     flow.setMode('l', 'clear');
     expect(flow.preview.value).toBeNull();

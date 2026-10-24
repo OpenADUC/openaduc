@@ -27,6 +27,8 @@ export type FieldMode = 'keep' | 'set' | 'clear';
 
 /** Shown for a field the users hold different values in. */
 export const MULTIPLE_VALUES = '(multiple values)';
+/** Shown for a field the cache hasn't read for some of the users. */
+export const NOT_READ_YET = 'not known yet for some of them';
 
 const MANAGER_SEARCH_DELAY_MS = 200;
 const MANAGER_PAGE_SIZE = 12;
@@ -38,6 +40,7 @@ const message = (err: unknown): string => (err instanceof ApiError ? err.message
 export function currentText(value: BulkAttributeValue | undefined): string | null {
   if (!value) return null;
   if (value.kind === 'multiple') return MULTIPLE_VALUES;
+  if (value.kind === 'unknown') return NOT_READ_YET;
   return value.value;
 }
 
@@ -82,12 +85,13 @@ export function useBulkAttributeEdit(options: {
   const count = computed(() => options.ids().length);
 
   const changes = computed<BulkAttributeChanges>(() => {
-    const out: Record<string, string | null> = {};
+    const out: Record<string, string | string[] | null> = {};
     for (const field of BULK_ATTRIBUTE_FIELDS) {
+      if (modes[field] === 'keep') continue;
       if (modes[field] === 'clear') out[field] = null;
-      else if (modes[field] === 'set') {
-        out[field] = field === 'manager' ? (manager.value?.id ?? '') : values[field].trim();
-      }
+      else if (field === 'manager') out[field] = manager.value?.id ?? '';
+      else if (field === 'postOfficeBox') out[field] = lines(values[field]);
+      else out[field] = values[field].trim();
     }
     return out as BulkAttributeChanges;
   });
@@ -101,7 +105,7 @@ export function useBulkAttributeEdit(options: {
     const found: Partial<Record<BulkAttributeField, string>> = {};
     for (const field of changedFields.value) {
       const value = changes.value[field];
-      if (value === '') {
+      if (value === '' || (Array.isArray(value) && value.length === 0)) {
         found[field] = field === 'manager' ? 'Choose a manager' : 'Enter a value, or clear it';
         continue;
       }
@@ -109,7 +113,11 @@ export function useBulkAttributeEdit(options: {
       if (result.success) continue;
       const issue = result.error.issues[0];
       found[field] =
-        issue?.code === 'too_big' ? `At most ${issue.maximum} characters` : 'Not a valid value';
+        issue?.code === 'too_big'
+          ? issue.origin === 'array'
+            ? `At most ${issue.maximum} values`
+            : `At most ${issue.maximum} characters`
+          : 'Not a valid value';
     }
     return found;
   });
@@ -120,13 +128,17 @@ export function useBulkAttributeEdit(options: {
       Object.keys(problems.value).length === 0 &&
       !previewing.value,
   );
-  const canConfirm = computed(() => preview.value !== null && preview.value.changed.count > 0);
+  // Users whose value the cache hasn't read may change too.
+  const mayChange = computed(() =>
+    preview.value ? preview.value.changed.count + preview.value.unread.count : 0,
+  );
+  const canConfirm = computed(() => mayChange.value > 0);
 
   const title = computed(() =>
     preview.value ? `Edit ${accounts(count.value)}?` : `Edit ${accounts(count.value)}`,
   );
   const confirmLabel = computed(() => {
-    const n = preview.value?.changed.count ?? 0;
+    const n = mayChange.value;
     return `Edit ${n === 1 ? 'account' : accounts(n)}`;
   });
 
@@ -140,7 +152,9 @@ export function useBulkAttributeEdit(options: {
     if (modes[field] === mode) return;
     modes[field] = mode;
     forgetPreview();
-    if (mode !== 'set' || field === 'manager' || field === 'country') return;
+    if (mode !== 'set' || field === 'manager' || field === 'country' || field === 'postOfficeBox') {
+      return;
+    }
     const now = current.value?.[field];
     if (values[field] === '' && now?.kind === 'same' && now.value) values[field] = now.value;
   }
@@ -161,6 +175,7 @@ export function useBulkAttributeEdit(options: {
     preview.value = null;
     previewed = null;
     previewing.value = false;
+    loadingMore.value = false;
     previewError.value = null;
   }
 
@@ -216,6 +231,39 @@ export function useBulkAttributeEdit(options: {
     }
   }
 
+  const loadingMore = ref(false);
+  const hasMore = computed(
+    () => !!preview.value && preview.value.changed.users.length < preview.value.changed.count,
+  );
+
+  /** The next page of the users it changes, added to the preview's list. */
+  async function showMore(): Promise<void> {
+    const shownPreview = preview.value;
+    if (!shownPreview || !previewed || !hasMore.value || loadingMore.value) return;
+    const isCurrent = previews.begin();
+    loadingMore.value = true;
+    try {
+      const next = await api.users.previewAttributeEdit({
+        ...previewed,
+        offset: shownPreview.changed.users.length,
+      });
+      if (!isCurrent()) return;
+      if (next.previewToken !== shownPreview.previewToken) {
+        forgetPreview();
+        previewError.value = 'The users changed since the preview. Preview it again.';
+        return;
+      }
+      preview.value = {
+        ...next,
+        changed: { ...next.changed, users: [...shownPreview.changed.users, ...next.changed.users] },
+      };
+    } catch (err) {
+      if (isCurrent()) previewError.value = message(err);
+    } finally {
+      if (isCurrent()) loadingMore.value = false;
+    }
+  }
+
   /** Back from the preview to change the fields. */
   function back(): void {
     forgetPreview();
@@ -258,6 +306,9 @@ export function useBulkAttributeEdit(options: {
     previewing,
     previewError,
     canConfirm,
+    hasMore,
+    loadingMore,
+    showMore,
     shown,
     label: (field: BulkAttributeField) => ATTRIBUTE_LABELS[field],
     setMode,
@@ -269,4 +320,11 @@ export function useBulkAttributeEdit(options: {
     back,
     confirm,
   };
+}
+
+function lines(text: string): string[] {
+  return text
+    .split('\n')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
 }
