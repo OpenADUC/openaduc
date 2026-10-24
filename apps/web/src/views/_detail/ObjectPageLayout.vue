@@ -11,6 +11,7 @@ import Card from '../../design/primitives/Card.vue';
 import InlineFailure from '../../design/feedback/InlineFailure.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
+import { useResponsive } from '../../design/composables/useResponsive.js';
 import { useShortcuts, type Shortcut } from '../../design/composables/useShortcuts.js';
 import { SHORTCUT_KEYS } from '../../design/lib/shortcutKeys.js';
 import { useStickyHeader } from './useStickyHeader';
@@ -74,7 +75,8 @@ defineSlots<{
   badges?(): unknown;
   /** The object's state, under the name; it folds away with the header. */
   status?(): unknown;
-  /** The object's primary actions, beside the identity. */
+  /** The object's primary actions: beside the identity, or along the
+   *  bottom of a phone's screen. */
   primary?(props: { compact: boolean }): unknown;
 }>();
 
@@ -83,6 +85,9 @@ const toast = useToast();
 
 const { setHero, compact: heroCompact, heroHeight } = useStickyHeader();
 const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
+// On a phone the primary actions leave the header for a bar along the
+// bottom, where a thumb reaches them.
+const { isMobile } = useResponsive();
 
 const kindLabel = computed(() => props.kind[0]!.toUpperCase() + props.kind.slice(1));
 
@@ -207,13 +212,16 @@ const freshnessText = computed(() => {
     <section
       :ref="setHero"
       class="detail-hero"
-      :class="{ 'is-compact': heroCompact, 'has-primary': !loading && !!$slots.primary }"
+      :class="{
+        'is-compact': heroCompact,
+        'has-primary': !loading && !!$slots.primary && !isMobile,
+      }"
     >
       <!-- The skeleton draws each line in the element the record's line
            uses, so the record lands in the same room. -->
       <template v-if="loading">
         <Skeleton
-          :size="heroCompact ? '28px' : '80px'"
+          :size="heroCompact ? '28px' : isMobile ? '48px' : '80px'"
           :shape="avatar.shape === 'rounded' ? 'rectangle' : 'circle'"
           :border-radius="avatar.shape === 'rounded' ? '18%' : undefined"
         />
@@ -235,7 +243,7 @@ const freshnessText = computed(() => {
         </div>
       </template>
 
-      <Avatar v-else v-bind="avatar" :size="heroCompact ? 28 : 80" />
+      <Avatar v-else v-bind="avatar" :size="heroCompact ? 28 : isMobile ? 48 : 80" />
 
       <div v-if="!loading" class="detail-hero-main">
         <div class="detail-hero-row">
@@ -286,7 +294,7 @@ const freshnessText = computed(() => {
         </div>
       </div>
 
-      <div v-if="!loading && $slots.primary" class="detail-hero-primary">
+      <div v-if="!loading && $slots.primary && !isMobile" class="detail-hero-primary">
         <slot name="primary" :compact="heroCompact" />
       </div>
     </section>
@@ -381,6 +389,10 @@ const freshnessText = computed(() => {
     <p v-if="!loading" class="freshness-foot">
       <span class="hint">{{ freshnessText }}</span>
     </p>
+
+    <div v-if="!loading && $slots.primary && isMobile" class="detail-primary-bar">
+      <slot name="primary" :compact="false" />
+    </div>
   </div>
 </template>
 
@@ -616,12 +628,36 @@ const freshnessText = computed(() => {
   font-size: 12.5px;
 }
 
+/* On a phone the identity stacks under the avatar, and sits beside it once
+   compact; the primary actions have left for the bottom bar. minmax: a 1fr
+   track would grow to the longest unbroken line (the DN, a sign-in
+   condition's details) and push the header past the screen. */
 @media (max-width: 767.98px) {
-  .detail-hero,
-  .detail-hero.has-primary {
-    grid-template-columns: 1fr;
-    justify-items: start;
+  .detail-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
   }
+
+  .detail-hero.is-compact {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+/* Sticks to the bottom of the screen while the page scrolls under it. */
+.detail-primary-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  gap: 8px;
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.detail-primary-bar > :deep(*) {
+  flex: 1 1 0;
+  min-height: 48px;
 }
 
 /* Tab bar ---------------------------------------------------------------- */
@@ -776,6 +812,14 @@ const freshnessText = computed(() => {
   .object-tabs-refresh,
   .object-tabs-actions {
     flex: 0 0 auto;
+  }
+
+  .object-tab,
+  .object-tabs-refresh,
+  .object-tabs-actions :deep(.p-button) {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
   }
 }
 
