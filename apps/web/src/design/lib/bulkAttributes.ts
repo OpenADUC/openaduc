@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { BulkAttributeField } from '@openaduc/shared';
+import { directoryCountry, directoryCountryCodes, type BulkAttributeField } from '@openaduc/shared';
 
 /** Each field a bulk edit changes, as the form labels it. */
 export const ATTRIBUTE_LABELS: Record<BulkAttributeField, string> = {
@@ -24,3 +24,13 @@ export function fieldNames(fields: readonly BulkAttributeField[]): string {
   if (names.length <= 1) return names.join('');
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
+
+/** Every country an edit can set, by name. */
+export function countryOptions(): { value: string; label: string }[] {
+  return directoryCountryCodes()
+    .map((value) => ({ value, label: `${directoryCountry(value)!.co} (${value})` }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** A value in the preview: what it is, or that there's none. */
+export const shownValue = (value: string | null): string => value ?? '(empty)';
