@@ -1,67 +1,101 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Matching a pasted list of people (emails, logon names, UPNs, display
-// names) against cached users.
 import type { UserMatchCandidate, UserMatchResult } from '@openaduc/shared';
 
 export interface MatchableUser extends UserMatchCandidate {
-  /** Raw proxyAddresses values, e.g. "SMTP:jane@x", "X500:…". */
-  proxyAddresses: string[];
+  /** Logon name, UPN, email and SMTP proxy addresses, case-folded by `fold`. */
+  identifierKeys: string[];
+  displayNameKey: string | null;
 }
 
-const QUOTES = /^["'`‘’“”]+|["'`‘’“”]+$/g;
+const INVISIBLE = /[​-‍⁠﻿]/g;
+const EDGES = /^[\s,;"'`‘’“”]+|[\s,;"'`‘’“”]+$/g;
+
+/** An entry as written, without stray whitespace, quotes or separators. */
+export function cleanEntry(entry: string): string {
+  return entry.normalize('NFC').replace(INVISIBLE, '').replace(EDGES, '');
+}
 
 /**
- * What an entry is looked up by, lowercased: "Jane Doe <jane@x>" → the
- * address, "CORP\jdoe" → the logon name, quotes and whitespace dropped.
- * Null for an entry with nothing left.
+ * What an entry is looked up by, before case-folding: "Jane Doe <jane@x>"
+ * → the address, "CORP\jdoe" → the logon name. Null when nothing's left.
  */
-export function matchKey(entry: string): string | null {
-  let s = entry.trim().replace(QUOTES, '').trim();
-  const address = s.match(/<([^<>]*)>$/);
-  if (address) s = address[1]!.trim().replace(QUOTES, '').trim();
+export function normalizeEntry(entry: string): string | null {
+  let s = cleanEntry(entry);
+  const address = s.match(/^[^<>]*<([^<>]*)>$/);
+  if (address) s = cleanEntry(address[1]!);
   s = s.replace(/^(mailto|smtp):/i, '');
-  const slash = s.lastIndexOf('\\');
-  if (slash >= 0) s = s.slice(slash + 1);
-  s = s.trim().toLowerCase();
+  const domainSam = s.match(/^[^\\\s,]+\\([^\\\s,]+)$/);
+  if (domainSam) s = domainSam[1]!;
   return s.length > 0 ? s : null;
 }
 
-function smtpAddresses(proxyAddresses: string[]): string[] {
-  return proxyAddresses.filter((v) => v.toLowerCase().startsWith('smtp:')).map((v) => v.slice(5));
+/**
+ * The fallbacks for an entry with commas that doesn't match as a whole:
+ * "Doe, Jane" as the display name "Jane Doe", then each piece as an entry
+ * of its own ("jdoe, bsmith").
+ */
+function commaFallbacks(whole: string): { reordered: string | null; pieces: string[] } {
+  if (!whole.includes(',')) return { reordered: null, pieces: [] };
+  const parts = whole.split(',').map((p) => p.trim());
+  const reordered = parts.length === 2 && parts.every(Boolean) ? `${parts[1]} ${parts[0]}` : null;
+  const pieces = parts.map(normalizeEntry).filter((p): p is string => p !== null);
+  return { reordered, pieces: pieces.length > 1 ? pieces : [] };
+}
+
+/** Every string `matchEntries` may look up for these entries, to fold up front. */
+export function lookupsFor(entries: string[]): string[] {
+  const out = new Set<string>();
+  for (const entry of entries) {
+    const whole = normalizeEntry(entry);
+    if (!whole) continue;
+    out.add(whole);
+    const { reordered, pieces } = commaFallbacks(whole);
+    if (reordered) out.add(reordered);
+    for (const p of pieces) out.add(p);
+  }
+  return [...out];
 }
 
 /**
  * One result per distinct entry, in the order pasted. Logon name, UPN and
- * email (with SMTP proxy addresses) identify an account, so a match on any
- * of them wins over a display name, which several people can share.
+ * email identify an account, so they win over a display name, which
+ * several people can share. `fold` case-folds a lookup the way the users'
+ * keys were folded.
  */
-export function matchEntries(entries: string[], users: MatchableUser[]): UserMatchResult[] {
+export function matchEntries(
+  entries: string[],
+  users: MatchableUser[],
+  fold: (s: string) => string,
+): UserMatchResult[] {
   const byIdentifier = new Map<string, MatchableUser[]>();
   const byDisplayName = new Map<string, MatchableUser[]>();
   const index = (map: Map<string, MatchableUser[]>, key: string | null, u: MatchableUser) => {
     if (!key) return;
-    const k = key.toLowerCase();
-    const list = map.get(k) ?? [];
+    const list = map.get(key) ?? [];
     if (!list.includes(u)) list.push(u);
-    map.set(k, list);
+    map.set(key, list);
   };
   for (const u of users) {
-    index(byIdentifier, u.samAccountName, u);
-    index(byIdentifier, u.userPrincipalName, u);
-    index(byIdentifier, u.email, u);
-    for (const address of smtpAddresses(u.proxyAddresses)) index(byIdentifier, address, u);
-    index(byDisplayName, u.displayName, u);
+    for (const key of u.identifierKeys) index(byIdentifier, key, u);
+    index(byDisplayName, u.displayNameKey, u);
   }
 
   const seen = new Set<string>();
   const results: UserMatchResult[] = [];
-  for (const raw of entries) {
-    const key = matchKey(raw);
-    if (!key || seen.has(key)) continue;
+  const resolve = (entry: string, whole: string) => {
+    const key = fold(whole);
+    if (seen.has(key)) return;
     seen.add(key);
-    const entry = raw.trim();
-    const found = byIdentifier.get(key) ?? byDisplayName.get(key) ?? [];
-    if (found.length === 0) results.push({ entry, status: 'unmatched' });
+    let found = byIdentifier.get(key) ?? byDisplayName.get(key);
+    if (!found) {
+      const { reordered, pieces } = commaFallbacks(whole);
+      found = reordered ? byDisplayName.get(fold(reordered)) : undefined;
+      if (!found && pieces.length > 0) {
+        for (const piece of pieces) resolve(piece, piece);
+        return;
+      }
+    }
+    if (!found) results.push({ entry, status: 'unmatched' });
     else if (found.length === 1)
       results.push({ entry, status: 'matched', user: candidate(found[0]!) });
     else {
@@ -73,10 +107,18 @@ export function matchEntries(entries: string[], users: MatchableUser[]): UserMat
           .sort((a, b) => a.samAccountName.localeCompare(b.samAccountName)),
       });
     }
+  };
+  for (const raw of entries) {
+    const whole = normalizeEntry(raw);
+    if (whole) resolve(cleanEntry(raw), whole);
   }
   return results;
 }
 
-function candidate({ proxyAddresses: _, ...user }: MatchableUser): UserMatchCandidate {
+function candidate({
+  identifierKeys: _keys,
+  displayNameKey: _name,
+  ...user
+}: MatchableUser): UserMatchCandidate {
   return user;
 }
