@@ -147,9 +147,11 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
           counts.failed > 0 ? `${counts.failed} failed` : null,
         ]
           .filter(Boolean)
-          .join(
-            ' and ',
-          )}. ${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
+          .join(' and ')}. ${
+          job.revertsJobId === null
+            ? `${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`
+            : 'The revert’s entry below lists why.'
+        }`;
   const afterwards: BulkJobControl[] = problems > 0 ? ['retry', 'dismiss'] : ['dismiss'];
 
   if (job.status === 'paused') {
