@@ -2,114 +2,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TapPreflight } from '@openaduc/shared';
 import { ActiveDirectoryProvider } from '../../src/providers/active-directory/provider.js';
-import { json, token } from './fakeGraph.js';
+import { FakeTapGraph, TAP_PERMISSIONS_GRANTED, TAP_VALUE } from './fakeGraph.js';
 import { configureDirectory, DC, startApi, type TestApi, type TestClient } from './harness.js';
 
 // Issue TAP against the dev DC, with Microsoft Graph played by a fake
 // behind fetch: the API's own Graph client, token and all, talks to it.
 
 const GROUPS = 'OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test';
-const PASS = 'Tap-Value-7Kq2';
-const ALL_PERMISSIONS = [
-  'UserAuthMethod-TAP.ReadWrite.All',
-  'Policy.Read.AuthenticationMethod',
-  'User.Read.All',
-  'RoleManagement.Read.Directory',
-  'Organization.Read.All',
-];
-
-interface FakeTap {
-  createdDateTime: string;
-  startDateTime: string;
-  lifetimeInMinutes: number;
-  isUsableOnce: boolean;
-  isUsable: boolean;
-  methodUsabilityReason: string;
-}
-
-/** Microsoft Graph as far as Issue TAP and the connection test use it. */
-class FakeGraph {
-  roles = [...ALL_PERMISSIONS];
-  policy = {
-    state: 'enabled',
-    defaultLifetimeInMinutes: 60,
-    minimumLifetimeInMinutes: 60,
-    maximumLifetimeInMinutes: 480,
-    isUsableOnce: false,
-    includeTargets: [{ targetType: 'group', id: 'all_users' }],
-  };
-  /** Principals holding an Entra role. */
-  roleHolders: string[] = [];
-  /** Graph's answer to the next pass created, instead of creating it. */
-  rejectNextPass: string | null = null;
-  /** AD objectSid → Entra object id, for the users Connect Sync has synced. */
-  synced = new Map<string, string>();
-  passes = new Map<string, FakeTap[]>();
-  requests: { method: string; url: string; body: string | null }[] = [];
-
-  fetch = async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
-    const url = new URL(String(input));
-    const method = init.method ?? 'GET';
-    this.requests.push({ method, url: url.toString(), body: (init.body as string) ?? null });
-    if (url.hostname === 'login.microsoftonline.com') {
-      return json({ access_token: token(this.roles), expires_in: 3600 });
-    }
-    const path = url.pathname.replace(/^\/v1\.0/, '');
-    if (path === '/organization') {
-      return json({
-        value: [{ displayName: 'Test Tenant', onPremisesLastSyncDateTime: '2026-10-24T11:30:00Z' }],
-      });
-    }
-    if (path.endsWith('/authenticationMethodConfigurations/TemporaryAccessPass')) {
-      return json({ id: 'TemporaryAccessPass', ...this.policy });
-    }
-    if (path === '/users') {
-      const sid = /onPremisesSecurityIdentifier eq '([^']+)'/.exec(
-        url.searchParams.get('$filter') ?? '',
-      )?.[1];
-      const id = sid ? this.synced.get(sid) : undefined;
-      return json({ value: id ? [{ id }] : [] });
-    }
-    const passes = /^\/users\/([^/]+)\/authentication\/temporaryAccessPassMethods$/.exec(path);
-    if (passes) {
-      const id = decodeURIComponent(passes[1]!);
-      if (method === 'GET') return json({ value: this.passes.get(id) ?? [] });
-      if (this.rejectNextPass) {
-        const message = this.rejectNextPass;
-        this.rejectNextPass = null;
-        return json({ error: { code: 'badRequest', message } }, 400);
-      }
-      const body = JSON.parse(String(init.body)) as {
-        startDateTime?: string;
-        lifetimeInMinutes: number;
-        isUsableOnce: boolean;
-      };
-      const created: FakeTap = {
-        createdDateTime: new Date().toISOString(),
-        startDateTime: body.startDateTime ?? new Date().toISOString(),
-        lifetimeInMinutes: body.lifetimeInMinutes,
-        isUsableOnce: body.isUsableOnce,
-        isUsable: true,
-        methodUsabilityReason: 'EnabledByPolicy',
-      };
-      this.passes.set(id, [created]);
-      return json({ id: 'tap', temporaryAccessPass: PASS, ...created }, 201);
-    }
-    if (path.startsWith('/roleManagement/directory/')) {
-      return json({ value: this.roleHolders.map((principalId) => ({ principalId })) });
-    }
-    if (/^\/users\/[^/]+\/transitiveMemberOf$/.test(path)) {
-      return json({ value: [{ '@odata.type': '#microsoft.graph.group', id: 'g1' }] });
-    }
-    return json({ error: { code: 'Request_ResourceNotFound', message: path } }, 404);
-  };
-}
+const PASS = TAP_VALUE;
 
 describe('Issue TAP', () => {
   let api: TestApi;
   let admin: TestClient;
   let operator: TestClient;
-  let graph: FakeGraph;
+  let graph: FakeTapGraph;
   const users: Record<string, { id: string; sid: string }> = {};
 
   const preflight = async (client: TestClient, who: string) => {
@@ -146,7 +52,7 @@ describe('Issue TAP', () => {
     await operator.signIn(api, 'oa.operator');
   });
   beforeEach(() => {
-    graph = new FakeGraph();
+    graph = new FakeTapGraph();
     for (const who of ['alice.anders', 'oa.admin']) {
       graph.synced.set(users[who]!.sid, entraIdOf(who));
     }
@@ -384,7 +290,7 @@ describe('Issue TAP', () => {
       ],
     });
 
-    graph.roles = [...ALL_PERMISSIONS];
+    graph.roles = [...TAP_PERMISSIONS_GRANTED];
     expect(
       (await admin.post(`/api/directories/${api.directoryId}/entra/test`)).json(),
     ).toMatchObject({ ok: true, missingPermissions: [] });
