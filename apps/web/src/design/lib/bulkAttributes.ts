@@ -17,7 +17,7 @@ export const ATTRIBUTE_LABELS: Record<BulkAttributeField, string> = {
   country: 'Country',
 };
 
-/** Fields by name, in a sentence: "department, title and office", or "department and 4 more". */
+/** Fields by name, in a sentence: "department, title and office", or "department and 3 more fields". */
 export function fieldNames(fields: readonly BulkAttributeField[]): string {
   const names = fields.map((f) => ATTRIBUTE_LABELS[f].toLowerCase());
   if (names.length > 3) return `${names[0]} and ${names.length - 1} more fields`;
