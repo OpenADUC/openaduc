@@ -14,9 +14,23 @@ export const personNameSchema = z.object({
   preferredFirst: namePart.nullable().optional(),
 });
 
+const typedName = z.string().trim().max(256).nullable().optional();
+
+// Names the operator typed in place of the pattern's (see NameOverrides).
+export const nameOverridesSchema = z.object({
+  samAccountName: typedName,
+  userPrincipalName: typedName,
+  displayName: typedName,
+});
+
 export const namingCheckRequestSchema = z.object({
   names: z
-    .array(personNameSchema.extend({ ouDn: z.string().trim().min(1).max(512).optional() }))
+    .array(
+      personNameSchema.extend({
+        ouDn: z.string().trim().min(1).max(512).optional(),
+        overrides: nameOverridesSchema.optional(),
+      }),
+    )
     .min(1)
     .max(NAMING_CHECK_MAX),
 });

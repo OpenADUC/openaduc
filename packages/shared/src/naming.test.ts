@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_NAMING_PATTERN,
   type NamingDeviation,
+  type NamingRequest,
   type NamingSettings,
   type TakenNames,
   namingLookups,
@@ -532,6 +533,150 @@ describe('resolveNames', () => {
   });
 });
 
+describe('resolveNames with names the operator typed', () => {
+  const john = { first: 'John', last: 'Smith' };
+  const one = (
+    overrides: NamingRequest['overrides'],
+    over: Partial<TakenNames> = {},
+    ouDn?: string,
+  ) =>
+    resolveNames([{ name: john, overrides, ...(ouDn ? { ouDn } : {}) }], settings, taken(over))[0]!;
+
+  it('uses a typed sAMAccountName and UPN as they are, with mail following the UPN', () => {
+    expect(
+      one({ samAccountName: 'jsmith', userPrincipalName: 'john@other.example' }),
+    ).toMatchObject({
+      samAccountName: 'jsmith',
+      upnLocal: 'john',
+      upn: 'john@other.example',
+      mail: 'john@other.example',
+      deviations: [],
+    });
+  });
+
+  it('takes the sAMAccountName from a typed UPN, cut to 20 characters', () => {
+    const s = one({ userPrincipalName: 'john.smith-the-second@example.com' });
+    expect(s.samAccountName).toBe('john.smith-the-secon');
+    expect(s.deviations).toEqual([
+      expect.objectContaining({
+        kind: 'truncated',
+        attribute: 'samAccountName',
+        from: 'john.smith-the-second',
+        to: 'john.smith-the-secon',
+      }),
+    ]);
+  });
+
+  it('blocks a typed name already in use instead of suffixing it', () => {
+    const s = one(
+      { samAccountName: 'jsmith', userPrincipalName: 'john.smith@example.com' },
+      { samAccountNames: ['JSMITH'], mailAddresses: ['john.smith@example.com'] },
+    );
+    expect(s).toMatchObject({ samAccountName: 'jsmith', upn: 'john.smith@example.com' });
+    expect(s.deviations).toEqual([
+      {
+        kind: 'taken',
+        attribute: 'samAccountName',
+        source: 'directory',
+        value: 'jsmith',
+        approval: 'blocked',
+        reason: 'The sAMAccountName "jsmith" is already used in the directory.',
+      },
+      expect.objectContaining({
+        kind: 'taken',
+        attribute: 'mail',
+        value: 'john.smith@example.com',
+      }),
+    ]);
+  });
+
+  it('still suffixes the UPN when only the sAMAccountName was typed', () => {
+    const s = one({ samAccountName: 'jsmith' }, { userPrincipalNames: ['john.smith@example.com'] });
+    expect(s).toMatchObject({ samAccountName: 'jsmith', upn: 'john.smith2@example.com' });
+    expect(s.deviations).toEqual([
+      expect.objectContaining({
+        kind: 'collision',
+        changed: ['userPrincipalName', 'mail'],
+        reason:
+          'The UPN "john.smith@example.com" is already used in the directory. With 2 added, the UPN and email become "john.smith2@example.com".',
+      }),
+    ]);
+  });
+
+  it('blocks names AD or Entra ID can’t hold', () => {
+    const blocked = (overrides: NamingRequest['overrides']) =>
+      one(overrides)
+        .deviations.filter((d) => d.approval === 'blocked')
+        .map((d) => d.reason);
+    expect(blocked({ samAccountName: 'j[smith]' })).toEqual([
+      expect.stringContaining('sAMAccountName "j[smith]" cannot contain'),
+    ]);
+    expect(blocked({ samAccountName: 'a-very-long-logon-name' })).toEqual([
+      'The sAMAccountName "a-very-long-logon-name" is 22 characters; AD allows 20.',
+    ]);
+    expect(blocked({ userPrincipalName: 'john smith@example.com' })).toEqual([
+      expect.stringContaining('Entra ID'),
+    ]);
+    expect(blocked({ userPrincipalName: 'no-suffix' })).toEqual([
+      'The UPN "no-suffix" needs a suffix: name@domain.',
+    ]);
+  });
+
+  it('blocks a typed UPN suffix the forest doesn’t have, when it’s known', () => {
+    const request = [{ name: john, overrides: { userPrincipalName: 'john@elsewhere.example' } }];
+    const [s] = resolveNames(request, settings, noneTaken, ['example.com', 'Other.example']);
+    expect(s!.deviations).toEqual([
+      expect.objectContaining({
+        kind: 'unusable',
+        attribute: 'userPrincipalName',
+        reason:
+          '"elsewhere.example" isn\'t one of this domain\'s UPN suffixes (example.com, Other.example).',
+      }),
+    ]);
+    const ok = [{ name: john, overrides: { userPrincipalName: 'john@other.example' } }];
+    expect(resolveNames(ok, settings, noneTaken, ['Other.example'])[0]!.deviations).toEqual([]);
+  });
+
+  it('drops the pattern’s complaints about a name it no longer builds', () => {
+    const s = resolveNames(
+      [
+        {
+          name: { first: '李', last: '王' },
+          overrides: { userPrincipalName: 'li.wang@example.com' },
+        },
+      ],
+      settings,
+      noneTaken,
+    )[0]!;
+    expect(s.deviations).toEqual([]);
+    expect(s.samAccountName).toBe('li.wang');
+  });
+
+  it('names the CN after a typed display name, bracketing the typed sAMAccountName', () => {
+    const ou = 'OU=Staff,DC=example,DC=com';
+    const s = one(
+      { displayName: 'Johnny Smith', samAccountName: 'jsmith' },
+      { cns: [{ ouDn: ou, cn: 'Johnny Smith' }] },
+      ou,
+    );
+    expect(s).toMatchObject({ displayName: 'Johnny Smith', cn: 'Johnny Smith (jsmith)' });
+  });
+
+  it('catches a typed name another person in the batch already took', () => {
+    const results = resolveNames(
+      [
+        { name: john },
+        { name: { first: 'Jo', last: 'Smith' }, overrides: { samAccountName: 'john.smith' } },
+      ],
+      settings,
+      noneTaken,
+    );
+    expect(results[1]!.deviations).toEqual([
+      expect.objectContaining({ kind: 'taken', source: 'batch', attribute: 'samAccountName' }),
+    ]);
+  });
+});
+
 describe('namingLookups', () => {
   it('asks for every value a suffixed candidate could take', () => {
     const lookups = namingLookups(
@@ -547,6 +692,29 @@ describe('namingLookups', () => {
       upnLocalPrefixes: ['montgomery-smith.christopher', 'smith.john'],
       cns: [{ ouDn: 'OU=Staff,DC=x', cn: 'Christopher Montgomery-Smith' }],
       cnPrefixes: [{ ouDn: 'OU=Staff,DC=x', cn: 'Christopher Montgomery-Smith (' }],
+    });
+  });
+
+  it('asks for typed names as typed, and the pattern’s only where it still applies', () => {
+    const ouDn = 'OU=Staff,DC=x';
+    const name = { first: 'John', last: 'Smith' };
+    expect(
+      namingLookups(
+        [
+          {
+            name,
+            ouDn,
+            overrides: { userPrincipalName: 'jay@example.com', displayName: 'Jay Smith' },
+          },
+          { name, overrides: { samAccountName: 'jsmith' } },
+        ],
+        settings,
+      ),
+    ).toEqual({
+      samAccountNamePrefixes: ['jay', 'jsmith'],
+      upnLocalPrefixes: ['jay', 'john.smith'],
+      cns: [{ ouDn, cn: 'Jay Smith' }],
+      cnPrefixes: [{ ouDn, cn: 'Jay Smith (' }],
     });
   });
 

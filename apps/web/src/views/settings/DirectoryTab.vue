@@ -30,6 +30,8 @@ import Card from '../../design/primitives/Card.vue';
 import EmptyState from '../../design/primitives/EmptyState.vue';
 import StepUpDialog from '../../design/feedback/StepUpDialog.vue';
 import NamingPatternDialog from './NamingPatternDialog.vue';
+import NewUserSettingsDialog from './NewUserSettingsDialog.vue';
+import { PASSWORD_MODE_LABEL } from '../../design/lib/newUser.js';
 import { fmtRelative } from '../../design/lib/format.js';
 
 const route = useRoute();
@@ -429,6 +431,20 @@ async function onNamingSaved(): Promise<void> {
   await load();
 }
 
+// ---- New users ----
+const newUsersTarget = ref<number | null>(null);
+const newUsersOpen = ref(false);
+
+function openNewUsersDialog(id: number): void {
+  newUsersTarget.value = id;
+  newUsersOpen.value = true;
+}
+
+async function onNewUsersSaved(): Promise<void> {
+  toast.add({ severity: 'success', summary: 'Defaults for new users saved', life: 3000 });
+  await load();
+}
+
 // ---- Load directories ----
 async function load(): Promise<void> {
   loading.value = true;
@@ -544,6 +560,26 @@ onMounted(load);
             text
             :aria-label="`Change the naming pattern for ${d.displayName ?? d.domain}`"
             @click="openNamingDialog(d.id)"
+          />
+        </dd>
+        <dt class="fld-label">New users</dt>
+        <dd class="naming-row">
+          <span
+            >Password {{ PASSWORD_MODE_LABEL[d.newUsers.passwordMode].toLowerCase() }} ·
+            {{ d.newUsers.mailFromUpn ? 'email is the UPN' : 'no email' }} ·
+            {{
+              d.newUsers.phoneCountry
+                ? `phone numbers in ${d.newUsers.phoneCountry}`
+                : 'no phone country'
+            }}</span
+          >
+          <Button
+            v-if="canEdit && d.id === auth.actor?.directoryId"
+            label="Change"
+            size="small"
+            text
+            :aria-label="`Change the defaults for new users in ${d.displayName ?? d.domain}`"
+            @click="openNewUsersDialog(d.id)"
           />
         </dd>
         <dt class="fld-label">Domain controllers</dt>
@@ -810,6 +846,12 @@ onMounted(load);
 
   <StepUpDialog v-model:visible="editStepUpOpen" @ok="submitEdit" />
 
+  <NewUserSettingsDialog
+    v-if="newUsersOpen && newUsersTarget !== null"
+    v-model:visible="newUsersOpen"
+    :directory-id="newUsersTarget"
+    @saved="onNewUsersSaved"
+  />
   <NamingPatternDialog
     v-if="namingOpen && namingTarget !== null"
     v-model:visible="namingOpen"

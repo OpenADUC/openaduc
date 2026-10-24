@@ -87,6 +87,8 @@ A handful of settings live in the **app_settings** Postgres table and are manage
 
 Each domain's **naming pattern** (how a new account's username is built from the person's name, `{first}.{last}` by default) and UPN suffix are set on its card in Configuration → Domains and stored with the domain. The preview there shows what the pattern makes of sample names. A change applies to accounts created afterwards; existing accounts keep their names.
 
+Each domain's **defaults for new users** are set on the same card: which password mode the New user form starts in (a random password nobody sees, the default; a generated one shown once; or one the operator types), whether a new user's `mail` is set to their UPN (on by default; `proxyAddresses` is never written), and the country a phone number written without a country code is read in (none by default, so such numbers need one). The operator can change each for the person they're creating.
+
 Env defaults in this file are the floor; the database wins where both exist.
 
 ## Rotation guidance

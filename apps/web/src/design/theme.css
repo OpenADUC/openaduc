@@ -217,6 +217,7 @@
 }
 
 .page-title {
+  white-space: nowrap;
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.015em;

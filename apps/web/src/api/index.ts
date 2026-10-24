@@ -30,8 +30,15 @@ import type {
   LoginRequest,
   MeResponse,
   MoveRequest,
+  NamingCheckRequest,
+  NamingCheckResponse,
   NamingSettings,
   NamingSettingsResponse,
+  NewUserSettings,
+  NewUserSettingsResponse,
+  UserCreateFinishRequest,
+  UserCreateRequest,
+  UserCreateResponse,
   OuContentsResponse,
   OuCreateRequest,
   OuDeleteRequest,
@@ -102,6 +109,7 @@ export interface DirectorySummary {
   syncBindUpn: string | null;
   hasSyncBindPassword: boolean;
   naming: NamingSettings;
+  newUsers: NewUserSettings;
   createdAt: string;
   updatedAt: string;
 }
@@ -412,6 +420,15 @@ export const api = {
     get(id: string): Promise<{ user: UserDetail }> {
       return apiFetch(`/users/${encodeURIComponent(id)}`);
     },
+    create(body: UserCreateRequest): Promise<UserCreateResponse> {
+      return apiFetch('/users', { method: 'POST', body: JSON.stringify(body) });
+    },
+    finishCreate(id: string, body: UserCreateFinishRequest): Promise<UserCreateResponse> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/finish-create`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
     unlock(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/unlock`, {
         method: 'POST',
@@ -660,6 +677,23 @@ export const api = {
       },
       update(id: number, body: NamingSettings): Promise<NamingSettingsResponse> {
         return apiFetch(`/directories/${id}/naming`, { method: 'PUT', body: JSON.stringify(body) });
+      },
+      check(id: number, body: NamingCheckRequest): Promise<NamingCheckResponse> {
+        return apiFetch(`/directories/${id}/naming/check`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+      },
+    },
+    newUsers: {
+      get(id: number): Promise<NewUserSettingsResponse> {
+        return apiFetch(`/directories/${id}/new-users`);
+      },
+      update(id: number, body: NewUserSettings): Promise<NewUserSettingsResponse> {
+        return apiFetch(`/directories/${id}/new-users`, {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        });
       },
     },
     sync(id: number): Promise<{ started: boolean; reason?: string }> {

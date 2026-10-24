@@ -4,7 +4,7 @@ import type { DirectoryPolicy, UserDetail } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
-import { checkPassword, generatePassword } from '../lib/passwordPolicy.js';
+import { checkPassword, generatePassword } from '@openaduc/shared';
 
 export type ResetTarget = Pick<UserDetail, 'id' | 'samAccountName' | 'displayName' | 'locked'>;
 

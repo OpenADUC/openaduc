@@ -299,7 +299,13 @@ function onContext(row: VisibleRow, e: MouseEvent): void {
         kind: 'header',
         label: 'New',
       },
-      { label: 'User…', icon: 'newuser', disabled: true },
+      row.kind === 'ou' && auth.hasCapability('write:user.create')
+        ? {
+            label: 'User…',
+            icon: 'newuser',
+            onSelect: () => store.openDialog({ kind: 'new-user', parentDn: row.dn! }),
+          }
+        : { label: 'User…', icon: 'newuser', disabled: true },
       row.kind === 'ou' && auth.hasCapability('write:group.create')
         ? {
             label: 'Group…',

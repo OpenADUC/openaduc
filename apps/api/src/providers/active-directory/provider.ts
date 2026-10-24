@@ -4,6 +4,7 @@ import {
   type NamingLookups,
   type OuName,
   type TakenNames,
+  type UserCreateStep,
   escapeRdnValueRfc,
   isDnWithin,
 } from '@openaduc/shared';
@@ -51,6 +52,10 @@ import type {
   RestoreUserInput,
   SyncInput,
   UserAttributePatch,
+  UserCreateFinish,
+  UserCreateInput,
+  UserCreateResult,
+  AccountFingerprint,
   UserRenameInput,
   WriteContext,
 } from '../types.js';
@@ -690,13 +695,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Set `unicodePwd` to a new value. AD requires this to be a UTF-16LE
-   * encoding of the password wrapped in double quotes, transmitted over
-   * LDAPS (the cleartext-on-the-wire requirement is enforced by AD itself).
-   *
-   * If `forceChangeAtNextLogin` is true, also set `pwdLastSet=0`. AD treats
-   * that as "needs to change on next sign-in". `unlock` also sets
-   * `lockoutTime=0`. All of it is one modify, so it applies or fails whole.
+   * Set a new password (see passwordChanges), with must-change if
+   * `forceChangeAtNextLogin`. `unlock` also sets `lockoutTime=0`. All of it
+   * is one modify, so it applies or fails whole.
    */
   async resetPassword(
     userId: DirectoryObjectIdentifier,
@@ -709,23 +710,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
         const before = normalizeUser(target);
 
-        const changes: Change[] = [
-          new Change({
-            operation: 'replace',
-            modification: new Attribute({
-              type: 'unicodePwd',
-              values: [encodeUnicodePassword(input.newPassword)],
-            }),
-          }),
-        ];
-        if (input.forceChangeAtNextLogin) {
-          changes.push(
-            new Change({
-              operation: 'replace',
-              modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
-            }),
-          );
-        }
+        const changes = passwordChanges(input.newPassword, input.forceChangeAtNextLogin);
         if (input.unlock) {
           changes.push(
             new Change({
@@ -755,13 +740,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           },
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isPolicy = /policy|complexity|length|history/i.test(message);
-        return {
-          ok: false,
-          reason: isPolicy ? 'policy_violation' : 'directory_error',
-          errorMessage: message,
-        };
+        return classifyPasswordError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -872,16 +851,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           };
         }
 
-        await client.modify(
-          dn,
-          new Change({
-            operation: 'replace',
-            modification: new Attribute({
-              type: 'userAccountControl',
-              values: [String(nextUac)],
-            }),
-          }),
-        );
+        await client.modify(dn, accountControlChange(nextUac));
 
         const afterEntry = await this.findAccountEntry(client, kind, id);
         return {
@@ -1224,7 +1194,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           return { ok: true, before, after: before };
         }
 
-        const conflict = await this.findRenameConflict(client, user, plan);
+        const conflict = await this.findNameClash(
+          client,
+          {
+            samAccountName: plan.newSamAccountName,
+            userPrincipalName: plan.newUserPrincipalName,
+            email: plan.newEmail,
+            cn: plan.newCn,
+          },
+          parentDn(user.distinguishedName),
+          { exceptObjectGuid: user.objectGuid },
+        );
         if (conflict) return { ok: false, reason: 'conflict', errorMessage: conflict, before };
 
         let dn = user.distinguishedName;
@@ -1336,92 +1316,82 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Look for another object already holding a value the rename would take.
-   * Searches the whole domain naming context, not just the configured base
-   * DN, because sAMAccountName and UPN must be unique domain-wide. Returns
-   * a message naming the clash, or null.
+   * Who already holds each name an object would take, other than the
+   * object itself. sAMAccountName, UPN and email are searched across the
+   * whole domain naming context, not just the configured base DN, because
+   * they must be unique domain-wide; the CN only among `parentDn`'s
+   * children. A holder outside the base DN comes back with a null `dn`:
+   * the operator has no business seeing what lives there.
    */
-  private async findRenameConflict(
+  private async nameClashes(
     client: Client,
-    user: DirectoryUser,
-    plan: ReturnType<typeof planUserRename>,
-  ): Promise<string | null> {
+    names: Partial<Record<ClashAttribute, string | null | undefined>>,
+    parentDn: string | null,
+    exceptObjectGuid?: string,
+  ): Promise<Partial<Record<ClashAttribute, { dn: string | null }>>> {
     const domainRoot = await this.domainRoot(client);
-    const checks: { label: string; base: string; scope: 'sub' | 'one'; filter: string }[] = [];
-    if (plan.newSamAccountName) {
-      checks.push({
-        label: `logon name "${plan.newSamAccountName}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(sAMAccountName=${escapeLdapFilter(plan.newSamAccountName)})`,
-      });
-    }
-    if (plan.newUserPrincipalName) {
-      checks.push({
-        label: `UPN "${plan.newUserPrincipalName}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(userPrincipalName=${escapeLdapFilter(plan.newUserPrincipalName)})`,
-      });
-    }
-    if (plan.newEmail) {
-      const v = escapeLdapFilter(plan.newEmail);
-      checks.push({
-        label: `email address "${plan.newEmail}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
-      });
-    }
-    if (plan.newCn) {
-      checks.push({
-        label: `name "${plan.newCn}" in this OU`,
-        base: parentDn(user.distinguishedName) ?? domainRoot,
-        scope: 'one',
-        filter: `(cn=${escapeLdapFilter(plan.newCn)})`,
-      });
-    }
-
-    for (const check of checks) {
-      const { searchEntries } = await client.search(check.base, {
-        scope: check.scope,
-        filter: check.filter,
-        attributes: ['objectGUID', 'distinguishedName'],
-        explicitBufferAttributes: BINARY_ATTRS,
-      });
+    const filters: Record<ClashAttribute, (v: string) => string> = {
+      samAccountName: (v) => `(sAMAccountName=${v})`,
+      userPrincipalName: (v) => `(userPrincipalName=${v})`,
+      email: (v) => `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
+      cn: (v) => `(cn=${v})`,
+    };
+    const holders: Partial<Record<ClashAttribute, { dn: string | null }>> = {};
+    for (const attribute of CLASH_ORDER) {
+      const value = names[attribute]?.trim();
+      if (!value) continue;
+      const { searchEntries } = await client.search(
+        attribute === 'cn' ? (parentDn ?? domainRoot) : domainRoot,
+        {
+          scope: attribute === 'cn' ? 'one' : 'sub',
+          filter: filters[attribute](escapeLdapFilter(value)),
+          attributes: ['objectGUID', 'distinguishedName'],
+          explicitBufferAttributes: BINARY_ATTRS,
+        },
+      );
       const other = searchEntries.find((e) => {
         const guid = e.objectGUID;
-        return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === user.objectGuid);
+        return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === exceptObjectGuid);
       });
-      if (other) return `the ${check.label} is already used by ${other.dn}`;
+      if (other) {
+        holders[attribute] = { dn: isDnWithin(other.dn, this.config.baseDn) ? other.dn : null };
+      }
+    }
+    return holders;
+  }
+
+  /** The first of `names` already held, as a message naming the holder, or null. */
+  private async findNameClash(
+    client: Client,
+    names: Partial<Record<ClashAttribute, string | null | undefined>>,
+    parentDn: string | null,
+    options: { exceptObjectGuid?: string; samLabel?: string } = {},
+  ): Promise<string | null> {
+    const holders = await this.nameClashes(client, names, parentDn, options.exceptObjectGuid);
+    const label: Record<ClashAttribute, string> = {
+      samAccountName: options.samLabel ?? 'logon name',
+      userPrincipalName: 'UPN',
+      email: 'email address',
+      cn: 'name',
+    };
+    for (const attribute of CLASH_ORDER) {
+      const holder = holders[attribute];
+      if (!holder) continue;
+      const where = attribute === 'cn' ? 'in this OU' : 'elsewhere in the domain';
+      return `the ${label[attribute]} "${names[attribute]!.trim()}" is already used ${holder.dn ? `by ${holder.dn}` : where}`;
     }
     return null;
   }
 
   async findNameHolders(input: NewObjectNames): Promise<NameHolders> {
-    return this.withServiceBind((client) => this.nameHolders(client, input));
-  }
-
-  private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
-    // A holder outside the base DN is reported without its DN: the
-    // operator has no business seeing what lives there.
-    const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
-      const [entry] = await this.searchAny(client, base, scope, [filter], ['distinguishedName']);
-      if (!entry) return null;
-      return { dn: isDnWithin(entry.dn, this.config.baseDn) ? entry.dn : null };
-    };
-    const cn = input.cn?.trim();
-    const sam = input.samAccountName?.trim();
-    return {
-      cn: cn ? await holder(input.parentDn, 'one', `(cn=${escapeLdapFilter(cn)})`) : null,
-      samAccountName: sam
-        ? await holder(
-            await this.domainRoot(client),
-            'sub',
-            `(sAMAccountName=${escapeLdapFilter(sam)})`,
-          )
-        : null,
-    };
+    return this.withServiceBind(async (client) => {
+      const holders = await this.nameClashes(
+        client,
+        { cn: input.cn, samAccountName: input.samAccountName },
+        input.parentDn,
+      );
+      return { cn: holders.cn ?? null, samAccountName: holders.samAccountName ?? null };
+    });
   }
 
   async findTakenNames(lookups: NamingLookups): Promise<TakenNames> {
@@ -1527,27 +1497,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   ): Promise<MutationResult & { group?: DirectoryGroup }> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const holders = await this.nameHolders(client, {
-          parentDn: parentDn(input.dn) ?? '',
-          cn: input.cn,
-          samAccountName: input.samAccountName,
-        });
-        const usedBy = (h: { dn: string | null }, where: string) =>
-          h.dn ? `already used by ${h.dn}` : `already used ${where}`;
-        if (holders.cn) {
-          return {
-            ok: false,
-            reason: 'conflict',
-            errorMessage: `the name "${input.cn}" is ${usedBy(holders.cn, 'in this OU')}`,
-          };
-        }
-        if (holders.samAccountName) {
-          return {
-            ok: false,
-            reason: 'conflict',
-            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is ${usedBy(holders.samAccountName, 'elsewhere in the domain')}`,
-          };
-        }
+        const clash = await this.findNameClash(
+          client,
+          { cn: input.cn, samAccountName: input.samAccountName },
+          parentDn(input.dn),
+          { samLabel: 'pre-Windows 2000 name' },
+        );
+        if (clash) return { ok: false, reason: 'conflict', errorMessage: clash };
 
         const attrs: Record<string, string | string[]> = {
           objectClass: ['top', 'group'],
@@ -1577,6 +1533,155 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.unbind().catch(() => undefined);
       }
     });
+  }
+
+  async createUser(
+    input: UserCreateInput,
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult> {
+    const result = await this.asOperator(ctx, async (client): Promise<UserCreateResult> => {
+      try {
+        const clash = await this.findNameClash(
+          client,
+          {
+            samAccountName: input.samAccountName,
+            userPrincipalName: input.userPrincipalName,
+            email: input.mail,
+            cn: input.cn,
+          },
+          parentDn(input.dn),
+        );
+        if (clash) return { ok: false, reason: 'conflict', errorMessage: clash, completed: [] };
+
+        const attrs: Record<string, string | string[]> = {
+          objectClass: ['top', 'person', 'organizationalPerson', 'user'],
+          cn: input.cn,
+          sAMAccountName: input.samAccountName,
+          userPrincipalName: input.userPrincipalName,
+          givenName: input.givenName,
+          sn: input.surname,
+          displayName: input.displayName,
+          // Disabled until it has a password: AD refuses an enabled account
+          // without one that meets the policy.
+          userAccountControl: String(UAC.NORMAL_ACCOUNT | UAC.ACCOUNTDISABLE),
+        };
+        if (input.mail) attrs.mail = input.mail;
+        if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
+        if (input.mobile) attrs.mobile = input.mobile;
+        if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
+        try {
+          await client.add(input.dn, attrs);
+        } catch (err) {
+          return { ...classifyWriteError(err), completed: [] };
+        }
+        const steps: UserCreateStep[] = finish.enable ? ['password', 'enable'] : ['password'];
+        return await this.runCreateSteps(client, input.dn, ['create'], steps, finish);
+      } catch (err) {
+        return { ...classifyWriteError(err), completed: [] };
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+    return 'completed' in result ? result : { ...result, completed: [] };
+  }
+
+  async finishUserCreate(
+    userId: DirectoryObjectIdentifier,
+    steps: readonly UserCreateStep[],
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult> {
+    const result = await this.asOperator(ctx, async (client): Promise<UserCreateResult> => {
+      try {
+        const target = await this.findUserEntry(client, userId);
+        if (!target) {
+          return { ok: false, reason: 'not_found', errorMessage: 'user not found', completed: [] };
+        }
+        return await this.runCreateSteps(
+          client,
+          normalizeUser(target).distinguishedName,
+          [],
+          steps,
+          finish,
+        );
+      } catch (err) {
+        return { ...classifyWriteError(err), completed: [] };
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+    return 'completed' in result ? result : { ...result, completed: [] };
+  }
+
+  async getAccountFingerprint(
+    identifier: DirectoryObjectIdentifier,
+  ): Promise<AccountFingerprint | null> {
+    return this.withServiceBind((client) => this.accountFingerprint(client, identifier));
+  }
+
+  private async accountFingerprint(
+    client: Client,
+    identifier: DirectoryObjectIdentifier,
+  ): Promise<AccountFingerprint | null> {
+    const entry = await this.findUserEntry(client, identifier, [
+      'objectGUID',
+      'whenCreated',
+      'uSNChanged',
+      'pwdLastSet',
+      'lastLogonTimestamp',
+    ]);
+    const guid = entry?.objectGUID;
+    if (!entry || !Buffer.isBuffer(guid)) return null;
+    return {
+      objectGuid: objectGuidToString(guid),
+      whenCreated: asString(entry.whenCreated),
+      usnChanged: asString(entry.uSNChanged),
+      pwdLastSet: asString(entry.pwdLastSet),
+      lastLogonTimestamp: asString(entry.lastLogonTimestamp),
+    };
+  }
+
+  /**
+   * The steps after the add, in order, stopping at the first that fails,
+   * then the account as they left it. The password step also clears
+   * PASSWD_NOTREQD, and enabling leaves exactly a normal account, so a
+   * new account carries no flags nobody chose.
+   */
+  private async runCreateSteps(
+    client: Client,
+    dn: string,
+    done: UserCreateStep[],
+    steps: readonly UserCreateStep[],
+    finish: UserCreateFinish,
+  ): Promise<UserCreateResult> {
+    const completed = [...done];
+    const leftAs = async () => {
+      const id = { kind: 'distinguishedName', value: dn } as const;
+      const entry = await this.findUserEntry(client, id).catch(() => null);
+      const fingerprint = await this.accountFingerprint(client, id).catch(() => null);
+      return {
+        ...(entry ? { user: normalizeUser(entry) } : {}),
+        ...(fingerprint ? { fingerprint } : {}),
+      };
+    };
+    for (const step of steps) {
+      try {
+        if (step === 'password') {
+          await client.modify(dn, [
+            ...passwordChanges(finish.password, finish.mustChange),
+            accountControlChange(UAC.NORMAL_ACCOUNT | UAC.ACCOUNTDISABLE),
+          ]);
+        } else if (step === 'enable') {
+          await client.modify(dn, accountControlChange(UAC.NORMAL_ACCOUNT));
+        }
+        completed.push(step);
+      } catch (err) {
+        const refused = step === 'password' ? classifyPasswordError(err) : classifyWriteError(err);
+        return { ...refused, completed, failedStep: step, ...(await leftAs()) };
+      }
+    }
+    return { ok: true, completed, ...(await leftAs()) };
   }
 
   async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {
@@ -2853,6 +2958,66 @@ function userAccountControlOf(entry: Entry): number {
   const raw = (entry as { userAccountControl?: string | string[] }).userAccountControl;
   const value = Array.isArray(raw) ? raw[raw.length - 1] : raw;
   return value ? Number.parseInt(String(value), 10) : 0;
+}
+
+type ClashAttribute = 'samAccountName' | 'userPrincipalName' | 'email' | 'cn';
+const CLASH_ORDER: readonly ClashAttribute[] = [
+  'samAccountName',
+  'userPrincipalName',
+  'email',
+  'cn',
+];
+
+/**
+ * Set a password, and must-change with it. One modify, so a password AD
+ * refuses leaves `pwdLastSet` alone; without must-change, AD sets
+ * `pwdLastSet` to now. AD requires the value as UTF-16LE in quotes, over
+ * an encrypted connection.
+ */
+function passwordChanges(password: string, mustChange: boolean): Change[] {
+  const changes = [
+    new Change({
+      operation: 'replace',
+      modification: new Attribute({
+        type: 'unicodePwd',
+        values: [encodeUnicodePassword(password)],
+      }),
+    }),
+  ];
+  if (mustChange) {
+    changes.push(
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
+      }),
+    );
+  }
+  return changes;
+}
+
+function accountControlChange(userAccountControl: number): Change {
+  return new Change({
+    operation: 'replace',
+    modification: new Attribute({
+      type: 'userAccountControl',
+      values: [String(userAccountControl)],
+    }),
+  });
+}
+
+/**
+ * A refused password write. AD reports a password its policy rejects
+ * under several result codes (constraint violation, unwilling to
+ * perform), always with extended error 0000052D; Samba names the
+ * restriction instead.
+ */
+function classifyPasswordError(err: unknown): MutationResult {
+  const refused = classifyWriteError(err);
+  return /\b0*52D\b|password_restrictions|policy|complexity|length|history/i.test(
+    refused.errorMessage ?? '',
+  )
+    ? { ...refused, reason: 'policy_violation' }
+    : refused;
 }
 
 /**

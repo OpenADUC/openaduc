@@ -18,3 +18,7 @@ export * from './ldapTransport.js';
 export * from './csv.js';
 export * from './schemas/roles.js';
 export * from './schemas/naming.js';
+export * from './password.js';
+export * from './phone.js';
+export * from './schemas/userCreate.js';
+export * from './userCreation.js';

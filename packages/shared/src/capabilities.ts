@@ -8,6 +8,7 @@ export const CAPABILITIES = [
   'view:audit',
   'export:user',
   'import:user',
+  'write:user.create',
   'write:user.unlock',
   'write:user.resetPassword',
   'write:user.enableDisable',
@@ -42,6 +43,8 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     'read:group',
     'read:computer',
     'export:user',
+    // Onboarding is the most common helpdesk task after password resets.
+    'write:user.create',
     'write:user.unlock',
     'write:user.resetPassword',
     'write:user.enableDisable',
