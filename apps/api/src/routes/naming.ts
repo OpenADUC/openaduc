@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  isDnWithin,
+  parseDn,
   type NamingCheckResponse,
   type NamingSettingsResponse,
   namingCheckRequestSchema,
@@ -12,6 +14,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { BadRequest, NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+import { findCachedOu } from '../services/ouCache.js';
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 
@@ -87,7 +90,21 @@ export async function registerNamingRoutes(app: FastifyInstance): Promise<void> 
     handler: async (req): Promise<NamingCheckResponse> => {
       const directory = await directoryOf(req);
       const body = namingCheckRequestSchema.parse(req.body);
-      const requests = body.names.map(({ ouDn, ...name }) => ({ name, ouDn }));
+      const ous = new Map<string, string>();
+      for (const ouDn of new Set(body.names.flatMap((n) => (n.ouDn ? [n.ouDn] : [])))) {
+        if (!parseDn(ouDn)) throw BadRequest(`"${ouDn}" isn't a distinguished name.`);
+        if (!isDnWithin(ouDn, directory.baseDn)) {
+          throw BadRequest(`"${ouDn}" isn't under this directory's base DN.`);
+        }
+        // A container such as CN=Users isn't in the OU cache; it's still a
+        // place accounts are created, and its search stays under the base.
+        const cached = await findCachedOu(app.db, directory.id, ouDn);
+        ous.set(ouDn, cached?.distinguished_name ?? ouDn);
+      }
+      const requests = body.names.map(({ ouDn, ...name }) => ({
+        name,
+        ouDn: ouDn ? ous.get(ouDn) : undefined,
+      }));
       const provider = await app.services.providers.buildForRequest(req);
       const taken = await provider.findTakenNames(namingLookups(requests, directory.naming));
       return {

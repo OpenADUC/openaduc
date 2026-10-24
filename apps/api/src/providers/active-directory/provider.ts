@@ -2,8 +2,10 @@
 import {
   type LdapTlsMode,
   type NamingLookups,
+  type OuName,
   type TakenNames,
   escapeRdnValueRfc,
+  isDnWithin,
 } from '@openaduc/shared';
 import {
   Attribute,
@@ -1344,7 +1346,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     user: DirectoryUser,
     plan: ReturnType<typeof planUserRename>,
   ): Promise<string | null> {
-    const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
+    const domainRoot = await this.domainRoot(client);
     const checks: { label: string; base: string; scope: 'sub' | 'one'; filter: string }[] = [];
     if (plan.newSamAccountName) {
       checks.push({
@@ -1401,62 +1403,33 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
-    const baseLower = this.config.baseDn.toLowerCase();
     // A holder outside the base DN is reported without its DN: the
     // operator has no business seeing what lives there.
     const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
-      const { searchEntries } = await client.search(base, {
-        scope,
-        filter,
-        attributes: ['distinguishedName'],
-        sizeLimit: 1,
-      });
-      const dn = searchEntries[0]?.dn;
-      if (!dn) return null;
-      const lower = dn.toLowerCase();
-      return { dn: lower === baseLower || lower.endsWith(`,${baseLower}`) ? dn : null };
+      const [entry] = await this.searchAny(client, base, scope, [filter], ['distinguishedName']);
+      if (!entry) return null;
+      return { dn: isDnWithin(entry.dn, this.config.baseDn) ? entry.dn : null };
     };
     const cn = input.cn?.trim();
     const sam = input.samAccountName?.trim();
-    // sAMAccountName is unique across the domain, not just the base DN.
-    const domainRoot = sam
-      ? ((await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn)
-      : null;
     return {
       cn: cn ? await holder(input.parentDn, 'one', `(cn=${escapeLdapFilter(cn)})`) : null,
-      samAccountName:
-        sam && domainRoot
-          ? await holder(domainRoot, 'sub', `(sAMAccountName=${escapeLdapFilter(sam)})`)
-          : null,
+      samAccountName: sam
+        ? await holder(
+            await this.domainRoot(client),
+            'sub',
+            `(sAMAccountName=${escapeLdapFilter(sam)})`,
+          )
+        : null,
     };
   }
 
   async findTakenNames(lookups: NamingLookups): Promise<TakenNames> {
     return this.withServiceBind(async (client) => {
-      // sAMAccountName and UPN are unique domain-wide, not just in the base DN.
-      const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
-      const search = async (
-        base: string,
-        scope: 'one' | 'sub',
-        clauses: string[],
-        attributes: string[],
-      ) => {
-        const entries: Entry[] = [];
-        // Bounded filters, so a 500-row import doesn't send one huge one.
-        for (let i = 0; i < clauses.length; i += 50) {
-          const { searchEntries } = await client.search(base, {
-            scope,
-            filter: `(|${clauses.slice(i, i + 50).join('')})`,
-            attributes,
-            paged: { pageSize: 500 },
-          });
-          entries.push(...searchEntries);
-        }
-        return entries;
-      };
-
+      const domainRoot = await this.domainRoot(client);
       const samAccountNames = (
-        await search(
+        await this.searchAny(
+          client,
           domainRoot,
           'sub',
           lookups.samAccountNamePrefixes.map((p) => `(sAMAccountName=${escapeLdapFilter(p)}*)`),
@@ -1464,7 +1437,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         )
       ).flatMap((e) => asStringArray(e.sAMAccountName));
 
-      const addressEntries = await search(
+      const addressEntries = await this.searchAny(
+        client,
         domainRoot,
         'sub',
         lookups.upnLocalPrefixes.map((p) => {
@@ -1481,17 +1455,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           .map((a) => a.slice(5)),
       ]);
 
-      const cns: { ouDn: string; cn: string }[] = [];
       const byOu = new Map<string, string[]>();
-      for (const { ouDn, cn } of lookups.cns) byOu.set(ouDn, [...(byOu.get(ouDn) ?? []), cn]);
-      for (const [ouDn, wanted] of byOu) {
+      const want = (ouDn: string, clause: string) =>
+        byOu.set(ouDn, [...(byOu.get(ouDn) ?? []), clause]);
+      for (const { ouDn, cn } of lookups.cns) want(ouDn, `(cn=${escapeLdapFilter(cn)})`);
+      for (const { ouDn, cn } of lookups.cnPrefixes) want(ouDn, `(cn=${escapeLdapFilter(cn)}*)`);
+      const cns: OuName[] = [];
+      for (const [ouDn, clauses] of byOu) {
+        // Callers check this; a search outside the base DN never runs.
+        if (!isDnWithin(ouDn, this.config.baseDn)) continue;
         try {
-          const found = await search(
-            ouDn,
-            'one',
-            wanted.map((cn) => `(cn=${escapeLdapFilter(cn)})`),
-            ['cn'],
-          );
+          const found = await this.searchAny(client, ouDn, 'one', clauses, ['cn']);
           for (const e of found) for (const cn of asStringArray(e.cn)) cns.push({ ouDn, cn });
         } catch (err) {
           // An OU that doesn't exist yet holds no names; the create checks it.
@@ -1500,6 +1474,27 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       }
       return { samAccountNames, userPrincipalNames, mailAddresses, cns };
     });
+  }
+
+  /** Everything matching any of `clauses`, in bounded filters so 500 names don't make one huge one. */
+  private async searchAny(
+    client: Client,
+    base: string,
+    scope: 'one' | 'sub',
+    clauses: string[],
+    attributes: string[],
+  ): Promise<Entry[]> {
+    const entries: Entry[] = [];
+    for (let i = 0; i < clauses.length; i += 50) {
+      const { searchEntries } = await client.search(base, {
+        scope,
+        filter: `(|${clauses.slice(i, i + 50).join('')})`,
+        attributes,
+        paged: { pageSize: 500 },
+      });
+      entries.push(...searchEntries);
+    }
+    return entries;
   }
 
   async getUpnSuffixes(): Promise<string[]> {
@@ -1615,8 +1610,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     // Only a group of the account's own domain can be its primary group.
     if (rid === null || !group.sid?.startsWith('S-1-5-21-')) return 0;
     try {
-      const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
-      const { searchEntries } = await client.search(domainRoot, {
+      const { searchEntries } = await client.search(await this.domainRoot(client), {
         scope: 'sub',
         filter: `(primaryGroupID=${rid})`,
         attributes: ['distinguishedName'],
@@ -1665,6 +1659,14 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.unbind().catch(() => undefined);
       }
     });
+  }
+
+  /**
+   * The domain's naming context: sAMAccountName and UPN are unique across
+   * it, not just under the configured base DN.
+   */
+  private async domainRoot(client: Client): Promise<string> {
+    return (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
   }
 
   private async resolveDefaultNamingContext(client: Client): Promise<string | null> {
