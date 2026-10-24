@@ -2,7 +2,6 @@
 import {
   NOTHING_TAKEN,
   childDn,
-  generatePassword,
   phonesToWrite,
   plannedSteps,
   remainingSteps,
@@ -38,16 +37,13 @@ import {
 import { membershipRequirement } from '../services/groupMembershipWrite.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
+import { randomPassword, readBack } from '../services/userCreate.js';
 import { findCachedUser, upsertUser } from '../services/userCache.js';
 import { findUnfinishedCreate, finishRefusal } from '../services/userCreationProgress.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
-
-// Long, because nobody types it: it only has to keep the account shut
-// until the person sets their own in Entra.
-const RANDOM_PASSWORD_LENGTH = 32;
 
 const DOMAIN_USERS_RID = 513;
 
@@ -493,23 +489,6 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
 }
 
 /**
- * Fill in what the operator's bind couldn't read back with the service
- * account, so the audit row names the account and records how it was
- * left. Without that, finishing it later is refused.
- */
-async function readBack(
-  provider: DirectoryProvider,
-  r: UserCreateResult,
-  dn: string,
-): Promise<UserCreateResult> {
-  if (!r.completed.includes('create') || (r.user && r.fingerprint)) return r;
-  const id = { kind: 'distinguishedName', value: dn } as const;
-  const user: DirectoryUser | null = r.user ?? (await provider.getUser(id).catch(() => null));
-  const fingerprint = r.fingerprint ?? (await provider.getAccountFingerprint(id).catch(() => null));
-  return { ...r, ...(user ? { user } : {}), ...(fingerprint ? { fingerprint } : {}) };
-}
-
-/**
  * What the steps after the add use. Random mode's password is made here
  * and never leaves the server; must-change is off in that mode (see
  * userCreatePasswordSchema).
@@ -527,9 +506,8 @@ async function finishFor(
   if (password && password.mode !== 'random') {
     return { password: password.password, mustChange: password.mustChange, groups };
   }
-  const policy = await provider.getDomainPolicy().catch(() => null);
   return {
-    password: generatePassword(policy, options.account, RANDOM_PASSWORD_LENGTH),
+    password: await randomPassword(provider, options.account),
     mustChange: false,
     groups,
   };
