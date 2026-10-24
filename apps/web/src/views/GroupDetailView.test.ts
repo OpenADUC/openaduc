@@ -7,6 +7,7 @@ import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GroupLicenses, LicensedGroups } from '@openaduc/shared';
 import { ApiError } from '../api/client.js';
 
 const jane = {
@@ -73,6 +74,12 @@ const api = {
       role: null,
     })),
     remove: vi.fn(async () => ({ ok: true })),
+    licensed: vi.fn(async (): Promise<LicensedGroups> => ({
+      enabled: false,
+      refreshedAt: null,
+      groups: [],
+    })),
+    licenses: vi.fn<(id: string) => Promise<GroupLicenses>>(),
   },
   users: {
     search: vi.fn(async () => ({
@@ -99,6 +106,7 @@ async function openMembers(
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().actor = {
+    directoryId: 1,
     capabilities,
     elevated: {
       active: true,
@@ -304,5 +312,35 @@ describe('shortcuts on a group’s page', () => {
   it('offer no Add member key to an operator who can’t manage members', async () => {
     await openMembers('g1', ['read:group']);
     expect(listed()).toEqual(['Tabs 1 Overview', 'Tabs 2 Members']);
+  });
+});
+
+describe('a group’s licenses', () => {
+  const e3 = { skuId: 'e3', skuPartNumber: 'SPE_E3', name: 'Microsoft 365 E3' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.groups.licensed.mockResolvedValue({
+      enabled: true,
+      refreshedAt: '2026-10-24T11:00:00Z',
+      groups: [{ id: 'g5', licenses: [e3] }],
+    });
+    api.groups.licenses.mockResolvedValue({
+      status: 'synced',
+      licenses: [{ ...e3, disabledPlans: 1 }],
+      processingState: 'ProcessingComplete',
+    });
+  });
+  afterAll(() => {
+    api.groups.licensed.mockResolvedValue({ enabled: false, refreshedAt: null, groups: [] });
+  });
+
+  it('shows what the group grants, read live, when the Entra integration reads licenses', async () => {
+    const { page } = await openMembers('g1', ['read:group'], 'overview');
+    expect(api.groups.licenses).toHaveBeenCalledWith('g1');
+    const card = page.findAll('.glic').at(0);
+    expect(card?.text()).toContain('Members get these through the group');
+    expect(card?.text()).toContain('Microsoft 365 E3');
+    expect(card?.text()).toContain('1 service plan turned off');
   });
 });

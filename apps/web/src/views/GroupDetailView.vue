@@ -16,6 +16,8 @@ import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import GroupLicenseList from '../design/primitives/GroupLicenseList.vue';
+import { useLicensedGroupsStore } from '../stores/licensedGroups.js';
 import AppToast from '../design/feedback/AppToast.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import DeleteGroupDialog from '../design/feedback/DeleteGroupDialog.vue';
@@ -41,6 +43,9 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
+// Whether the directory's Entra integration shows licenses.
+const licensed = useLicensedGroupsStore();
+onMounted(() => void licensed.ensureLoaded());
 
 // Member-add dialog state — opens on "Add member", searches users and
 // groups, and adds the selected one the way its own page would.
@@ -328,6 +333,10 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
                 + {{ memberCount - membersTop.length }} more
               </li>
             </ul>
+          </Card>
+
+          <Card v-if="licensed.enabled" title="Licenses">
+            <GroupLicenseList :group-id="group.id" :name="group.name ?? 'This group'" />
           </Card>
         </div>
 
