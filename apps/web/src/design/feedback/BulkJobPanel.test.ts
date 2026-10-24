@@ -17,6 +17,7 @@ function aJob(
     subject: null,
     status,
     pauseReason: null,
+    revertsJobId: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: '2026-10-23T10:00:00.000Z',
     finishedAt: null,

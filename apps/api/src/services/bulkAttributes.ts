@@ -65,6 +65,8 @@ interface Field<V> {
   patch(value: V): UserAttributePatch;
   /** By attribute, as the job's row keeps it. */
   snapshot(value: V): Record<string, unknown>;
+  /** The value a row's snapshot holds; undefined when it doesn't hold the field. */
+  fromSnapshot(snapshot: Record<string, unknown>): V | undefined;
   display(value: V, managerName: (dn: string) => string): string | null;
 }
 
@@ -87,6 +89,7 @@ function textField(
     same: (a, b) => a === b,
     patch: (value) => ({ [attribute]: value }),
     snapshot: (value) => ({ [attribute]: value }),
+    fromSnapshot: (s) => (attribute in s ? text(s[attribute]) : undefined),
     display: (value) => value,
   };
 }
@@ -124,6 +127,7 @@ const FIELDS: { [F in BulkAttributeField]: Field<FieldValues[F]> } = {
     same: (a, b) => a?.toLowerCase() === b?.toLowerCase(),
     patch: (dn) => ({ managerDn: dn }),
     snapshot: (dn) => ({ managerDn: dn }),
+    fromSnapshot: (s) => ('managerDn' in s ? text(s['managerDn']) : undefined),
     display: (dn, managerName) => (dn === null ? null : managerName(dn)),
   },
   description: textField('description'),
@@ -134,6 +138,7 @@ const FIELDS: { [F in BulkAttributeField]: Field<FieldValues[F]> } = {
     same: (a, b) => a.length === b.length && a.every((v, i) => v === b[i]),
     patch: (values) => ({ postOfficeBox: values.length > 0 ? values : null }),
     snapshot: (values) => ({ postOfficeBox: values }),
+    fromSnapshot: (s) => ('postOfficeBox' in s ? poBoxes(s['postOfficeBox']) : undefined),
     display: (values) => (values.length > 0 ? values.join(', ') : null),
   },
   l: textField('l'),
@@ -152,6 +157,8 @@ const FIELDS: { [F in BulkAttributeField]: Field<FieldValues[F]> } = {
     same: (a, b) => a.c === b.c && a.countryCode === b.countryCode,
     patch: (v) => ({ c: v.c, co: v.co, countryCode: v.countryCode ?? COUNTRY_NONE }),
     snapshot: (v) => ({ c: v.c, co: v.co, countryCode: v.countryCode ?? COUNTRY_NONE }),
+    fromSnapshot: (s) =>
+      'countryCode' in s ? country(s['c'], s['co'], s['countryCode']) : undefined,
     display: (v) => v.co ?? v.c,
   },
 };
@@ -200,6 +207,27 @@ export function fieldChanges(
 export function patchFor(changes: readonly FieldChange[]): UserAttributePatch {
   return Object.assign({}, ...changes.map((c) => field(c.field).patch(c.after)));
 }
+
+/** The fields a row's before or after snapshot holds, as compared: what rowSnapshots kept. */
+export function snapshotValues(snapshot: Record<string, unknown>): AttributeValues {
+  const out: AttributeValues = {};
+  for (const f of BULK_ATTRIBUTE_FIELDS) {
+    const value = field(f).fromSnapshot(snapshot);
+    if (value !== undefined) (out as Record<string, unknown>)[f] = value;
+  }
+  return out;
+}
+
+/** Whether two of a field's values are the same, as a bulk edit compares them. */
+export const sameValue = (f: BulkAttributeField, a: unknown, b: unknown): boolean =>
+  field(f).same(a, b);
+
+/** A field's value as shown: a manager by name, a country by its name. */
+export const shownValue = (
+  f: BulkAttributeField,
+  value: unknown,
+  managerName: (dn: string) => string,
+): string | null => field(f).display(value, managerName);
 
 /** A row's before and after, by attribute, for the job to keep. */
 export function rowSnapshots(changes: readonly FieldChange[]): {
@@ -368,7 +396,7 @@ export async function previewAttributes(
 }
 
 /** Cached users' names by lowercased DN. */
-async function namesByDn(
+export async function namesByDn(
   db: Kysely<DB>,
   providerId: number,
   dns: string[],

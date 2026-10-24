@@ -353,6 +353,20 @@ export const BULK_ACCOUNT_CAPABILITIES = {
   clearPasswordNeverExpires: 'write:user.enableDisable',
 } as const satisfies Record<BulkAccountOp, Capability>;
 
+/** The capability each bulk action takes, as its single-object write does. */
+export const BULK_JOB_CAPABILITIES = {
+  'user.disable': 'write:user.enableDisable',
+  'user.enable': 'write:user.enableDisable',
+  'user.unlock': 'write:user.unlock',
+  'user.group.add': 'write:group.membership',
+  'user.group.remove': 'write:group.membership',
+  'user.update': 'write:user.attributes',
+  'user.move': BULK_ACCOUNT_CAPABILITIES.move,
+  'user.accountExpiry.set': BULK_ACCOUNT_CAPABILITIES.accountExpiry,
+  'user.passwordMustChange.set': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
+  'user.passwordNeverExpires.clear': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
+} as const satisfies Record<BulkJobAction, Capability>;
+
 export const bulkAccountChangeSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('move'), targetOuDn: moveRequestSchema.shape.targetOuDn }).strict(),
   z
@@ -470,6 +484,8 @@ export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 export const bulkJobSchema = z.object({
   id: z.string(),
   action: z.enum(BULK_JOB_ACTIONS),
+  /** The job this one reverts: it puts back what that job changed, row by row. */
+  revertsJobId: z.string().nullable(),
   /** Null for a job that acts on its rows alone, as disable does. */
   subject: bulkJobSubjectSchema.nullable(),
   status: z.enum(BULK_JOB_STATUSES),
@@ -511,5 +527,96 @@ export const auditBulkSummarySchema = z.object({
   counts: bulkJobCountsSchema.nullable(),
   /** How many rows it was started with, from its `bulk.create` event. */
   total: z.number().int(),
+  /** The job it reverts, from its `bulk.create` event. */
+  revertsJobId: z.string().nullable(),
+  /**
+   * Whether it can be reverted now: its action can be undone, it has
+   * stopped, it isn't a revert itself, and no revert of it is under way.
+   */
+  revertible: z.boolean(),
+  /** Its latest revert, if it has one. */
+  revertedBy: z
+    .object({
+      jobId: z.string(),
+      actorDisplayName: z.string().nullable(),
+      createdAt: z.string(),
+      status: z.enum(BULK_JOB_STATUSES),
+    })
+    .nullable(),
 });
 export type AuditBulkSummary = z.infer<typeof auditBulkSummarySchema>;
+
+/**
+ * What a revert compares and puts back: one of a bulk edit's fields,
+ * whether the account is enabled, the OU it's in (by DN), when it expires
+ * (an ISO time, or null for never), must-change, "password never
+ * expires", or membership of one group.
+ */
+export const BULK_REVERT_FIELDS = [
+  ...BULK_ATTRIBUTE_FIELDS,
+  'enabled',
+  'ou',
+  'accountExpires',
+  'passwordMustChange',
+  'passwordNeverExpires',
+  'group',
+] as const;
+export type BulkRevertField = (typeof BULK_REVERT_FIELDS)[number];
+
+const revertValueSchema = z.union([z.string(), z.boolean()]).nullable();
+
+/** One thing a revert puts back for a user, as shown: a manager by name, a country by its name. */
+export const bulkRevertChangeSchema = z.object({
+  field: z.enum(BULK_REVERT_FIELDS),
+  /** The group's name, for a membership. */
+  group: z.string().optional(),
+  /** What the job left it as. */
+  job: revertValueSchema,
+  /** What it is now, as the cache has it; null too when the cache hasn't read it. */
+  now: revertValueSchema,
+  /** What the revert puts back: the value before the job. */
+  restore: revertValueSchema,
+});
+export type BulkRevertChange = z.infer<typeof bulkRevertChangeSchema>;
+
+export const bulkRevertPreviewUserSchema = previewUserSchema.extend({
+  changes: z.array(bulkRevertChangeSchema),
+});
+export type BulkRevertPreviewUser = z.infer<typeof bulkRevertPreviewUserSchema>;
+
+/**
+ * What reverting a job would do, read from the cache. Only rows the job
+ * changed (succeeded or partly) are considered. Lists hold the first
+ * PREVIEW_LIST_LIMIT by name.
+ */
+export const bulkJobRevertPreviewSchema = z.object({
+  /** The rows it reverts, each with what it puts back. */
+  revert: z.object({ count: z.number().int(), users: z.array(bulkRevertPreviewUserSchema) }),
+  /**
+   * Rows changed again since the job, each with what changed: left as
+   * they are unless the operator includes them.
+   */
+  modified: z.object({ count: z.number().int(), users: z.array(bulkRevertPreviewUserSchema) }),
+  /** Rows already as they were before the job. */
+  unchanged: previewUserListSchema,
+  /** Rows it can't revert, and why. */
+  notRevertible: z.object({
+    count: z.number().int(),
+    users: z.array(previewUserSchema.extend({ reason: z.string() })),
+  }),
+  /** The job's rows that failed or were skipped: they changed nothing to revert. */
+  excluded: z.number().int(),
+  /** Starting the revert takes this back. */
+  previewToken: z.string(),
+});
+export type BulkJobRevertPreview = z.infer<typeof bulkJobRevertPreviewSchema>;
+
+/**
+ * Reverting a job as previewed. `include` names the rows changed since
+ * the job to revert anyway, by user id, or `all` of them.
+ */
+export const bulkJobRevertRequestSchema = z.object({
+  previewToken: z.string().min(1),
+  include: z.union([z.literal('all'), z.array(z.guid()).max(MAX_BULK_JOB_ROWS)]).default([]),
+});
+export type BulkJobRevertRequest = z.input<typeof bulkJobRevertRequestSchema>;
