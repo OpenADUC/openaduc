@@ -2,9 +2,9 @@
 import { phoneCountries, type PasswordMode } from '@openaduc/shared';
 
 export const PASSWORD_MODE_LABEL: Record<PasswordMode, string> = {
-  random: 'Random password, never shown',
-  generate: 'Generated password, shown once',
-  set: 'Password typed by the operator',
+  random: 'Random, never shown',
+  generate: 'Generated, shown once',
+  set: 'Typed in',
 };
 
 /** Every country a phone number can be read in, by name. */

@@ -13,6 +13,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import {
   DEFAULT_NEW_USER_SETTINGS,
+  NOTHING_TAKEN,
   approvalKey,
   generatePassword,
   needsApproval,
@@ -35,7 +36,6 @@ import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
 
 const CHECK_DELAY_MS = 300;
-const NOTHING_TAKEN = { samAccountNames: [], userPrincipalNames: [], mailAddresses: [], cns: [] };
 
 export const STEP_LABEL: Record<UserCreateStep, string> = {
   create: 'create the account',
@@ -352,11 +352,7 @@ export function useUserCreation(options: {
   const passwordLeft = computed(() => !!unfinished.value?.remaining.includes('password'));
   const canFinish = computed(
     () =>
-      !!unfinished.value?.id &&
-      !submitting.value &&
-      (!passwordLeft.value ||
-        form.passwordMode === 'random' ||
-        plan.value.passwordChecks.every((c) => c.met)),
+      !!unfinished.value?.id && !submitting.value && (!passwordLeft.value || !!plan.value.password),
   );
 
   function finish(): void {
@@ -373,18 +369,7 @@ export function useUserCreation(options: {
     try {
       await settle(
         await api.users.finishCreate(left.id, {
-          ...(passwordLeft.value
-            ? {
-                password:
-                  form.passwordMode === 'random'
-                    ? { mode: 'random' as const }
-                    : {
-                        mode: form.passwordMode,
-                        password: form.password,
-                        mustChange: plan.value.mustChange,
-                      },
-              }
-            : {}),
+          ...(passwordLeft.value && plan.value.password ? { password: plan.value.password } : {}),
           enabled: form.enabled,
         }),
       );

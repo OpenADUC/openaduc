@@ -565,7 +565,7 @@ onMounted(load);
         <dt class="fld-label">New users</dt>
         <dd class="naming-row">
           <span
-            >{{ PASSWORD_MODE_LABEL[d.newUsers.passwordMode] }} ·
+            >Password {{ PASSWORD_MODE_LABEL[d.newUsers.passwordMode].toLowerCase() }} ·
             {{ d.newUsers.mailFromUpn ? 'email is the UPN' : 'no email' }} ·
             {{
               d.newUsers.phoneCountry

@@ -17,6 +17,7 @@ import { PASSWORD_MODES, type NewUserField, type UserCreateResponse } from '@ope
 import { useUserCreation } from '../composables/useUserCreation.js';
 import { useOuTree } from '../composables/useOuTree.js';
 import { ouTreeNodes } from '../lib/ouTree.js';
+import { PASSWORD_MODE_LABEL } from '../lib/newUser.js';
 
 const props = defineProps<{
   visible: boolean;
@@ -72,8 +73,7 @@ const ouSelection = computed<Record<string, boolean>>({
   set: (keys) => (form.ouDn = Object.keys(keys).find((k) => keys[k]) ?? null),
 });
 
-const MODE_LABEL = { random: 'Random', generate: 'Generate', set: 'Type one' } as const;
-const modeOptions = PASSWORD_MODES.map((value) => ({ value, label: MODE_LABEL[value] }));
+const modeOptions = PASSWORD_MODES.map((value) => ({ value, label: PASSWORD_MODE_LABEL[value] }));
 const passwordMode = computed({
   get: () => form.passwordMode,
   set: (mode) => creation.setPasswordMode(mode),

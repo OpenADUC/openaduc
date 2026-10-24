@@ -69,8 +69,18 @@ export const expirySetSummary = (name: string, expiresAt: string | null) =>
 export const expiryFailedSummary = (name: string) =>
   `Couldn’t change when ${name}’s account expires`;
 
-/** The success toast for a new user, wherever it was created from. */
-export function userCreatedToast(created: UserCreateResponse): ToastMessageOptions {
+/**
+ * Say a new user is ready, wherever it was created from. A create that
+ * left steps undone isn't a success: its dialog says what's left.
+ */
+export function announceUserCreated(
+  toast: { add: (message: ToastMessageOptions) => void },
+  created: UserCreateResponse,
+): void {
+  if (created.remaining.length === 0) toast.add(userCreatedToast(created));
+}
+
+function userCreatedToast(created: UserCreateResponse): ToastMessageOptions {
   const enabled = created.completed.includes('enable');
   return {
     severity: 'success',
