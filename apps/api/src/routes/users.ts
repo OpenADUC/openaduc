@@ -28,8 +28,9 @@ import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
 import { lookupsFor, matchEntries } from '../lib/userMatch.js';
 import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
-import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
+import { findCachedUser } from '../services/userCache.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import type { UserCacheRecordsTable } from '../db/types.js';
@@ -813,27 +814,10 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         ),
       };
 
-      // Account view audit (configurable). Deduped per session+target on a
-      // short window so reloads — including the post-write refresh — don't
-      // pile up additional `user.view` rows next to the action they
-      // followed. The first view per session per user still records.
-      if (
-        (await app.services.settings.get<boolean>('audit.account_view_enabled', true)) &&
-        app.services.audit.shouldRecordView(req.actor?.session.id ?? null, 'user', detail.id)
-      ) {
-        await app.services.audit
-          .recordEvent({
-            ...auditContextFromRequest(req),
-            action: 'user.view',
-            result: 'success',
-            actorAuthMethod: 'ad-password',
-            providerId: provider.id,
-            targetType: 'user',
-            targetId: detail.id,
-            targetDn: detail.distinguishedName,
-          })
-          .catch((err) => req.log.error({ err }, 'audit insert failed for user.view'));
-      }
+      await recordUserView(app, req, provider.id, {
+        id: detail.id,
+        distinguishedName: detail.distinguishedName,
+      });
 
       return { user: userDetailSchema.parse(detail) };
     },
@@ -1618,13 +1602,7 @@ async function resolveManager(
   dn: string | null,
 ): Promise<{ id: string | null; distinguishedName: string; displayName: string | null } | null> {
   if (!dn) return null;
-  const row = await app.db
-    .selectFrom('user_cache_records')
-    .where('provider_id', '=', providerId)
-    .where('deleted_at', 'is', null)
-    .where(sql<string>`lower(distinguished_name)`, '=', dn.toLowerCase())
-    .select(['object_guid', 'display_name', 'sam_account_name'])
-    .executeTakeFirst();
+  const row = await findCachedUser(app.db, providerId, { dn });
   return {
     id: row?.object_guid ?? null,
     distinguishedName: dn,
