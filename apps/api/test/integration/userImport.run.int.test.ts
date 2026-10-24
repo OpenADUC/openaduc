@@ -187,7 +187,7 @@ describe('running an import', () => {
     });
 
     // Created once: the retry made no second create, and asked nothing more of Engineering.
-    const events = await audits({ targetId: partial!.id });
+    const events = await audits({ targetId: partial!.id! });
     expect(events.filter((e) => e.action === 'user.create')).toHaveLength(1);
     const groupAdds = events.filter((e) => e.action === 'user.group.add');
     expect(groupAdds.map((e) => [e.metadata_json?.['groupName'], e.result])).toEqual([

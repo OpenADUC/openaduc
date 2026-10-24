@@ -330,7 +330,7 @@ describe('editing users’ attributes in bulk', () => {
       }
       expect(await directoryValues(SAM.admin)).toMatchObject({ department: [], c: [] });
       expect(
-        (await rowsWith(job.id, 'failed')).map((r) => [nameOf(r.targetId), r.errorCode]),
+        (await rowsWith(job.id, 'failed')).map((r) => [nameOf(r.targetId!), r.errorCode]),
       ).toEqual(
         expect.arrayContaining([
           ['admin', 'permission_denied'],
