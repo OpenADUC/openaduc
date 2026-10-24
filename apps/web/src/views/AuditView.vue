@@ -19,6 +19,9 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
+import AuditBulkEvents from '../design/primitives/AuditBulkEvents.vue';
+import { describeBulkEntry } from '../design/lib/bulkJob.js';
+import { resultBadge } from '../design/lib/auditResult.js';
 import type { MfaRegistrationRow, MfaRegistrationStatus, SignInEventApp } from '@openaduc/shared';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 
@@ -272,7 +275,11 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = null;
   try {
-    const params: Record<string, string | number> = { page: page.value, pageSize: pageSize.value };
+    const params: Record<string, string | number> = {
+      page: page.value,
+      pageSize: pageSize.value,
+      groupBulk: 1,
+    };
     if (action.value.trim()) params.action = action.value.trim();
     if (result.value !== 'all') params.result = result.value;
     if (correlationId.value.trim()) params.correlationId = correlationId.value.trim();
@@ -306,22 +313,34 @@ function onPage(ev: DataTablePageEvent): void {
   void load();
 }
 
-function resultBadge(r: string): string {
-  if (r === 'success') return 'badge-green';
-  if (r === 'failure' || r === 'denied') return 'badge-red';
-  return 'badge-muted';
-}
-
 // Clicking a row opens the detail modal. We pass the full row through so the
 // dialog can render every field (actor, request context, target, before/after,
 // metadata) without a second round-trip.
 const detailEvent = ref<AuditEventRow | null>(null);
 const detailOpen = ref(false);
 
-function openDetail(ev: DataTableRowClickEvent): void {
-  detailEvent.value = ev.data as AuditEventRow;
+function openEvent(event: AuditEventRow): void {
+  detailEvent.value = event;
   detailOpen.value = true;
 }
+
+// A bulk job's entry opens to list its events instead.
+const expandedRows = ref<Record<string, boolean>>({});
+
+function toggleBulk(row: AuditEventRow): void {
+  const next = { ...expandedRows.value };
+  if (next[row.id]) delete next[row.id];
+  else next[row.id] = true;
+  expandedRows.value = next;
+}
+
+function openDetail(ev: DataTableRowClickEvent): void {
+  const row = ev.data as AuditEventRow;
+  if (row.bulk) toggleBulk(row);
+  else openEvent(row);
+}
+
+const bulkEntry = (row: AuditEventRow) => describeBulkEntry(row.bulk!, row.actorDisplayName);
 
 onMounted(load);
 </script>
@@ -405,6 +424,7 @@ onMounted(load);
         :first="(page - 1) * pageSize"
         :rows-per-page-options="[25, 50, 100, 200]"
         data-key="id"
+        :expanded-rows="expandedRows"
         class="audit-table"
         @page="onPage"
         @row-click="openDetail"
@@ -440,6 +460,22 @@ onMounted(load);
             </template>
           </EmptyState>
         </template>
+        <Column :style="{ width: '36px' }">
+          <template #body="{ data }">
+            <button
+              v-if="data.bulk"
+              type="button"
+              class="bulk-toggle"
+              :aria-expanded="!!expandedRows[data.id]"
+              :aria-label="
+                expandedRows[data.id] ? 'Hide the job’s events' : 'Show the job’s events'
+              "
+              @click.stop="toggleBulk(data)"
+            >
+              <i :class="expandedRows[data.id] ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+            </button>
+          </template>
+        </Column>
         <Column header="Time" :style="{ width: '170px' }">
           <template #body="{ data }">
             <div class="time-cell">
@@ -468,7 +504,8 @@ onMounted(load);
         </Column>
         <Column header="Target" :style="{ minWidth: '200px' }">
           <template #body="{ data }">
-            <span v-if="data.targetDn" class="dn-cell mono">{{ data.targetDn }}</span>
+            <span v-if="data.bulk" class="bulk-title">{{ bulkEntry(data).title }}</span>
+            <span v-else-if="data.targetDn" class="dn-cell mono">{{ data.targetDn }}</span>
             <span v-else-if="data.targetType" class="cell-muted"
               >{{ data.targetType
               }}{{ data.targetId ? `:${data.targetId.slice(0, 8)}…` : '' }}</span
@@ -476,9 +513,17 @@ onMounted(load);
             <span v-else class="cell-muted">—</span>
           </template>
         </Column>
-        <Column header="Result" :style="{ width: '110px' }">
+        <Column header="Result" :style="{ minWidth: '110px' }">
           <template #body="{ data }">
-            <span class="badge" :class="resultBadge(data.result)">
+            <span
+              v-if="data.bulk && bulkEntry(data).outcome"
+              class="badge bulk-outcome"
+              :class="`badge-${bulkEntry(data).tone}`"
+            >
+              <span class="badge-dot" />
+              {{ bulkEntry(data).outcome }}
+            </span>
+            <span v-else class="badge" :class="resultBadge(data.result)">
               <span class="badge-dot" />
               {{ data.result }}
             </span>
@@ -490,6 +535,9 @@ onMounted(load);
             <span v-else class="cell-muted">—</span>
           </template>
         </Column>
+        <template #expansion="{ data }">
+          <AuditBulkEvents :bulk-job-id="data.bulkJobId" @select="openEvent" />
+        </template>
       </DataTable>
 
       <AuditEventDialog v-model:visible="detailOpen" :event="detailEvent" />
@@ -937,5 +985,21 @@ onMounted(load);
 
 :deep(.audit-table .p-datatable-tbody > tr) {
   cursor: pointer;
+}
+
+.bulk-toggle {
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.bulk-title {
+  font-weight: 500;
+}
+
+.bulk-outcome {
+  white-space: nowrap;
 }
 </style>

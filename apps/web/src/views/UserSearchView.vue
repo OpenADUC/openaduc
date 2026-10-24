@@ -28,6 +28,7 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
 import { announceUserCreated } from '../design/feedback/userToasts.js';
@@ -435,21 +436,23 @@ const canBulkDisable = computed(() => auth.hasCapability('write:user.enableDisab
 const canBulkUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 
 const {
+  job: bulkJob,
+  busy: bulkJobBusy,
   pendingBulkAction,
   bulkRunning,
-  bulkProgress,
   bulkErrors,
+  jobFailure: bulkJobFailure,
   confirming: confirmingBulk,
   confirmation: bulkConfirm,
   requestBulk,
   cancelBulk,
   startBulk,
-} = useBulkActions({
-  selectedIds,
-  run: { disable: api.users.disable, enable: api.users.enable, unlock: api.users.unlock },
-  toast,
-  reload: load,
-});
+  continueJob,
+  retryFailed,
+  stopJob,
+  dismissJob,
+  restore: restoreBulkJob,
+} = useBulkActions({ selectedIds, toast, reload: load });
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
 
 const BULK_ICONS: Record<BulkAction, string> = {
@@ -460,7 +463,7 @@ const BULK_ICONS: Record<BulkAction, string> = {
 
 function confirmBulk(): void {
   const action = confirmingBulk.value;
-  if (action) auth.requireStepUp(() => startBulk(action));
+  if (action) startBulk(action);
 }
 
 // Delete runs in its own dialog (preflight, typed confirmation, progress)
@@ -502,11 +505,6 @@ const canBulkAct = computed(
 );
 const pasteListOpen = ref(false);
 
-const bulkBusyMessage = computed(() => {
-  if (!bulkRunning.value) return null;
-  return `${bulkProgress.value.done} of ${bulkProgress.value.total} done`;
-});
-
 // ---- Display helpers ------------------------------------------------------
 type PwdTone = 'red' | 'amber' | 'violet' | 'muted';
 
@@ -541,6 +539,7 @@ onMounted(() => {
   applyQuery(route.query);
   suppressSync = false;
   void load();
+  if (canBulkAct.value) void restoreBulkJob();
   if (!isActive(filters.value._searchBlob.value)) {
     (searchField.value?.$el as HTMLElement | undefined)?.focus();
   }
@@ -604,6 +603,17 @@ onMounted(() => {
     </PageHeader>
 
     <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
+
+    <BulkJobPanel
+      v-if="bulkJob"
+      :job="bulkJob"
+      :failure="bulkJobFailure"
+      :busy="bulkJobBusy"
+      @stop="stopJob"
+      @continue="continueJob"
+      @retry="retryFailed"
+      @dismiss="dismissJob"
+    />
 
     <div v-if="activeCount > 0" class="chip-strip">
       <button
@@ -821,7 +831,6 @@ onMounted(() => {
             @click="clearSelection"
           />
         </div>
-        <span v-if="bulkBusyMessage" class="bulkbar-progress mono">{{ bulkBusyMessage }}</span>
       </div>
     </transition>
 
@@ -1160,11 +1169,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-.bulkbar-progress {
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 
 .bulk-fade-enter-active,

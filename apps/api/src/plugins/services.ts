@@ -3,6 +3,7 @@ import fp from 'fastify-plugin';
 import { loadEnv } from '../config/env.js';
 import { AuditService } from '../services/audit.js';
 import { AuthorizationService } from '../services/authorization.js';
+import { BulkJobService } from '../services/bulkJobs/service.js';
 import { CredentialCacheService } from '../services/credentialCache.js';
 import { DirectoryConfigService } from '../services/directoryConfig.js';
 import { EntraIntegrationService } from '../services/entraIntegration.js';
@@ -25,6 +26,7 @@ declare module 'fastify' {
     services: {
       audit: AuditService;
       authorization: AuthorizationService;
+      bulkJobs: BulkJobService;
       credentialCache: CredentialCacheService;
       directoryConfig: DirectoryConfigService;
       entraIntegration: EntraIntegrationService;
@@ -68,6 +70,12 @@ export default fp(async (app) => {
   const teams = new TeamsNotifierService(entraIntegration, app.log);
   const signInEvents = new SignInEventsService(app.db, app.log);
 
+  const bulkJobs = new BulkJobService(
+    app.db,
+    { audit, sessions, credentialCache, providers, userLiveRefresh },
+    app.log,
+  );
+
   const sync = new SyncTaskScheduler(
     app.db,
     app.pgLockPool,
@@ -86,6 +94,7 @@ export default fp(async (app) => {
   app.decorate('services', {
     audit,
     authorization,
+    bulkJobs,
     credentialCache,
     directoryConfig,
     entraIntegration,
@@ -108,9 +117,12 @@ export default fp(async (app) => {
   // and tear down the app instance from leaking timers.
   app.addHook('onReady', async () => {
     if (env.SYNC_SCHEDULER_ENABLED) sync.start();
+    bulkJobs.start();
   });
 
   app.addHook('onClose', async () => {
+    // Before the credential cache is wiped, so rows in flight can finish.
+    await bulkJobs.stop();
     sync.stop();
     credentialCache.stop();
     loginBackoff.stop();
