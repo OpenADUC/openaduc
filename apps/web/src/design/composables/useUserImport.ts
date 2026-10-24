@@ -1065,6 +1065,7 @@ export function useUserImport() {
     // Issue TAPs for class
     canIssueTaps,
     classTapOptions,
+    classTapError,
     classPolicy,
     classLifetimeOptions,
     multiUseAllowed,

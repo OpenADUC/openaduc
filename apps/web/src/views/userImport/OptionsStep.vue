@@ -28,6 +28,7 @@ const {
   startDateMapped,
   timeZone,
   classTapIssues,
+  classTapError,
 } = w;
 
 const shown = ref(false);
@@ -124,7 +125,11 @@ const useOptions = [
       <span>Set email to the UPN for rows without an email</span>
     </label>
 
-    <template v-if="canIssueTaps && classTapOptions">
+    <template v-if="canIssueTaps && classTapError">
+      <h3 class="op-title">Onboarding class</h3>
+      <p class="op-note">{{ classTapError }}</p>
+    </template>
+    <template v-else-if="canIssueTaps && classTapOptions">
       <h3 class="op-title">Onboarding class</h3>
       <label class="op-check">
         <input
