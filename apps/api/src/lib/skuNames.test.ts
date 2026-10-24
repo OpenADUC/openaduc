@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { describe, expect, it } from 'vitest';
-import { skuName } from './skuNames.js';
+import { describe, expect, it, vi } from 'vitest';
+import { readSkuNames, skuName } from './skuNames.js';
 
 describe('skuName', () => {
   it('names a product as Microsoft’s list does', () => {
@@ -16,5 +16,12 @@ describe('skuName', () => {
     expect(skuName('00000000-0000-0000-0000-000000000001', null)).toBe(
       '00000000-0000-0000-0000-000000000001',
     );
+  });
+
+  it('warns, and names nothing, when the list can’t be read', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(readSkuNames(new URL('file:///nonexistent/sku-names.csv')).size).toBe(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('license product names unavailable'));
+    warn.mockRestore();
   });
 });
