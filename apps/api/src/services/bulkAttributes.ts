@@ -212,7 +212,6 @@ export function rowSnapshots(changes: readonly FieldChange[]): {
   };
 }
 
-/** The preview token for this edit of these users. */
 export function attributesPreviewToken(
   ids: readonly string[],
   changes: BulkAttributeChanges,

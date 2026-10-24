@@ -14,7 +14,6 @@ import { previewToken } from './previewToken.js';
 import { alreadyAsAsked, membershipState } from './membershipState.js';
 import { cachedUserName } from './userCache.js';
 
-/** The preview token for adding these users to these groups, or removing them. */
 export function membershipPreviewToken(
   op: BulkMembershipOp,
   ids: readonly string[],

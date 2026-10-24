@@ -27,7 +27,6 @@ export type AccountState = Pick<
 export interface AccountWrite {
   /** The audit action, e.g. `user.disable`. */
   action: string;
-  /** Recorded with the audit event. */
   metadata?: Record<string, unknown>;
   /**
    * What the account has now, when it's already as the write would leave
@@ -136,8 +135,7 @@ export function moveUserTo(ou: { distinguished_name: string; name: string }) {
   } satisfies AccountWrite;
 }
 
-/** Make the account expire at `expiresAt`, or never (null). */
-export function expireAccountAt(expiresAt: Date | null): AccountWrite {
+export function expireAccountAt(expiresAt: Date | null) {
   const at = expiresAt?.toISOString() ?? null;
   return {
     action: 'user.accountExpiry.set',
@@ -145,7 +143,7 @@ export function expireAccountAt(expiresAt: Date | null): AccountWrite {
     asAsked: (user) =>
       (user.accountExpiresAt?.toISOString() ?? null) === at ? { accountExpiresAt: at } : null,
     write: (p, user, ctx) => p.setAccountExpiry(user, expiresAt, ctx),
-  };
+  } satisfies AccountWrite;
 }
 
 export const REQUIRE_PASSWORD_CHANGE = {

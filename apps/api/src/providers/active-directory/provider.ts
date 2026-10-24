@@ -816,7 +816,6 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       : this.findComputerEntry(client, identifier);
   }
 
-  /** Flip the ACCOUNTDISABLE bit (0x2) of `userAccountControl`. */
   private toggleAccountDisable(
     kind: AccountKind,
     id: DirectoryObjectIdentifier,
