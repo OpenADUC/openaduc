@@ -40,26 +40,32 @@ export interface ParsedTable {
   problems: string[];
 }
 
+/** Cells in a record, not counting empty ones at its end. */
+function widthOf(record: string[]): number {
+  let n = record.length;
+  while (n > 0 && record[n - 1]!.trim() === '') n--;
+  return n;
+}
+
 /**
- * The delimiter the header row uses, outside quotes: a tab when there is
- * one (Excel's paste), otherwise whichever of comma, semicolon (Excel's
- * CSV in locales with a decimal comma) or pipe it has most of.
+ * The delimiter that reads the most rows as wide as the header row, the
+ * header being at least two columns wide: so `Name, first;Name, last`
+ * over semicolon-separated rows is read by its semicolons. On a tie a tab
+ * (Excel's paste) wins, then a comma, a semicolon (Excel's CSV where the
+ * decimal mark is a comma) and a pipe.
  */
 function detectDelimiter(text: string): TableDelimiter {
-  const counts = new Map<TableDelimiter, number>(TABLE_DELIMITERS.map((d) => [d, 0]));
-  let quoted = false;
-  for (const ch of text) {
-    if (ch === '"') quoted = !quoted;
-    else if (!quoted && (ch === '\n' || ch === '\r')) {
-      if ([...counts.values()].some((n) => n > 0)) break;
-    } else if (!quoted && counts.has(ch as TableDelimiter)) {
-      counts.set(ch as TableDelimiter, counts.get(ch as TableDelimiter)! + 1);
-    }
+  let best: { delimiter: TableDelimiter; score: number } | null = null;
+  for (const delimiter of TABLE_DELIMITERS) {
+    const widths = readRecords(text, delimiter)
+      .records.map(widthOf)
+      .filter((w) => w > 0);
+    const header = widths[0] ?? 0;
+    if (header < 2) continue;
+    const score = widths.slice(1).filter((w) => w === header).length;
+    if (!best || score > best.score) best = { delimiter, score };
   }
-  if (counts.get('\t')! > 0) return '\t';
-  let best: TableDelimiter = ',';
-  for (const d of [',', ';', '|'] as const) if (counts.get(d)! > counts.get(best)!) best = d;
-  return best;
+  return best?.delimiter ?? ',';
 }
 
 /** RFC 4180 records: a cell starting with a quote runs to its closing quote, "" inside being one. */
@@ -108,9 +114,15 @@ function readRecords(
   return { records, unclosedAt: quoted ? quoteStart : null };
 }
 
+// Excel writes, and honours, a first line naming the delimiter.
+const SEP_LINE = /^"?sep=(.)"?[ \t]*(\r\n|\r|\n)/i;
+
 export function parseTable(text: string): ParsedTable {
-  const source = text.replace(/^\uFEFF/, '');
-  const delimiter = detectDelimiter(source);
+  let source = text.replace(/^\uFEFF/, '');
+  const sep = SEP_LINE.exec(source);
+  const named = sep && TABLE_DELIMITERS.find((d) => d === sep[1]);
+  if (sep) source = source.slice(sep[0].length);
+  const delimiter = named ?? detectDelimiter(source);
   const { records, unclosedAt } = readRecords(source, delimiter);
   const problems: string[] = [];
   if (unclosedAt !== null) problems.push(`A quote opened in row ${unclosedAt} is never closed.`);
@@ -134,5 +146,16 @@ export function parseTable(text: string): ParsedTable {
     rows.push(Array.from({ length: width }, (_, k) => cells[k] ?? ''));
     rowNumbers.push(i + 1);
   });
+  const unreadable = rowNumbers.filter((_, i) => rows[i]!.some((c) => c.includes('\uFFFD')));
+  if ((header ?? ([] as string[])).some((c) => c.includes('\uFFFD'))) unreadable.unshift(1);
+  if (unreadable.length > 0) {
+    const where =
+      unreadable.length === 1
+        ? `Row ${unreadable[0]} has`
+        : `Rows ${unreadable.slice(0, 5).join(', ')}${unreadable.length > 5 ? ', …' : ''} have`;
+    problems.push(
+      `${where} characters that couldn’t be read (shown as \uFFFD). Save the sheet as “CSV UTF-8” and use that file.`,
+    );
+  }
   return { delimiter, header: header ?? [], rows, rowNumbers, problems };
 }
