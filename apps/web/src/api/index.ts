@@ -36,6 +36,9 @@ import type {
   NamingSettingsResponse,
   NewUserSettings,
   NewUserSettingsResponse,
+  UserCreateFinishRequest,
+  UserCreateRequest,
+  UserCreateResponse,
   OuContentsResponse,
   OuCreateRequest,
   OuDeleteRequest,
@@ -416,6 +419,15 @@ export const api = {
     },
     get(id: string): Promise<{ user: UserDetail }> {
       return apiFetch(`/users/${encodeURIComponent(id)}`);
+    },
+    create(body: UserCreateRequest): Promise<UserCreateResponse> {
+      return apiFetch('/users', { method: 'POST', body: JSON.stringify(body) });
+    },
+    finishCreate(id: string, body: UserCreateFinishRequest): Promise<UserCreateResponse> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/finish-create`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
     },
     unlock(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/unlock`, {
