@@ -31,6 +31,7 @@ import { StepUpBindFailedError, type DirectoryProvider } from '../providers/type
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
+import { writeUserAccount } from '../services/userAccountWrite.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import type { UserCacheRecordsTable } from '../db/types.js';
@@ -895,44 +896,20 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       }
       const provider = await app.services.providers.buildForRequest(req);
 
-      // Pre-write live refresh — fails closed if the directory is unreachable.
-      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
-      if (!beforeRefresh) throw NotFound('user not found');
-
-      const result = await withAudit(
-        app.services.audit,
-        {
-          ...auditContextFromRequest(req),
-          action: 'user.unlock',
-          actorAuthMethod: 'ad-password',
-          providerId: provider.id,
-          targetType: 'user',
-          targetId: beforeRefresh.user.objectGuid,
-          targetDn: beforeRefresh.user.distinguishedName,
-        },
-        async () => {
-          const r = await provider.unlockUser({ kind: 'objectGuid', value: id }, ctx(actor, req));
-          return {
-            ok: r.ok,
-            before: r.before ?? null,
-            after: r.after ?? null,
-            errorCode: r.reason ?? null,
-          };
-        },
+      const written = await writeUserAccount(
+        app.services,
+        provider,
+        'user.unlock',
+        id,
+        ctx(actor, req),
+        auditContextFromRequest(req),
       );
-
+      if (!written) throw NotFound('user not found');
+      const { result } = written;
       if (!result.ok) {
         throw app.httpErrors.badGateway(`unlock failed: ${result.errorCode ?? 'unknown'}`);
       }
-
-      // Refresh cache once more so subsequent reads show the unlocked state.
-      await app.services.userLiveRefresh.refresh(provider, id);
-
-      return {
-        ok: true,
-        before: result.before,
-        after: result.after,
-      };
+      return { ok: true, before: result.before, after: result.after };
     },
   });
 
@@ -1412,33 +1389,16 @@ async function toggleEnabled(
   if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
   const provider = await app.services.providers.buildForRequest(req);
 
-  const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
-  if (!beforeRefresh) throw NotFound('user not found');
-
-  const result = await withAudit(
-    app.services.audit,
-    {
-      ...auditContextFromRequest(req),
-      action: disable ? 'user.disable' : 'user.enable',
-      actorAuthMethod: 'ad-password',
-      providerId: provider.id,
-      targetType: 'user',
-      targetId: beforeRefresh.user.objectGuid,
-      targetDn: beforeRefresh.user.distinguishedName,
-    },
-    async () => {
-      const r = await (disable
-        ? provider.disableUser({ kind: 'objectGuid', value: id }, ctx(actor, req))
-        : provider.enableUser({ kind: 'objectGuid', value: id }, ctx(actor, req)));
-      return {
-        ok: r.ok,
-        before: r.before ?? null,
-        after: r.after ?? null,
-        errorCode: r.reason ?? null,
-      };
-    },
+  const written = await writeUserAccount(
+    app.services,
+    provider,
+    disable ? 'user.disable' : 'user.enable',
+    id,
+    ctx(actor, req),
+    auditContextFromRequest(req),
   );
-
+  if (!written) throw NotFound('user not found');
+  const { result } = written;
   if (!result.ok) {
     if (result.errorCode === 'permission_denied') {
       throw app.httpErrors.forbidden('directory rejected the change');
@@ -1447,7 +1407,6 @@ async function toggleEnabled(
       `${disable ? 'disable' : 'enable'} failed: ${result.errorCode ?? 'unknown'}`,
     );
   }
-  await app.services.userLiveRefresh.refresh(provider, id);
   return { ok: true, before: result.before, after: result.after };
 }
 
