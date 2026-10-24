@@ -4,7 +4,6 @@ import { sql, type Kysely, type Selectable } from 'kysely';
 import {
   BULK_ATTRIBUTE_FIELDS,
   directoryCountry,
-  PREVIEW_LIST_LIMIT,
   type BulkAttributeChange,
   type BulkAttributeChanges,
   type BulkAttributeField,
@@ -18,6 +17,7 @@ import type { DB, UserCacheRecordsTable } from '../db/types.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser, UserAttributePatch } from '../providers/types.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
+import { listed } from './groupMembershipPreview.js';
 import { findCachedUser } from './userCache.js';
 
 /** The fields that are one string attribute each, named as the attribute. */
@@ -45,7 +45,7 @@ export type AttributeValues = Record<TextField, string | null> & {
 
 /**
  * What a bulk edit sets each field it names to (null clears it), with the
- * manager and country resolved to what AD stores. A job's rows keep this.
+ * manager and country resolved to what AD stores.
  */
 export type ResolvedChanges = Partial<Record<TextField, string | null>> & {
   manager?: { dn: string; name: string } | null;
@@ -271,18 +271,6 @@ export function changesSubject(
           ? (changes.country?.co ?? null)
           : (changes[field] ?? null),
   }));
-}
-
-/** Users counted in full, and listed up to the preview's limit (they come sorted by name). */
-function listed<T>() {
-  const list = { count: 0, users: [] as T[] };
-  return {
-    list,
-    add(user: T): void {
-      list.count++;
-      if (list.users.length < PREVIEW_LIST_LIMIT) list.users.push(user);
-    },
-  };
 }
 
 /**
