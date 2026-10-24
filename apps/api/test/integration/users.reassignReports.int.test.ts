@@ -10,10 +10,11 @@ import type {
   UserDetail,
 } from '@openaduc/shared';
 import {
-  asAdministrator,
   configureDirectory,
+  finishedJob,
   readDirectoryUser,
   reseedDirectory,
+  setUserAttribute,
   startApi,
   type TestApi,
   type TestClient,
@@ -42,25 +43,6 @@ interface AuditRow {
 const dnOf = async (sam: string) =>
   String((await readDirectoryUser(sam, ['distinguishedName']))!.dn);
 
-/** Set (or, with null, clear) a user's manager, as Administrator. */
-async function setManager(sam: string, managerDn: string | null): Promise<void> {
-  const dn = await dnOf(sam);
-  const { Attribute, Change } = await import('ldapts');
-  await asAdministrator(async (client) => {
-    await client
-      .modify(
-        dn,
-        new Change({
-          operation: managerDn ? 'replace' : 'delete',
-          modification: new Attribute({ type: 'manager', values: managerDn ? [managerDn] : [] }),
-        }),
-      )
-      .catch((err: Error) => {
-        if (err.name !== 'NoSuchAttributeError') throw err;
-      });
-  });
-}
-
 const managerOf = async (sam: string) =>
   ((await readDirectoryUser(sam, ['manager']))!.manager as string | undefined) ?? null;
 
@@ -76,8 +58,9 @@ describe('reassigning a manager’s direct reports', () => {
     reseedDirectory();
     erinDn = await dnOf(SAM.erin);
     daveDn = await dnOf(SAM.dave);
-    for (const report of REPORTS) await setManager(SAM[report], erinDn);
-    await setManager(SAM.dave, null);
+    // Replacing with no values clears it.
+    for (const report of REPORTS) await setUserAttribute(SAM[report], 'manager', [erinDn]);
+    await setUserAttribute(SAM.dave, 'manager', []);
 
     api = await startApi();
     await configureDirectory(api);
@@ -99,7 +82,7 @@ describe('reassigning a manager’s direct reports', () => {
 
   afterAll(async () => {
     await api?.close();
-    for (const report of REPORTS) await setManager(SAM[report], null);
+    for (const report of REPORTS) await setUserAttribute(SAM[report], 'manager', []);
   });
 
   // By fixture, not display name: other tests rename fixture accounts.
@@ -111,16 +94,7 @@ describe('reassigning a manager’s direct reports', () => {
       .user.directReports.map((r) => [nameOf(r.id), r.enabled])
       .sort();
 
-  async function finished(id: string): Promise<BulkJob> {
-    for (let i = 0; i < 300; i++) {
-      const { job } = (await operator.get(`/api/bulk-jobs/${id}`)).json<{ job: BulkJob }>();
-      if (job.status !== 'queued' && job.status !== 'running' && job.counts.pending === 0) {
-        return job;
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    throw new Error(`bulk job ${id} didn’t finish`);
-  }
+  const finished = (id: string) => finishedJob(operator, id);
 
   it('lists the manager’s direct reports, saying which are disabled', async () => {
     expect(await reportsOf('erin')).toEqual([
