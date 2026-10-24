@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
+import type { AccountFingerprint } from '../providers/types.js';
 import { FINISH_WINDOW_MS, finishRefusal, type UnfinishedCreate } from './userCreationProgress.js';
 
 const created = new Date('2026-10-23T10:00:00Z');
-const account = {
+const account: AccountFingerprint = {
   objectGuid: 'g1',
   whenCreated: '20261023100000.0Z',
   usnChanged: '4100',
@@ -17,7 +18,7 @@ const unfinished: UnfinishedCreate = {
   remaining: ['password', 'enable'],
   account,
 };
-const live = (over: Partial<typeof account & { enabled: boolean }> = {}) => ({
+const live = (over: Partial<AccountFingerprint & { enabled: boolean }> = {}) => ({
   ...account,
   enabled: false,
   ...over,
