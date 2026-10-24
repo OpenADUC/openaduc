@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
-  USER_CREATE_STEPS,
+  NOTHING_TAKEN,
   childDn,
   generatePassword,
+  phonesToWrite,
+  plannedSteps,
+  remainingSteps,
   resolveNames,
   userCreateFinishRequestSchema,
   userCreateRequestSchema,
@@ -11,13 +14,19 @@ import {
   type UserCreateStep,
 } from '@openaduc/shared';
 import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
 import { z } from 'zod';
 import { BadRequest, Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import type { DirectoryProvider, UserCreateFinish, UserCreateResult } from '../providers/types.js';
+import type {
+  DirectoryProvider,
+  DirectoryUser,
+  UserCreateFinish,
+  UserCreateResult,
+} from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
+import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
 import { upsertUser } from '../services/userCache.js';
+import { findUnfinishedCreate, finishRefusal } from '../services/userCreationProgress.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { ctx } from './writeContext.js';
 
@@ -26,8 +35,6 @@ const idParamSchema = z.object({ id: z.guid() });
 // Long, because nobody types it: it only has to keep the account shut
 // until the person sets their own in Entra.
 const RANDOM_PASSWORD_LENGTH = 32;
-
-const NOTHING_TAKEN = { samAccountNames: [], userPrincipalNames: [], mailAddresses: [], cns: [] };
 
 export async function registerUserCreationRoutes(app: FastifyInstance): Promise<void> {
   // ---- POST /api/users (create in an OU) -------------------------------
@@ -49,7 +56,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       // The names as the naming check would judge them typed, so a client
       // can't write what the create form wouldn't allow. Whether they're
       // free is checked again on the operator's bind.
-      const suffixes = [directory.domain, ...(await provider.getUpnSuffixes())];
+      const suffixes = await directoryUpnSuffixes(provider, directory.domain);
       const [judged] = resolveNames(
         [
           {
@@ -67,6 +74,12 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       );
       const unusable = judged!.deviations.find((d) => d.approval === 'blocked');
       if (unusable) throw BadRequest(unusable.reason);
+      const phones = phonesToWrite(
+        body,
+        body.keepPhonesAsTyped ?? [],
+        directory.newUsers.phoneCountry,
+      );
+      if (phones.problems[0]) throw BadRequest(phones.problems[0].message);
 
       const dn = childDn('CN', body.cn, ou.distinguished_name);
       const mail = body.mailFromUpn ? body.userPrincipalName : null;
@@ -106,25 +119,26 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
               displayName: body.displayName,
               mail,
               otherMailbox: body.personalEmail ?? null,
-              mobile: body.mobile,
-              telephoneNumber: body.telephoneNumber,
+              mobile: phones.values.mobile,
+              telephoneNumber: phones.values.telephoneNumber,
             },
             finish,
             ctx(actor, req),
           );
-          return auditOf(r, planned, { distinguishedName: dn, mail });
+          return auditOf(await readBack(provider, r, dn), planned, { distinguishedName: dn, mail });
         },
       );
       if (!result.created.completed.includes('create')) {
         throw directoryRefusal(app, result, { verb: 'create', notFound: 'OU not found' });
       }
-      return respond(provider, result.created, planned, dn, body.samAccountName);
+      return respond(provider, result, dn, body.samAccountName);
     },
   });
 
   // ---- POST /api/users/:id/finish-create -------------------------------
-  // Only for an account a create made and left disabled with steps to go,
-  // so it can't stand in for a password reset.
+  // Only for an account a create made in the last day and left with steps
+  // to go, still as the create left it (see finishRefusal), so it can't
+  // stand in for a password reset.
   app.post('/api/users/:id/finish-create', {
     config: { policy: { capability: 'write:user.create', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<UserCreateResponse> => {
@@ -136,30 +150,19 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       const live = await app.services.userLiveRefresh.refresh(provider, id);
       if (!live) throw NotFound('user not found');
 
-      const last = await app.db
-        .selectFrom('audit_events')
-        .select('after_json')
-        .where('provider_id', '=', provider.id)
-        .where('target_id', '=', id)
-        .where('action', 'in', ['user.create', 'user.create.finish'])
-        .where(sql<boolean>`after_json ? 'remaining'`)
-        .orderBy('id', 'desc')
-        .executeTakeFirst();
-      const progress = progressOf(last?.after_json);
-      if (!progress || progress.remaining.length === 0) {
-        throw Conflict('OpenADUC has no unfinished create of this account.');
-      }
-      if (live.user.enabled) {
-        throw Conflict(
-          'This account has been enabled since it was created. Reset its password instead.',
-        );
-      }
+      const unfinished = await findUnfinishedCreate(app.db, provider.id, id);
+      const account = await provider.getAccountFingerprint({ kind: 'objectGuid', value: id });
+      const refusal = account
+        ? finishRefusal(unfinished, { ...account, enabled: live.user.enabled }, new Date())
+        : 'user not found';
+      if (refusal) throw Conflict(refusal);
+      const progress = unfinished!;
 
       const planned = [
         ...progress.completed,
         ...progress.remaining.filter((s) => s !== 'enable' || body.enabled),
       ];
-      const steps = planned.filter((s) => !progress.completed.includes(s));
+      const steps = remainingSteps(planned, progress.completed);
       if (steps.includes('password') && !body.password) {
         throw BadRequest('The account has no password yet: say which one it gets.');
       }
@@ -175,9 +178,13 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
           targetType: 'user',
           targetId: id,
           targetDn: live.user.distinguishedName,
-          metadata: steps.includes('password')
-            ? { steps, passwordMode: body.password!.mode, mustChange: finish.mustChange }
-            : { steps },
+          metadata: {
+            createCorrelationId: progress.createCorrelationId,
+            steps,
+            ...(steps.includes('password')
+              ? { passwordMode: body.password!.mode, mustChange: finish.mustChange }
+              : {}),
+          },
         },
         async () => {
           const r = await provider.finishUserCreate(
@@ -186,7 +193,8 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
             finish,
             ctx(actor, req),
           );
-          return auditOf({ ...r, completed: [...progress.completed, ...r.completed] }, planned, {
+          const done = { ...r, completed: [...progress.completed, ...r.completed] };
+          return auditOf(await readBack(provider, done, live.user.distinguishedName), planned, {
             distinguishedName: live.user.distinguishedName,
           });
         },
@@ -194,46 +202,48 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       if (!result.ok && result.created.failedStep === undefined) {
         throw directoryRefusal(app, result, { verb: 'finish', notFound: 'user not found' });
       }
-      return respond(
-        provider,
-        result.created,
-        planned,
-        live.user.distinguishedName,
-        live.user.samAccountName ?? '',
-      );
+      return respond(provider, result, live.user.distinguishedName, live.user.samAccountName ?? '');
     },
   });
 
   /** The new account in the cache, so lists show it at once, and what's left. */
   async function respond(
     provider: DirectoryProvider,
-    r: UserCreateResult,
-    planned: UserCreateStep[],
+    result: AuditedCreate,
     dn: string,
     samAccountName: string,
   ): Promise<UserCreateResponse> {
-    // If the operator's bind couldn't read it back, try the service
-    // account; failing that, the next sync lists it.
-    const user =
-      r.user ??
-      (await provider.getUser({ kind: 'distinguishedName', value: dn }).catch(() => null));
+    const { user, completed, failedStep, errorMessage } = result.created;
     if (user) await upsertUser(app.db, provider.id, user, { source: 'live-refresh' });
     return {
       id: user?.objectGuid ?? null,
       distinguishedName: user?.distinguishedName ?? dn,
       samAccountName: user?.samAccountName ?? samAccountName,
-      completed: r.completed,
-      remaining: planned.filter((s) => !r.completed.includes(s)),
+      completed,
+      remaining: result.remaining,
       failure:
-        r.failedStep !== undefined
-          ? { step: r.failedStep, message: r.errorMessage ?? 'the directory refused it' }
+        failedStep !== undefined
+          ? { step: failedStep, message: errorMessage ?? 'the directory refused it' }
           : null,
     };
   }
 }
 
-function plannedSteps(enabled: boolean): UserCreateStep[] {
-  return USER_CREATE_STEPS.filter((s) => s !== 'enable' || enabled);
+/**
+ * Fill in what the operator's bind couldn't read back with the service
+ * account, so the audit row names the account and records how it was
+ * left. Without that, finishing it later is refused.
+ */
+async function readBack(
+  provider: DirectoryProvider,
+  r: UserCreateResult,
+  dn: string,
+): Promise<UserCreateResult> {
+  if (!r.completed.includes('create') || (r.user && r.fingerprint)) return r;
+  const id = { kind: 'distinguishedName', value: dn } as const;
+  const user: DirectoryUser | null = r.user ?? (await provider.getUser(id).catch(() => null));
+  const fingerprint = r.fingerprint ?? (await provider.getAccountFingerprint(id).catch(() => null));
+  return { ...r, ...(user ? { user } : {}), ...(fingerprint ? { fingerprint } : {}) };
 }
 
 /**
@@ -258,29 +268,20 @@ async function finishFor(
   };
 }
 
-/** The audit row's view of a create: what it wrote and what's left. */
+type AuditedCreate = ReturnType<typeof auditOf>;
+
+/** The audit row's view of a create: what it wrote, what's left, and how the account was left. */
 function auditOf(r: UserCreateResult, planned: UserCreateStep[], written: Record<string, unknown>) {
-  const remaining = planned.filter((s) => !r.completed.includes(s));
+  const remaining = remainingSteps(planned, r.completed);
   return {
     ok: r.ok,
     errorCode: r.reason ?? null,
     errorMessage: r.errorMessage ?? null,
-    targetId: r.user?.objectGuid ?? null,
+    targetId: r.user?.objectGuid ?? r.fingerprint?.objectGuid ?? null,
     after: r.completed.includes('create')
-      ? { ...written, completed: r.completed, remaining }
+      ? { ...written, completed: r.completed, remaining, account: r.fingerprint ?? null }
       : null,
     created: r,
+    remaining,
   };
-}
-
-function progressOf(
-  after: Record<string, unknown> | null | undefined,
-): { completed: UserCreateStep[]; remaining: UserCreateStep[] } | null {
-  const steps = (v: unknown) =>
-    Array.isArray(v)
-      ? v.filter((s): s is UserCreateStep => (USER_CREATE_STEPS as readonly unknown[]).includes(s))
-      : null;
-  const completed = steps(after?.completed);
-  const remaining = steps(after?.remaining);
-  return completed && remaining ? { completed, remaining } : null;
 }
