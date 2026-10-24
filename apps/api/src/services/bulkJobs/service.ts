@@ -57,6 +57,8 @@ const STALE_AFTER = sql<Date>`now() - interval '60 seconds'`;
 const SWEEP_MS = 30_000;
 const STOP_WAIT_MS = 4_000;
 const INSERT_CHUNK = 1_000;
+/** The rows a retry runs again: those with changes still to make. */
+const RETRIED: BulkJobRowStatus[] = ['failed', 'partial'];
 
 /**
  * Bulk actions as server-side jobs, run in-process. A job's rows are
@@ -263,7 +265,7 @@ export class BulkJobService {
     return true;
   }
 
-  /** Run a stopped job's failed rows again. False when it's running or none failed. */
+  /** Run a stopped job's failed and partial rows again. False when it's running or none failed. */
   async retry(job: JobRecord, actor: JobActor): Promise<boolean> {
     const retried = await this.db.transaction().execute(async (trx) => {
       const queued = await trx
@@ -283,7 +285,7 @@ export class BulkJobService {
               .selectFrom('bulk_job_rows')
               .select('id')
               .where('job_id', '=', job.id)
-              .where('status', '=', 'failed'),
+              .where('status', 'in', RETRIED),
           ),
         )
         .executeTakeFirst();
@@ -292,7 +294,7 @@ export class BulkJobService {
         .updateTable('bulk_job_rows')
         .set({ status: 'pending', error_code: null, error_message: null, finished_at: null })
         .where('job_id', '=', job.id)
-        .where('status', '=', 'failed')
+        .where('status', 'in', RETRIED)
         .executeTakeFirst();
       return Number(rows.numUpdatedRows);
     });
@@ -497,6 +499,8 @@ export class BulkJobService {
           targetId: row.target_id,
           targetDn: row.target_dn,
           input: handler.input.parse(row.input_json),
+          before: row.before_json,
+          after: row.after_json,
         },
         { db: this.db, provider, writeCtx, audit, services: this.deps },
       );
@@ -536,7 +540,13 @@ export class BulkJobService {
     await this.db
       .updateTable('bulk_job_rows')
       .set({
-        status: outcome.ok ? 'succeeded' : 'failed',
+        status: outcome.ok
+          ? outcome.unchanged
+            ? 'skipped'
+            : 'succeeded'
+          : outcome.partial
+            ? 'partial'
+            : 'failed',
         error_code: outcome.ok ? null : outcome.errorCode,
         error_message: outcome.ok
           ? null
@@ -675,5 +685,5 @@ function auditBase(actor: JobActor, jobId: string): Omit<AuditEventInput, 'actio
 }
 
 function emptyCounts(): BulkJobCounts {
-  return { total: 0, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0 };
+  return { total: 0, pending: 0, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 };
 }

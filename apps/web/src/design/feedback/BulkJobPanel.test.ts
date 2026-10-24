@@ -20,7 +20,16 @@ function aJob(
     actorDisplayName: 'OpenADUC Operator',
     createdAt: '2026-10-23T10:00:00.000Z',
     finishedAt: null,
-    counts: { total: 42, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0, ...counts },
+    counts: {
+      total: 42,
+      pending: 0,
+      running: 0,
+      succeeded: 0,
+      partial: 0,
+      failed: 0,
+      skipped: 0,
+      ...counts,
+    },
     ...more,
   };
 }
@@ -121,6 +130,23 @@ describe('the bulk job panel', () => {
         ),
       ),
     ).toContain('Removed 40 of 42 accounts from Sales and HR');
+  });
+
+  it('counts rows that needed no change, and rows only partly changed', () => {
+    const subject = { groups: [{ id: 'g1', name: 'Sales' }] };
+    const page = panel(
+      aJob(
+        'finished',
+        { succeeded: 36, skipped: 4, partial: 1, failed: 1 },
+        { action: 'user.group.add', subject },
+      ),
+    );
+
+    expect(text(page)).toContain('Added 36 of 42 accounts to Sales');
+    expect(text(page)).toContain(
+      '4 needed no change. 1 was only partly changed and 1 failed. They’re still selected',
+    );
+    expect(buttons(page)).toEqual(['Retry failed', 'Dismiss']);
   });
 
   it('shows why continuing, retrying or stopping failed', () => {

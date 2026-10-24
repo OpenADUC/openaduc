@@ -8,6 +8,7 @@ const counts = (c: Partial<BulkJobCounts>): BulkJobCounts => ({
   pending: 0,
   running: 0,
   succeeded: 0,
+  partial: 0,
   failed: 0,
   skipped: 0,
   ...c,
@@ -51,7 +52,7 @@ describe('a bulk job in the audit log', () => {
         summary({ status: 'cancelled', counts: counts({ succeeded: 10, skipped: 32 }) }),
         'J',
       ),
-    ).toMatchObject({ outcome: 'Stopped: 10 succeeded · 0 failed', tone: 'amber' });
+    ).toMatchObject({ outcome: 'Stopped: 10 succeeded · 0 failed · 32 skipped', tone: 'amber' });
   });
 
   it('names the groups a membership job changed', () => {

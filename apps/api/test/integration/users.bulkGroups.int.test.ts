@@ -13,6 +13,7 @@ import {
   configureDirectory,
   readDirectoryUser,
   reseedDirectory,
+  setGroupMember,
   startApi,
   type TestApi,
   type TestClient,
@@ -254,8 +255,8 @@ describe('adding users to groups, or removing them, in bulk', () => {
       throw new Error(`bulk job ${id} didn’t finish`);
     }
 
-    const failedRows = async (id: string) =>
-      (await operator.get(`/api/bulk-jobs/${id}/rows?status=failed`)).json<{
+    const rowsWith = async (id: string, status: BulkJobRow['status']) =>
+      (await operator.get(`/api/bulk-jobs/${id}/rows?status=${status}`)).json<{
         rows: BulkJobRow[];
       }>().rows;
 
@@ -267,7 +268,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
     let addJob: string;
     const missingUser = randomUUID();
 
-    it('adds each user to every group, and a failed row names the group AD refused', async () => {
+    it('adds each user to every group, and a partly done row names what it did and didn’t', async () => {
       const queued = await start(
         'add',
         [users.admin, users.carol, missingUser],
@@ -286,31 +287,33 @@ describe('adding users to groups, or removing them, in bulk', () => {
 
       const job = await finished(queued.id);
 
-      // oa.admin is a Domain Admin already, so only Carol's add was refused.
+      // oa.admin is a Domain Admin already; Carol's add to it was refused.
       expect(job).toMatchObject({
         status: 'finished',
-        counts: { total: 3, succeeded: 1, failed: 2 },
+        counts: { total: 3, succeeded: 1, partial: 1, failed: 1, skipped: 0 },
       });
       const [admin, carol] = [await dnOf('oa.admin'), await dnOf('carol.chen')];
       expect(await directoryMembers(ENGINEERING)).toEqual(expect.arrayContaining([admin, carol]));
       expect(await directoryMembers(DOMAIN_ADMINS)).not.toContain(carol);
-      const failed = await failedRows(job.id);
-      expect(failed.map((r) => [r.targetId, r.errorCode])).toEqual([
-        [users.carol, 'permission_denied'],
-        [missingUser, 'not_found'],
-      ]);
-      expect(failed[0]!.errorMessage).toMatch(
-        /^Not added to Domain Admins: The directory refused the change/,
+      const [partial] = await rowsWith(job.id, 'partial');
+      expect(partial).toMatchObject({ targetId: users.carol, errorCode: 'permission_denied' });
+      expect(partial!.errorMessage).toMatch(
+        /^Added to Engineering\. Not added to Domain Admins: the directory refused the change/,
       );
-      expect(failed[0]!.errorMessage).not.toContain('Engineering');
-      expect(failed[1]!.errorMessage).toBe('No such user in the directory.');
+      expect(await rowsWith(job.id, 'failed')).toEqual([
+        expect.objectContaining({
+          targetId: missingUser,
+          errorCode: 'not_found',
+          errorMessage: 'No such user in the directory.',
+        }),
+      ]);
 
       // The cache shows the adds straight away.
       const after = await preview('add', [users.admin, users.carol], [groups.engineering]);
       expect(names(after.groups[0]!.unchanged)).toEqual(['carol', 'admin']);
     });
 
-    it('audits each change as the single-user route does, grouped under the job', async () => {
+    it('audits every user and group, changed or not, as the single-user route does', async () => {
       const events = await jobEvents(addJob);
       const carolDn = await dnOf('carol.chen');
 
@@ -319,16 +322,19 @@ describe('adding users to groups, or removing them, in bulk', () => {
         e.result,
         e.targetId,
         e.metadata.groupName,
+        e.before?.isMember ?? null,
       ]);
-      expect(heading).toEqual(['bulk.create', 'success', null, undefined]);
-      // Rows run a few at a time, so in no set order.
-      expect(rows).toHaveLength(4);
+      expect(heading).toEqual(['bulk.create', 'success', null, undefined, null]);
+      // Rows run a few at a time, so in no set order. oa.admin's Domain
+      // Admins add is a no-op, recorded with before and after alike.
+      expect(rows).toHaveLength(5);
       expect(rows).toEqual(
         expect.arrayContaining([
-          ['user.group.add', 'success', users.admin, 'Engineering'],
-          ['user.group.add', 'success', users.carol, 'Engineering'],
-          ['user.group.add', 'failure', users.carol, 'Domain Admins'],
-          ['user.group.add', 'failure', missingUser, undefined],
+          ['user.group.add', 'success', users.admin, 'Engineering', false],
+          ['user.group.add', 'success', users.admin, 'Domain Admins', true],
+          ['user.group.add', 'success', users.carol, 'Engineering', false],
+          ['user.group.add', 'failure', users.carol, 'Domain Admins', null],
+          ['user.group.add', 'failure', missingUser, undefined, null],
         ]),
       );
       const carolAdd = events.find((e) => e.targetId === users.carol && e.result === 'success')!;
@@ -345,7 +351,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
       expect(grouped.filter((e) => e.bulkJobId === addJob)).toEqual([
         expect.objectContaining({
           action: 'bulk.create',
-          bulk: {
+          bulk: expect.objectContaining({
             action: 'user.group.add',
             subject: {
               groups: [
@@ -354,45 +360,88 @@ describe('adding users to groups, or removing them, in bulk', () => {
               ],
             },
             status: 'finished',
-            pauseReason: null,
             total: 3,
-            counts: { total: 3, pending: 0, running: 0, succeeded: 1, failed: 2, skipped: 0 },
-          },
+            counts: expect.objectContaining({ succeeded: 1, partial: 1, failed: 1 }),
+          }),
         }),
       ]);
     });
 
-    it('retries only the changes still missing', async () => {
+    it('retries the partial and failed rows, keeping what earlier runs changed', async () => {
       expect((await operator.post(`/api/bulk-jobs/${addJob}/retry`)).statusCode).toBe(200);
       const job = await finished(addJob);
 
-      expect(job.counts).toMatchObject({ succeeded: 1, failed: 2 });
+      expect(job.counts).toMatchObject({ succeeded: 1, partial: 1, failed: 1 });
       const carol = (await jobEvents(addJob)).filter((e) => e.targetId === users.carol);
-      expect(carol.map((e) => [e.result, e.metadata.groupName])).toEqual([
-        ['success', 'Engineering'],
-        ['failure', 'Domain Admins'],
-        ['failure', 'Domain Admins'],
-      ]);
+      expect(
+        carol.map((e) => [e.result, e.metadata.groupName, e.before?.isMember ?? null]),
+      ).toEqual(
+        expect.arrayContaining([
+          ['success', 'Engineering', false],
+          ['success', 'Engineering', true],
+          ['failure', 'Domain Admins', null],
+        ]),
+      );
+      expect(carol).toHaveLength(4);
+      const row = await api.app.db
+        .selectFrom('bulk_job_rows')
+        .select(['before_json', 'after_json'])
+        .where('job_id', '=', addJob)
+        .where('target_id', '=', users.carol)
+        .executeTakeFirstOrThrow();
+      expect(row.after_json).toEqual({
+        groups: [{ id: groups.engineering, name: 'Engineering', isMember: true }],
+      });
+      expect(row.before_json).toEqual({
+        groups: [{ id: groups.engineering, name: 'Engineering', isMember: false }],
+      });
     });
 
-    it('removes them again, leaving alone those not in the group', async () => {
+    it('skips a user who needed no change, and still audits it', async () => {
+      const job = await finished(
+        (await start('add', [users.alice, users.carol], [groups.engineering, groups.domainUsers]))
+          .id,
+      );
+
+      expect(job.counts).toMatchObject({ total: 2, succeeded: 0, skipped: 2 });
+      const events = (await jobEvents(job.id)).filter((e) => e.action === 'user.group.add');
+      expect(events).toHaveLength(4);
+      expect(events.every((e) => e.result === 'success' && e.before?.isMember === true)).toBe(true);
+      expect(events.filter((e) => e.before?.primaryGroup === true)).toHaveLength(2);
+    });
+
+    it('removes them again, and skips those not in the group', async () => {
       const job = await finished(
         (await start('remove', [users.admin, users.carol, users.dave], [groups.engineering])).id,
       );
 
-      expect(job).toMatchObject({ action: 'user.group.remove', counts: { succeeded: 3 } });
+      expect(job).toMatchObject({
+        action: 'user.group.remove',
+        counts: { succeeded: 2, skipped: 1, failed: 0 },
+      });
       expect(await directoryMembers(ENGINEERING)).toEqual(
         expect.not.arrayContaining([await dnOf('oa.admin'), await dnOf('carol.chen')]),
       );
       const events = await jobEvents(job.id);
-      expect(events.map((e) => [e.action, e.targetId])).toEqual(
-        expect.arrayContaining([
-          ['user.group.remove', users.admin],
-          ['user.group.remove', users.carol],
-        ]),
-      );
-      // Dave wasn't in Engineering, so nothing was written for him.
-      expect(events.filter((e) => e.targetId === users.dave)).toEqual([]);
+      expect(
+        events.filter((e) => e.targetId === users.dave).map((e) => [e.result, e.before?.isMember]),
+      ).toEqual([['success', false]]);
+    });
+
+    it('removes a member of a group renamed since the last sync', async () => {
+      const renamed = ENGINEERING.replace('CN=Engineering', 'CN=Engineering Renamed');
+      await asAdministrator((c) => c.modifyDN(ENGINEERING, renamed));
+      try {
+        const job = await finished((await start('remove', [users.bob], [groups.engineering])).id);
+
+        expect(job.counts).toMatchObject({ succeeded: 1, skipped: 0 });
+        expect(await directoryMembers(renamed)).not.toContain(await dnOf('bob.baker'));
+        const [event] = (await jobEvents(job.id)).filter((e) => e.action === 'user.group.remove');
+        expect(event).toMatchObject({ result: 'success', before: { isMember: true } });
+      } finally {
+        await asAdministrator((c) => c.modifyDN(renamed, ENGINEERING));
+        await setGroupMember(ENGINEERING, 'bob.baker', true);
+      }
     });
 
     it('takes the group-membership capability and a step-up, and groups the directory has', async () => {

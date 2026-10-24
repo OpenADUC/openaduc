@@ -41,11 +41,16 @@ export const BULK_JOB_PAUSE_REASONS = [
 ] as const;
 export type BulkJobPauseReason = (typeof BULK_JOB_PAUSE_REASONS)[number];
 
-/** `skipped`: the job was cancelled before the row ran. */
+/**
+ * `skipped`: the job was cancelled before the row ran, or the row needed
+ * no change. `partial`: some of the row's changes were made and others
+ * failed; a retry runs it again, as it does a failed row.
+ */
 export const BULK_JOB_ROW_STATUSES = [
   'pending',
   'running',
   'succeeded',
+  'partial',
   'failed',
   'skipped',
 ] as const;
@@ -128,6 +133,7 @@ export const bulkJobCountsSchema = z.object({
   pending: z.number().int(),
   running: z.number().int(),
   succeeded: z.number().int(),
+  partial: z.number().int(),
   failed: z.number().int(),
   skipped: z.number().int(),
 });

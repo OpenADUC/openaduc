@@ -34,8 +34,19 @@ export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | n
 }
 
 /** Rows got through, whatever their outcome. */
-const done = (c: BulkJobCounts): number => c.succeeded + c.failed + c.skipped;
-const tally = (c: BulkJobCounts): string => `${c.succeeded} succeeded · ${c.failed} failed`;
+const done = (c: BulkJobCounts): number => c.succeeded + c.partial + c.failed + c.skipped;
+const tally = (c: BulkJobCounts): string =>
+  [
+    `${c.succeeded} succeeded`,
+    c.partial > 0 ? `${c.partial} partly` : null,
+    `${c.failed} failed`,
+    c.skipped > 0 ? `${c.skipped} skipped` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+/** Rows that still have changes to make: the ones a retry runs again. */
+export const bulkJobProblems = (c: BulkJobCounts): number => c.failed + c.partial;
 
 /** Still writing, or about to: worth polling often. */
 export const bulkJobActive = (job: BulkJob): boolean =>
@@ -81,11 +92,21 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   const { counts } = job;
   const { label, open } = STATUS[job.status];
   const progress = counts.total === 0 ? 0 : Math.round((done(counts) / counts.total) * 100);
+  const problems = bulkJobProblems(counts);
   const failedNote =
-    counts.failed === 0
+    problems === 0
       ? null
-      : `${counts.failed} failed. ${counts.failed === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
-  const afterwards: BulkJobControl[] = counts.failed > 0 ? ['retry', 'dismiss'] : ['dismiss'];
+      : `${[
+          counts.partial > 0
+            ? `${counts.partial} ${counts.partial === 1 ? 'was' : 'were'} only partly changed`
+            : null,
+          counts.failed > 0 ? `${counts.failed} failed` : null,
+        ]
+          .filter(Boolean)
+          .join(
+            ' and ',
+          )}. ${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
+  const afterwards: BulkJobControl[] = problems > 0 ? ['retry', 'dismiss'] : ['dismiss'];
 
   if (job.status === 'paused') {
     return {
@@ -115,13 +136,15 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
       controls: afterwards,
     };
   }
+  // A finished job's skipped rows needed no change (a user already in the group).
+  const unchanged = counts.skipped > 0 ? `${counts.skipped} needed no change.` : null;
   return {
-    tone: counts.failed > 0 ? 'warn' : 'success',
+    tone: problems > 0 ? 'warn' : 'success',
     title:
-      counts.failed > 0
-        ? `${ed} ${counts.succeeded} of ${accounts(counts.total)}${target}`
-        : `${ed} ${accounts(counts.succeeded)}${target}`,
-    detail: failedNote,
+      counts.succeeded === counts.total
+        ? `${ed} ${accounts(counts.succeeded)}${target}`
+        : `${ed} ${counts.succeeded} of ${accounts(counts.total)}${target}`,
+    detail: [unchanged, failedNote].filter(Boolean).join(' ') || null,
     progress: null,
     controls: afterwards,
   };
