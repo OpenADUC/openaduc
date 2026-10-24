@@ -56,7 +56,7 @@ function suggestionFor(values: ImportValues, taken = NOTHING_TAKEN): NamingSugge
 }
 
 const ctx = (values: ImportValues, over: Partial<ImportRowContext> = {}): ImportRowContext => ({
-  suggestion: values.first && values.last ? suggestionFor(values) : null,
+  suggestion: namingRequestOf(values, OU) ? suggestionFor(values) : null,
   approved: new Set(),
   people: [],
   manager: { kind: 'none' },
@@ -415,5 +415,20 @@ describe('buckets', () => {
     expect(startingPlacement(rule, null)).toEqual({ ouDn: rule.ouDn, groups: rule.groups });
     expect(startingPlacement(rule, OU)).toEqual({ ouDn: OU, groups: rule.groups });
     expect(startingPlacement(null, null)).toEqual({ ouDn: null, groups: [] });
+  });
+});
+
+describe('namingRequestOf', () => {
+  it('leaves out a row the check can’t take, which its values block anyway', () => {
+    expect(namingRequestOf(row({ last: '' }), OU)).toBe(null);
+    expect(namingRequestOf(row({ first: 'x'.repeat(65) }), OU)).toBe(null);
+    const v = row({ first: 'x'.repeat(65) });
+    expect(reviewImportRow(v, ctx(v)).status).toBe('blocked');
+  });
+
+  it('sends the display name column as typed', () => {
+    expect(namingRequestOf(row({ displayName: 'Dr Jane Doe' }), OU)?.overrides).toMatchObject({
+      displayName: 'Dr Jane Doe',
+    });
   });
 });

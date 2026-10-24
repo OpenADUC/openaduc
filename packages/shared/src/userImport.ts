@@ -272,18 +272,26 @@ export function initialsOf(middle: string): string | null {
   return v.length <= 6 ? v : v.slice(0, 1);
 }
 
-/** The naming check's request for a row with both names; typed names replace the pattern's. */
+/**
+ * The naming check's request for a row, typed names replacing the
+ * pattern's; null for a row without both names, or with one too long to
+ * check (which blocks it anyway).
+ */
 export function namingRequestOf(
   values: ImportValues,
   ouDn: string | null,
   typed: NameOverrides = {},
 ): NamingRequest | null {
   if (!values.first || !values.last) return null;
+  const tooLong = (['first', 'last', 'preferredFirst', 'displayName'] as const).some(
+    (f) => values[f].length > MAX_LENGTH[f]!,
+  );
+  if (tooLong) return null;
   return {
     name: {
       first: values.first,
       last: values.last,
-      middleInitial: values.middleInitial || null,
+      middleInitial: values.middleInitial.slice(0, 64) || null,
       preferredFirst: values.preferredFirst || null,
     },
     ...(ouDn ? { ouDn } : {}),
@@ -334,10 +342,13 @@ export function lookupsOf(rows: readonly ImportValues[]): {
 } {
   const employeeIds = new Set<string>();
   const identifiers = new Set<string>();
+  // A value too long to be one is blocked anyway, so isn't asked about.
+  const fits = (v: string, max: number) => v.length <= max;
   for (const v of rows) {
-    if (v.employeeId) employeeIds.add(v.employeeId);
-    else if (v.email) identifiers.add(v.email);
-    if (v.manager) identifiers.add(v.manager);
+    if (v.employeeId) {
+      if (fits(v.employeeId, MAX_LENGTH.employeeId!)) employeeIds.add(v.employeeId);
+    } else if (v.email && fits(v.email, MAX_LENGTH.email!)) identifiers.add(v.email);
+    if (v.manager && fits(v.manager, MAX_LENGTH.manager!)) identifiers.add(v.manager);
   }
   return { employeeIds: [...employeeIds], identifiers: [...identifiers] };
 }
@@ -460,13 +471,13 @@ export function reviewImportRow(values: ImportValues, ctx: ImportRowContext): Im
   const unapproved = (s?.deviations ?? []).filter(
     (d) => needsApproval(d) && !ctx.approved.has(approvalKey(d)),
   );
-  const named = !!values.first && !!values.last;
+  const named = namingRequestOf(values, null) !== null;
   const status: ImportRowStatus = existing
     ? 'skipped'
-    : (named && !s) || !ctx.people
-      ? 'pending'
-      : blockers.length > 0
-        ? 'blocked'
+    : blockers.length > 0
+      ? 'blocked'
+      : (named && !s) || !ctx.people
+        ? 'pending'
         : unapproved.length > 0
           ? 'unapproved'
           : 'ready';
