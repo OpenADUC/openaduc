@@ -12,7 +12,10 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 const STEP_UP_EXEMPT = new Set(['POST /api/auth/step-up', 'DELETE /api/auth/step-up']);
 
 // Reads sent as POST because their input doesn't fit a query string.
-const READ_ONLY_POSTS = new Set(['POST /api/users/match']);
+const READ_ONLY_POSTS = new Set([
+  'POST /api/users/match',
+  'POST /api/directories/:id/naming/check',
+]);
 
 // Signed-in routes that act on no single directory (`directory: 'none'`) by
 // design. Every other signed-in route must be scoped to the caller's.

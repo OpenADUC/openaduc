@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { GroupScope, GroupType } from '@openaduc/shared';
+import type { GroupScope, GroupType, NamingLookups, TakenNames } from '@openaduc/shared';
 import type { GroupDeleteFacts, RoleGroup } from '../lib/groupDeletion.js';
 
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
@@ -521,6 +521,13 @@ export interface DirectoryProvider {
   // of `parentDn`, `samAccountName` anywhere in the domain. Reads with the
   // service account.
   findNameHolders(input: NewObjectNames): Promise<NameHolders>;
+  // The names already held that a new account named from `lookups` could
+  // collide with: sAMAccountName, UPN, mail and SMTP proxy addresses
+  // anywhere in the domain, and CNs in each OU. Reads with the service account.
+  findTakenNames(lookups: NamingLookups): Promise<TakenNames>;
+  // The forest's extra UPN suffixes (uPNSuffixes on the Partitions
+  // container), not including the domain's own DNS name.
+  getUpnSuffixes(): Promise<string[]>;
   // Create a group at `input.dn`. Checks both names are free on the
   // operator's bind first and returns `conflict` naming the holder
   // otherwise. Returns the new group so the cache can show it at once,

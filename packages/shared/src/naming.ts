@@ -540,19 +540,19 @@ function commonPrefix(values: string[]): string {
   return prefix;
 }
 
+export interface NamingLookups {
+  samAccountNamePrefixes: string[];
+  /** Local parts; UPNs and mail addresses starting with them. */
+  upnLocalPrefixes: string[];
+  cns: { ouDn: string; cn: string }[];
+}
+
 /**
  * What to look up in the directory so `resolveNames` sees every value a
  * request could end up taking: each sAMAccountName and UPN/mail local part
  * starting with these prefixes, and each CN in its OU.
  */
-export function namingLookups(
-  requests: NamingRequest[],
-  settings: NamingSettings,
-): {
-  samAccountNamePrefixes: string[];
-  upnLocalPrefixes: string[];
-  cns: { ouDn: string; cn: string }[];
-} {
+export function namingLookups(requests: NamingRequest[], settings: NamingSettings): NamingLookups {
   const sam = new Set<string>();
   const upn = new Set<string>();
   const cns = new Map<string, { ouDn: string; cn: string }>();

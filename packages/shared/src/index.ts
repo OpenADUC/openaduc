@@ -16,3 +16,4 @@ export * from './naming.js';
 export * from './ldapTransport.js';
 export * from './csv.js';
 export * from './schemas/roles.js';
+export * from './schemas/naming.js';
