@@ -312,7 +312,7 @@ function holdsAddress(p: ImportPerson, value: string): boolean {
 
 /** The person a row already is: by employee ID when it has one, otherwise by email. */
 export function existingPerson(
-  values: ImportValues,
+  values: Pick<ImportValues, 'employeeId' | 'email'>,
   people: readonly ImportPerson[],
 ): ExistingMatch | null {
   if (values.employeeId) {

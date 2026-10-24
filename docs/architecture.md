@@ -56,6 +56,7 @@ Key tables:
 | `elevated_sessions`                                                   | Step-up sessions. Child of an admin session, ends when idle or at an absolute lifetime, write-only capability subset.                 |
 | `audit_events`                                                        | Append-only. Database triggers reject `UPDATE`, `DELETE`, `TRUNCATE`. Indexed on timestamp, actor, target, correlation id, bulk job.  |
 | `bulk_jobs`, `bulk_job_rows`                                          | One row per bulk job (action, status, operator, the session it writes on, the job it reverts), one per object (status, before/after). |
+| `import_placement_rules`                                              | Where an import last put each bucket: directory, grouping column and value, target OU and groups by objectGUID.                       |
 | `user_cache_records`, `group_cache_records`, `computer_cache_records` | Local cache of LDAP objects, refreshed by sync tasks. Search/list endpoints read from these for speed.                                |
 | `user_group_memberships`                                              | Materialized user→group edges for fast membership queries.                                                                            |
 | `group_group_memberships`                                             | Materialized group→group edges (groups nested directly in other groups), rebuilt alongside `user_group_memberships`.                  |

@@ -233,3 +233,8 @@ export interface PlacementRule {
 export interface PlacementRulesResponse {
   rules: PlacementRule[];
 }
+
+export interface PlacementRulesSaveResponse extends PlacementRulesResponse {
+  /** How many rules the save added or changed. */
+  changed: number;
+}
