@@ -2,17 +2,17 @@
 import { createHash } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
 import {
-  PREVIEW_LIST_LIMIT,
   type BulkGroupMembershipPreview,
   type BulkGroupMembershipPreviewRequest,
-  type BulkGroupPreviewUser,
   type BulkMembershipOp,
 } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import { groupPrivilege, type RoleGroup } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import { findCachedGroupsById } from './groupCache.js';
+import { previewList } from './previewList.js';
 import { alreadyAsAsked, membershipState } from './membershipState.js';
+import { cachedUserName } from './userCache.js';
 
 /**
  * Names this op on these users and groups, whatever their order or case,
@@ -28,18 +28,6 @@ export function previewToken(
   return createHash('sha256')
     .update(`${op}\n${set(ids)}\n${set(groupIds)}`)
     .digest('base64url');
-}
-
-/** Users counted in full, and listed up to the preview's limit (they come sorted by name). */
-export function listed<T = BulkGroupPreviewUser>() {
-  const list = { count: 0, users: [] as T[] };
-  return {
-    list,
-    add(user: T): void {
-      list.count++;
-      if (list.users.length < PREVIEW_LIST_LIMIT) list.users.push(user);
-    },
-  };
 }
 
 /**
@@ -106,7 +94,7 @@ export async function previewGroupMembership(
   const known = users
     .map((u) => ({
       id: u.object_guid.toLowerCase(),
-      name: u.display_name ?? u.sam_account_name ?? u.object_guid,
+      name: cachedUserName(u, u.object_guid),
       primaryGroupId: rawScalarValue(u.primary_group_id),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -118,8 +106,8 @@ export async function previewGroupMembership(
     previewToken: previewToken(request.op, request.ids, request.groupIds),
     groups: groupIds.map((groupId) => {
       const group = byGroupId.get(groupId)!;
-      const unchanged = listed();
-      const indirect = listed();
+      const unchanged = previewList();
+      const indirect = previewList();
       let changes = 0;
       for (const user of known) {
         const state = membershipState(group, {

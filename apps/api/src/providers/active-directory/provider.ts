@@ -2831,10 +2831,9 @@ const PATCH_ATTRIBUTE_MAP: Record<string, string> = {
   l: 'l',
   st: 'st',
   postalCode: 'postalCode',
-  postOfficeBox: 'postOfficeBox',
   countryCode: 'countryCode',
   physicalDeliveryOfficeName: 'physicalDeliveryOfficeName',
-  // The caller checks the manager is a user it knows, and not the user itself.
+  // writeUserAttributes checks the manager is a user, and not the user itself.
   managerDn: 'manager',
 };
 
@@ -2843,6 +2842,7 @@ const PATCH_MULTI_ATTRIBUTE_MAP: Record<string, string> = {
   otherMailbox: 'otherMailbox',
   otherHomePhone: 'otherHomePhone',
   otherMobile: 'otherMobile',
+  postOfficeBox: 'postOfficeBox',
 };
 
 /**
@@ -2850,69 +2850,41 @@ const PATCH_MULTI_ATTRIBUTE_MAP: Record<string, string> = {
  *
  * Scalar fields (PATCH_ATTRIBUTE_MAP):
  *   - `undefined` ⇒ field absent, skip
- *   - `null` or empty string ⇒ delete the AD attribute
+ *   - `null` or empty string ⇒ clear the AD attribute
  *   - anything else ⇒ replace with the trimmed value
  *
  * Multi-valued fields (PATCH_MULTI_ATTRIBUTE_MAP):
  *   - `undefined` ⇒ skip
- *   - `null` or empty array ⇒ delete the AD attribute
+ *   - `null` or empty array ⇒ clear the AD attribute
  *   - non-empty array ⇒ replace with all (trimmed, non-empty) values
+ *
+ * A clear is a replace with no values, not a delete: a delete of an
+ * attribute the user doesn't have fails the whole modify, a replace
+ * with none is a no-op then.
  *
  * Returns an empty array if every field was undefined.
  */
 function buildAttributeChanges(patch: UserAttributePatch): Change[] {
-  const changes: Change[] = [];
   const data = patch as Record<string, unknown>;
+  const replace = (type: string, values: string[]) =>
+    new Change({ operation: 'replace', modification: new Attribute({ type, values }) });
+  const changes: Change[] = [];
   for (const [patchKey, attrName] of Object.entries(PATCH_ATTRIBUTE_MAP)) {
     const raw = data[patchKey];
     if (raw === undefined) continue;
-    if (raw === null || (typeof raw === 'string' && raw.trim() === '')) {
-      changes.push(
-        new Change({
-          operation: 'delete',
-          modification: new Attribute({ type: attrName, values: [] }),
-        }),
-      );
-      continue;
-    }
-    if (typeof raw === 'string') {
-      changes.push(
-        new Change({
-          operation: 'replace',
-          modification: new Attribute({ type: attrName, values: [raw.trim()] }),
-        }),
-      );
-    }
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    changes.push(replace(attrName, value ? [value] : []));
   }
   for (const [patchKey, attrName] of Object.entries(PATCH_MULTI_ATTRIBUTE_MAP)) {
     const raw = data[patchKey];
     if (raw === undefined) continue;
-    if (raw === null) {
-      changes.push(
-        new Change({
-          operation: 'delete',
-          modification: new Attribute({ type: attrName, values: [] }),
-        }),
-      );
-      continue;
-    }
-    if (Array.isArray(raw)) {
-      const cleaned = raw
-        .filter((v): v is string => typeof v === 'string')
-        .map((v) => v.trim())
-        .filter((v) => v.length > 0);
-      changes.push(
-        cleaned.length === 0
-          ? new Change({
-              operation: 'delete',
-              modification: new Attribute({ type: attrName, values: [] }),
-            })
-          : new Change({
-              operation: 'replace',
-              modification: new Attribute({ type: attrName, values: cleaned }),
-            }),
-      );
-    }
+    const values = Array.isArray(raw)
+      ? raw
+          .filter((v): v is string => typeof v === 'string')
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0)
+      : [];
+    changes.push(replace(attrName, values));
   }
   return changes;
 }
@@ -2942,7 +2914,7 @@ function snapshotForAudit(user: DirectoryUser): Record<string, unknown> {
     l: rawAuditScalar(raw['l']),
     st: rawAuditScalar(raw['st']),
     postalCode: rawAuditScalar(raw['postalCode']),
-    postOfficeBox: rawAuditScalar(raw['postOfficeBox']),
+    postOfficeBox: rawAuditArray(raw['postOfficeBox']),
     countryCode: rawAuditScalar(raw['countryCode']),
     physicalDeliveryOfficeName: user.office ?? null,
     managerDn: user.managerDn,

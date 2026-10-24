@@ -36,10 +36,11 @@ import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/e
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
 import { previewAttributes } from '../services/bulkAttributes.js';
+import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
-import { writeUserAttributes } from '../services/userAttributeWrite.js';
+import { UserAttributeRefusal, writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -49,7 +50,6 @@ import {
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import type { UserCacheRecordsTable } from '../db/types.js';
-import { refuseBulkRequest } from './bulkJobs.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
@@ -862,7 +862,11 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         body.patch,
         ctx(actor, req),
         auditContextFromRequest(req),
-      );
+      ).catch((err: unknown) => {
+        if (err instanceof UserAttributeRefusal)
+          throw app.httpErrors.unprocessableEntity(err.message);
+        throw err;
+      });
 
       if (!result.ok) {
         if (result.errorCode === 'permission_denied') {
@@ -1086,7 +1090,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     handler: async (req): Promise<BulkUserAttributesPreview> => {
       const body = bulkUserAttributesPreviewRequestSchema.parse(req.body);
       const preview = await previewAttributes(app.db, req.directoryId!, body).catch(
-        (err: unknown) => refuseBulkRequest(app, err),
+        refuseBulkRequest,
       );
       return bulkUserAttributesPreviewSchema.parse(preview);
     },
