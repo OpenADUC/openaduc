@@ -28,6 +28,7 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
@@ -470,6 +471,12 @@ async function onBulkDeleted(deletedIds: string[]): Promise<void> {
   await load();
 }
 
+// Bulk work often starts from a list someone sent rather than a filter.
+const canBulkAct = computed(
+  () => canBulkDisable.value || canBulkUnlock.value || canBulkDelete.value,
+);
+const pasteListOpen = ref(false);
+
 const bulkBusyMessage = computed(() => {
   if (!bulkRunning.value) return null;
   return `${bulkProgress.value.done} of ${bulkProgress.value.total} done`;
@@ -528,6 +535,15 @@ onMounted(() => {
           :severity="activeCount > 0 ? 'primary' : 'secondary'"
           :outlined="activeCount === 0"
           @click="drawerOpen = true"
+        />
+        <Button
+          v-if="canBulkAct"
+          label="Paste a list"
+          icon="pi pi-list-check"
+          severity="secondary"
+          outlined
+          :disabled="bulkRunning"
+          @click="pasteListOpen = true"
         />
         <Button
           v-if="auth.hasCapability('export:user')"
@@ -796,6 +812,8 @@ onMounted(() => {
         />
       </template>
     </Dialog>
+
+    <PasteListDialog v-model:visible="pasteListOpen" v-model:selected="selectedIds" />
 
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
