@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
-  NEW_USER_ORGANISATION_FIELDS,
   phoneCountries,
   type GroupPrivilege,
   type NewUserOrganisationField,
   type PasswordMode,
   type Role,
-  type UserCopySource,
 } from '@openaduc/shared';
 
 export const PASSWORD_MODE_LABEL: Record<PasswordMode, string> = {
@@ -23,34 +21,21 @@ export function phoneCountryOptions(): { value: string; label: string }[] {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
-const ORGANISATION_LABEL: Record<NewUserOrganisationField, string> = {
-  title: 'Title',
-  department: 'Department',
-  company: 'Company',
-  physicalDeliveryOfficeName: 'Office',
-  streetAddress: 'Street',
-  l: 'City',
-  st: 'State / Province',
-  postalCode: 'Postal code',
-  c: 'Country code',
-  co: 'Country',
-};
-
-/** What a copy carries over from its source, as label and value, in ADUC's order. */
-export function copiedDetails(copy: UserCopySource): { label: string; value: string }[] {
-  const rows: { label: string; value: string }[] = [];
-  for (const field of NEW_USER_ORGANISATION_FIELDS) {
-    const value = copy.organisation[field]?.trim();
-    if (value) rows.push({ label: ORGANISATION_LABEL[field], value });
-    if (field === 'company' && copy.manager) {
-      rows.push({
-        label: 'Manager',
-        value: copy.manager.displayName ?? copy.manager.distinguishedName,
-      });
-    }
-  }
-  return rows;
-}
+/** The organisation fields a copy prefills that the operator types in; the country is one unit. */
+export const ORGANISATION_INPUTS: {
+  field: NewUserOrganisationField;
+  label: string;
+  max: number;
+}[] = [
+  { field: 'title', label: 'Title', max: 128 },
+  { field: 'department', label: 'Department', max: 64 },
+  { field: 'company', label: 'Company', max: 64 },
+  { field: 'physicalDeliveryOfficeName', label: 'Office', max: 128 },
+  { field: 'streetAddress', label: 'Street', max: 1024 },
+  { field: 'l', label: 'City', max: 128 },
+  { field: 'st', label: 'State / Province', max: 128 },
+  { field: 'postalCode', label: 'Postal code', max: 40 },
+];
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: 'Admin',

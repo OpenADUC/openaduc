@@ -14,7 +14,7 @@ import { useOldSchool } from '../stores/useOldSchool.js';
 import { dnPath, rdns } from '../../design/lib/dn.js';
 import { announceUserCreated } from '../../design/feedback/userToasts.js';
 import { useUserCreation } from '../../design/composables/useUserCreation.js';
-import { PASSWORD_MODE_LABEL, privilegeWarning } from '../../design/lib/newUser.js';
+import { PASSWORD_MODE_LABEL } from '../../design/lib/newUser.js';
 
 const props = defineProps<{
   windowId: number;
@@ -35,7 +35,7 @@ const creation = useUserCreation({
 });
 const { form, names, upnSuffixes, deviations, plan, unfinished, unfinishedSummary, submitting } =
   creation;
-const { copySource, canAddGroups, groupChoices } = creation;
+const { copySource, copyError, groupChoices } = creation;
 if (props.copyFrom) void creation.startCopy(props.copyFrom);
 else void creation.start({ ouDn: props.parentDn ?? null });
 
@@ -47,14 +47,15 @@ const toApprove = computed(() => deviations.value.filter((d) => d.needsApproval)
 const problem = computed(
   () =>
     creation.loadError.value ??
-    (copySource.value && !form.ouDn
-      ? `${copySource.value.source.samAccountName} isn't in an OU, so the copy has nowhere to go. Use New User in an OU instead.`
-      : null) ??
     plan.value.blockers[0]?.message ??
     creation.error.value ??
     (unfinishedSummary.value
       ? `${unfinishedSummary.value.title} ${unfinishedSummary.value.failed} ${unfinishedSummary.value.left}`
       : null),
+);
+
+const groupWarnings = computed(() =>
+  plan.value.warnings.filter((w) => w.field === 'groups').map((w) => w.message),
 );
 
 const unmetChecks = computed(() =>
@@ -80,7 +81,10 @@ function ok(): void {
     @cancel="emit('close')"
     @close="emit('close')"
   >
-    <div class="os-tab-body">
+    <div v-if="copyError" class="os-tab-body">
+      <div class="os-error">{{ copyError }}</div>
+    </div>
+    <div v-else class="os-tab-body">
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px">
         <WinIcon name="user" :size="32" />
         <span>Create in: {{ createIn }}</span>
@@ -142,23 +146,21 @@ function ok(): void {
       </label>
       <fieldset v-if="copySource" class="os-groupbox" style="margin-top: 8px">
         <legend>Member of</legend>
-        <div v-if="!canAddGroups">You can't change group memberships, so no groups are added.</div>
-        <div v-else-if="!groupChoices.length">
+        <div v-for="m in groupWarnings" :key="m">{{ m }}</div>
+        <div v-if="!groupChoices.length">
           {{ copySource.source.samAccountName }} isn't directly in any group a copy can be added to.
         </div>
         <template v-for="g in groupChoices" :key="g.id">
           <label class="os-check" style="display: flex">
             <input
               type="checkbox"
-              :checked="g.ticked && canAddGroups"
-              :disabled="locked || !canAddGroups"
-              @change="creation.setGroup(g.id, ($event.target as HTMLInputElement).checked)"
+              :checked="g.ticked"
+              :disabled="locked || g.disabled"
+              @change="creation.toggleGroup(g.id)"
             />
             {{ g.name }}
           </label>
-          <div v-if="g.privilege" style="margin: 0 0 4px 20px">
-            {{ privilegeWarning(g.privilege) }}
-          </div>
+          <div v-if="g.warning" style="margin: 0 0 4px 20px">{{ g.warning }}</div>
         </template>
       </fieldset>
       <fieldset class="os-groupbox" style="margin-top: 8px">

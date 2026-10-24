@@ -101,6 +101,7 @@ const ALICE: UserCopySource = {
     postalCode: null,
     c: 'GB',
     co: 'United Kingdom',
+    countryCode: '826',
   },
   manager: { id: 'u-bob', distinguishedName: `CN=Bob Baker,${OU}`, displayName: 'Bob Baker' },
   groups: [
@@ -350,16 +351,25 @@ describe('useUserCreation', () => {
         groups: [ENGINEERING],
       });
       expect(creation.groupChoices.value).toEqual([
-        expect.objectContaining({ id: ADMINS, ticked: false }),
-        expect.objectContaining({ id: ENGINEERING, ticked: true }),
+        {
+          id: ADMINS,
+          name: 'Domain Admins',
+          ticked: false,
+          disabled: false,
+          warning: expect.stringContaining('Administrative group'),
+        },
+        { id: ENGINEERING, name: 'Engineering', ticked: true, disabled: false, warning: null },
       ]);
+      expect(creation.manager.value).toEqual(ALICE.manager);
+      expect(creation.country.value).toBe('United Kingdom (GB)');
     });
 
     it('creates the copy with what was copied and the groups left ticked', async () => {
       const { creation, onCreated } = await copying();
       await named(creation);
-      creation.setGroup(ENGINEERING, false);
-      creation.setGroup(ADMINS, true);
+      creation.toggleGroup(ENGINEERING);
+      creation.toggleGroup(ADMINS);
+      creation.form.organisation!.title = 'Senior Engineer';
 
       creation.submit();
       await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(DONE));
@@ -368,15 +378,16 @@ describe('useUserCreation', () => {
         expect.objectContaining({
           givenName: 'Jane',
           ouDn: OU,
-          organisation: {
-            title: 'Engineer',
+          organisation: expect.objectContaining({
+            title: 'Senior Engineer',
             department: 'Engineering',
             physicalDeliveryOfficeName: 'Leeds',
             l: 'Leeds',
             c: 'GB',
             co: 'United Kingdom',
+            countryCode: '826',
             managerId: 'u-bob',
-          },
+          }),
           groups: [ADMINS],
           copiedFrom: 'u-alice',
         }),
@@ -388,6 +399,8 @@ describe('useUserCreation', () => {
       await named(creation);
 
       expect(creation.canAddGroups.value).toBe(false);
+      expect(creation.groupChoices.value.every((g) => g.disabled && !g.ticked)).toBe(true);
+      expect(creation.plan.value.warnings).toEqual([expect.objectContaining({ field: 'groups' })]);
       creation.submit();
       await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
 
@@ -425,8 +438,31 @@ describe('useUserCreation', () => {
 
       await creation.startCopy('u-gone');
 
-      expect(creation.loadError.value).toBe('user not found');
+      expect(creation.copyError.value).toBe('user not found');
       expect(creation.copySource.value).toBeNull();
+      expect(creation.loading.value).toBe(false);
+      creation.form.first = 'Jane';
+      creation.form.last = 'Doe';
+      expect(creation.canSubmit.value).toBe(false);
+    });
+
+    it('drops the manager or the whole country when cleared', async () => {
+      const { creation, onCreated } = await copying();
+      await named(creation);
+
+      creation.clearManager();
+      creation.clearCountry();
+      creation.submit();
+      await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+
+      expect(creation.manager.value).toBeNull();
+      expect(creation.country.value).toBeNull();
+      expect(create.mock.calls[0]![0].organisation).toMatchObject({
+        managerId: null,
+        c: null,
+        co: null,
+        countryCode: null,
+      });
     });
   });
 
