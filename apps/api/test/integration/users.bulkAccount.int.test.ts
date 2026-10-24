@@ -23,11 +23,12 @@ import {
   type TestClient,
 } from './harness.js';
 
-type Fixture = 'alice' | 'bob' | 'carol' | 'erin' | 'admin';
+type Fixture = 'alice' | 'bob' | 'carol' | 'dave' | 'erin' | 'admin';
 const SAM: Record<Fixture, string> = {
   alice: 'alice.anders',
   bob: 'bob.baker',
   carol: 'carol.chen',
+  dave: 'dave.diaz',
   erin: 'erin.evans',
   // In CN=Users, outside the OU oa.operator may change.
   admin: 'Administrator',
@@ -209,40 +210,39 @@ describe('moving users and changing their account settings in bulk', () => {
         String(NORMAL_ACCOUNT | DONT_EXPIRE_PASSWORD),
       ]);
       await refresh(users.bob);
-      // Alice as a create in random mode recorded her, and Carol as one
-      // whose random password an operator has since reset.
+      // Alice and Dave were last given a password by a random-mode create
+      // (Dave's failed part-way, after the password); Carol's was reset
+      // since, and Bob has set his own since.
       const providerId = api.directoryId!;
-      const created = (targetId: string, at: string) => ({
-        action: 'user.create',
-        result: 'success',
+      const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+      const event = (action: string, targetId: string, at: string, result = 'success') => ({
+        action,
+        result,
         provider_id: providerId,
         target_type: 'user',
         target_id: targetId,
         timestamp: at,
-        metadata_json: JSON.stringify({ passwordMode: 'random', mustChange: false }),
+        metadata_json: JSON.stringify(
+          action === 'user.password.reset' ? {} : { passwordMode: 'random', mustChange: false },
+        ),
       });
       await api.app.db
         .insertInto('audit_events')
         .values([
-          created(users.alice, '2026-01-01T00:00:00Z'),
-          created(users.carol, '2026-01-01T00:00:00Z'),
-          {
-            action: 'user.password.reset',
-            result: 'success',
-            provider_id: providerId,
-            target_type: 'user',
-            target_id: users.carol,
-            timestamp: '2026-02-01T00:00:00Z',
-            metadata_json: JSON.stringify({ forceChangeAtNextLogin: true }),
-          },
+          event('user.create', users.alice, minutesAgo(0)),
+          event('user.create', users.dave, minutesAgo(1), 'failure'),
+          event('user.create', users.carol, minutesAgo(2)),
+          event('user.password.reset', users.carol, minutesAgo(1)),
+          event('user.create', users.bob, '2026-01-01T00:00:00Z'),
         ])
         .execute();
       try {
-        const result = await preview([users.alice, users.bob, users.carol, users.erin], {
-          op: 'mustChangePassword',
-        });
+        const result = await preview(
+          [users.alice, users.bob, users.carol, users.dave, users.erin],
+          { op: 'mustChangePassword' },
+        );
         expect(names(result.unchanged)).toEqual(['erin']);
-        expect(result.changed.count).toBe(3);
+        expect(result.changed.count).toBe(4);
         expect(result.notes).toEqual(
           expect.arrayContaining([
             {
@@ -252,8 +252,11 @@ describe('moving users and changing their account settings in bulk', () => {
             },
             {
               kind: 'random_password',
-              count: 1,
-              users: [expect.objectContaining({ id: users.alice })],
+              count: 2,
+              users: expect.arrayContaining([
+                { id: users.alice, name: expect.any(String) },
+                { id: users.dave, name: expect.any(String) },
+              ]),
             },
           ]),
         );
