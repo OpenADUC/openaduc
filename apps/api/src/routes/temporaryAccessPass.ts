@@ -14,20 +14,13 @@ import { auditContextFromRequest, withAudit } from '../services/auditContext.js'
 import { graphFailure } from './graphFailure.js';
 import {
   issueTap,
+  TapNotEnabled,
   tapPreflight,
   tapUserOf,
   type TapDeps,
   type TapIssueOutcome,
   type TapUser,
 } from '../services/temporaryAccessPass.js';
-
-export const TapNotEnabled = () =>
-  new AppError({
-    statusCode: 409,
-    code: 'tap_not_enabled',
-    message:
-      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
-  });
 
 // Issue TAP on a user's page. Both routes take write:user.issueTap: the
 // preflight says whether this user may have one and within what limits,
@@ -42,12 +35,7 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
   ): Promise<{ user: DirectoryUser; tapUser: TapUser; deps: TapDeps }> {
     const { id } = idParamSchema.parse(req.params);
     const directoryId = req.directoryId!;
-    if (
-      !(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'temporaryAccessPass'))
-    ) {
-      throw TapNotEnabled();
-    }
-    const graph = await app.services.graphClient.build(directoryId);
+    const graph = await app.services.graphClient.tapGraph(directoryId);
     if (!graph) throw TapNotEnabled();
     const provider = await app.services.providers.buildForRequest(req);
     const user = await provider.getUser({ kind: 'objectGuid', value: id });

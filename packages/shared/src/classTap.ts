@@ -4,13 +4,17 @@ import {
   type ClassStart,
   type ClassTapRequest,
 } from './schemas/classTap.js';
-import { TAP_MAX_START_DAYS, type TapPolicy } from './schemas/temporaryAccessPass.js';
-import { tapRequestProblem, tapStartProblem } from './temporaryAccessPass.js';
+import type { TapPolicy } from './schemas/temporaryAccessPass.js';
+import { TAP_START_MESSAGE, tapRequestProblem, tapStartProblem } from './temporaryAccessPass.js';
+
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
 
 /**
  * The instant a wall-clock date and time is in an IANA time zone: what
  * `2026-11-02` at `09:00` in `Europe/London` means. A time a DST change
- * skips moves on by the hour skipped.
+ * repeats is its first occurrence; one it skips moves forward to the
+ * first instant that exists, when the clocks change.
  */
 export function zonedDateTime(date: string, time: string, timeZone: string): Date {
   const [y, mo, d] = date.split('-').map(Number) as [number, number, number];
@@ -26,6 +30,7 @@ export function zonedDateTime(date: string, time: string, timeZone: string): Dat
     minute: 'numeric',
     second: 'numeric',
   });
+  /** The zone's offset from UTC at an instant. */
   const offsetAt = (instant: number) => {
     const parts = Object.fromEntries(
       format.formatToParts(new Date(instant)).map((p) => [p.type, Number(p.value)]),
@@ -40,10 +45,20 @@ export function zonedDateTime(date: string, time: string, timeZone: string): Dat
     );
     return asWall - instant;
   };
-  // The offset at a first guess, then at the instant that guess gives,
-  // which is right unless the wall time falls in a DST change.
-  const first = wall - offsetAt(wall);
-  return new Date(wall - offsetAt(first));
+  // The offsets either side of the day hold every reading of the wall time.
+  const offsets = [...new Set([offsetAt(wall - DAY_MS), offsetAt(wall + DAY_MS)])];
+  const readings = offsets.map((o) => wall - o).filter((t) => t + offsetAt(t) === wall);
+  if (readings.length > 0) return new Date(Math.min(...readings));
+  // Skipped: the clocks changed between these two, at a whole minute.
+  let lo = Math.min(...offsets.map((o) => wall - o));
+  let hi = Math.max(...offsets.map((o) => wall - o));
+  const before = offsetAt(lo);
+  while (hi - lo > MINUTE_MS) {
+    const mid = lo + Math.floor((hi - lo) / 2 / MINUTE_MS) * MINUTE_MS;
+    if (offsetAt(mid) === before) lo = mid;
+    else hi = mid;
+  }
+  return new Date(hi);
 }
 
 /**
@@ -74,10 +89,16 @@ export interface ClassTapProblem {
   message: string;
 }
 
+/** Said of a person whose class is on their start date when they have none. */
+export const NO_START_DATE_MESSAGE =
+  'Has no start date, so there’s no class for their pass to start at.';
+
 /**
  * Why the tenant's policy, or the class's start, won't let these rows
  * have their passes: none when it will. The Options step shows them and
- * the final check refuses on them.
+ * the final check refuses on them. A person whose start date is further
+ * ahead than a pass can be made isn't one: their pass is made once it's
+ * within reach.
  */
 export function classTapProblems(
   classTap: ClassTapRequest,
@@ -90,39 +111,14 @@ export function classTapProblems(
   const { start } = classTap;
   if (start.kind === 'fixed') {
     const problem = tapStartProblem(start.startsAt, now);
-    if (problem === 'past') return [{ row: null, message: 'Class starts in the past.' }];
-    if (problem === 'tooFar') {
-      return [
-        {
-          row: null,
-          message: `Class starts more than ${TAP_MAX_START_DAYS} days from now, further ahead than a pass can be made.`,
-        },
-      ];
-    }
-    return [];
+    return problem ? [{ row: null, message: TAP_START_MESSAGE[problem] }] : [];
   }
   return rows.flatMap((r, row): ClassTapProblem[] => {
     const date = r.startDate ?? null;
     const at = classStartOf(start, date);
-    if (!at || !date) {
-      return [
-        { row, message: 'Has no start date, so there’s no class for their pass to start at.' },
-      ];
-    }
-    const problem = tapStartProblem(at, now);
-    if (problem === 'past') {
-      return [
-        { row, message: `Their start date, ${date}, has passed, so class can’t start then.` },
-      ];
-    }
-    if (problem === 'tooFar') {
-      return [
-        {
-          row,
-          message: `Their start date, ${date}, is more than ${TAP_MAX_START_DAYS} days from now, further ahead than a pass can be made.`,
-        },
-      ];
-    }
-    return [];
+    if (!at || !date) return [{ row, message: NO_START_DATE_MESSAGE }];
+    return tapStartProblem(at, now) === 'past'
+      ? [{ row, message: `Their start date is ${date}. ${TAP_START_MESSAGE.past}` }]
+      : [];
   });
 }

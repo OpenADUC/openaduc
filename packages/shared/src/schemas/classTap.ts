@@ -3,10 +3,9 @@ import { z } from 'zod';
 import { TAP_LIFETIME_BOUNDS, tapPolicySchema } from './temporaryAccessPass.js';
 
 // An import can issue each new hire a Temporary Access Pass that starts
-// when their onboarding class does, often days later. OpenADUC creates
-// each pass once the person is in Entra and keeps its value, encrypted,
-// until the pass expires (docs/adr/0003-class-taps-are-stored-until-they-expire.md).
-// The class roster lists the people with their passes.
+// when their onboarding class does, often days later, listed on the
+// import's class roster. Why OpenADUC keeps the values:
+// docs/adr/0003-class-taps-are-stored-until-they-expire.md.
 
 /** A class's length unless the operator says otherwise, within the tenant's policy. */
 export const CLASS_TAP_DEFAULT_LIFETIME_MINUTES = 240;
@@ -75,6 +74,12 @@ export const CLASS_PASS_STATUSES = [
   'waitingForSync',
   /** Making the pass went wrong in a way that may come right: it's tried again. */
   'retrying',
+  /** Class is more than 30 days off: the pass is made once it's within reach. */
+  'scheduled',
+  /** Nothing is made for the class now: see the roster's alerts. */
+  'paused',
+  /** They hold a pass this class didn't make, which it doesn't replace unasked. */
+  'otherPass',
   /** Never issued one: they're, or may be, an administrator. */
   'refused',
   /** Entra or the tenant's policy wouldn't take the pass. */
@@ -84,9 +89,9 @@ export const CLASS_PASS_STATUSES = [
   'usable',
   'used',
   'expired',
-  /** Entra holds another pass, or none: it was replaced or deleted outside the roster. */
+  /** Entra holds another pass: it was replaced outside the roster. */
   'replaced',
-  /** Issued, but Graph couldn't be asked how it stands. */
+  /** Issued, and Graph couldn't be asked how it stands, or hasn't listed it yet. */
   'issued',
 ] as const;
 export type ClassPassStatus = (typeof CLASS_PASS_STATUSES)[number];
@@ -96,6 +101,9 @@ export const CLASS_PASS_STATUS_LABEL: Record<ClassPassStatus, string> = {
   notCreated: 'Account not created',
   waitingForSync: 'Waiting for sync',
   retrying: 'Trying again',
+  scheduled: 'Scheduled',
+  paused: 'Paused',
+  otherPass: 'Has another pass',
   refused: 'Not issued',
   failed: 'Not issued',
   notYetValid: 'Not yet valid',
@@ -105,6 +113,19 @@ export const CLASS_PASS_STATUS_LABEL: Record<ClassPassStatus, string> = {
   replaced: 'Replaced in Entra',
   issued: 'Issued',
 };
+
+/** What holds a class's passes back, for the job and its roster to say. */
+export const classAlertsSchema = z.object({
+  /** People Connect Sync hasn't brought to Entra with their class this close. */
+  unsynced: z.object({ count: z.number().int(), startsAt: z.string() }).nullable(),
+  /** People whose passes can't be made for now for some other reason, by reason. */
+  stuck: z.array(z.object({ message: z.string(), count: z.number().int() })),
+  /** The operator the passes are made on behalf of can no longer issue them. */
+  authority: z.object({ name: z.string().nullable(), message: z.string() }).nullable(),
+  /** The directory's Temporary Access Pass feature is off. */
+  off: z.string().nullable(),
+});
+export type ClassAlerts = z.infer<typeof classAlertsSchema>;
 
 export const classRosterRowSchema = z.object({
   rowId: z.string(),
@@ -138,8 +159,9 @@ export const classRosterSchema = z.object({
   class: classTapRequestSchema.extend({ updatedAt: z.string() }),
   /** When Connect Sync last ran a cycle, as Entra says; null when it can't be read. */
   lastSyncAt: z.string().nullable(),
-  /** People still not in Entra this close to class: an alert on the job. */
-  unsyncedAlert: z.object({ count: z.number().int(), startsAt: z.string() }).nullable(),
+  /** Who the passes are made on behalf of, now. */
+  authoriser: z.object({ name: z.string().nullable(), own: z.boolean() }),
+  alerts: classAlertsSchema,
   /** Graph couldn't be asked how the passes stand. */
   statusError: z.string().nullable(),
   rows: z.array(classRosterRowSchema),
@@ -165,3 +187,17 @@ export type ClassPassReissue = z.infer<typeof classPassReissueSchema>;
 /** Reschedule class: every pass is created again for the new start. */
 export const classRescheduleRequestSchema = z.object({ start: classStartSchema }).strict();
 export type ClassRescheduleRequest = z.infer<typeof classRescheduleRequestSchema>;
+
+/** What a reschedule came to: the people moved, and those whose new start has passed, left as they were. */
+export const classRescheduleSchema = z.object({
+  rescheduled: z.number().int(),
+  skipped: z.array(
+    z.object({
+      rowId: z.string(),
+      line: z.number().int(),
+      displayName: z.string(),
+      message: z.string(),
+    }),
+  ),
+});
+export type ClassReschedule = z.infer<typeof classRescheduleSchema>;

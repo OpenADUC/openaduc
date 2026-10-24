@@ -24,19 +24,27 @@ const byStartDate: ClassTapRequest = {
 };
 
 describe('zonedDateTime', () => {
+  const at = (date: string, time: string, zone: string) =>
+    zonedDateTime(date, time, zone).toISOString();
+
   it('reads a wall-clock time in the zone, either side of a DST change', () => {
-    expect(zonedDateTime('2026-10-20', '09:00', 'Europe/London').toISOString()).toBe(
-      '2026-10-20T08:00:00.000Z',
-    );
-    expect(zonedDateTime('2026-11-02', '09:00', 'Europe/London').toISOString()).toBe(
-      '2026-11-02T09:00:00.000Z',
-    );
-    expect(zonedDateTime('2026-11-02', '09:00', 'America/New_York').toISOString()).toBe(
-      '2026-11-02T14:00:00.000Z',
-    );
-    expect(zonedDateTime('2026-11-02', '09:30', 'Asia/Kolkata').toISOString()).toBe(
-      '2026-11-02T04:00:00.000Z',
-    );
+    expect(at('2026-10-20', '09:00', 'Europe/London')).toBe('2026-10-20T08:00:00.000Z');
+    expect(at('2026-11-02', '09:00', 'Europe/London')).toBe('2026-11-02T09:00:00.000Z');
+    expect(at('2026-11-02', '09:00', 'America/New_York')).toBe('2026-11-02T14:00:00.000Z');
+    expect(at('2026-11-02', '09:30', 'Asia/Kolkata')).toBe('2026-11-02T04:00:00.000Z');
+  });
+
+  it('moves a time the clocks skip forward to when they change', () => {
+    // 01:00 → 02:00 BST, 02:00 → 03:00 EDT, 02:00 → 03:00 AEDT.
+    expect(at('2027-03-28', '01:30', 'Europe/London')).toBe('2027-03-28T01:00:00.000Z');
+    expect(at('2027-03-14', '02:30', 'America/New_York')).toBe('2027-03-14T07:00:00.000Z');
+    expect(at('2026-10-04', '02:30', 'Australia/Sydney')).toBe('2026-10-03T16:00:00.000Z');
+  });
+
+  it('reads a time the clocks repeat as its first occurrence', () => {
+    expect(at('2026-10-25', '01:30', 'Europe/London')).toBe('2026-10-25T00:30:00.000Z');
+    expect(at('2026-11-01', '01:30', 'America/New_York')).toBe('2026-11-01T05:30:00.000Z');
+    expect(at('2027-04-04', '02:30', 'Australia/Sydney')).toBe('2027-04-03T15:30:00.000Z');
   });
 });
 
@@ -82,19 +90,19 @@ describe('classTapProblems', () => {
         { ...policy, usableOnceOnly: true },
         now,
       ),
-    ).toEqual([{ row: null, message: 'The tenant’s policy allows only one-time passes.' }]);
+    ).toEqual([{ row: null, message: 'The tenant’s policy allows only single-use passes.' }]);
   });
 
   it('refuses a class in the past or more than 30 days ahead', () => {
     expect(classTapProblems(fixed('2026-10-23T09:00:00Z'), [{}], policy, now)).toEqual([
-      { row: null, message: 'Class starts in the past.' },
+      { row: null, message: 'The pass can’t start in the past.' },
     ]);
     expect(classTapProblems(fixed('2026-12-01T09:00:00Z'), [{}], policy, now)).toEqual([
-      { row: null, message: expect.stringContaining('more than 30 days') },
+      { row: null, message: 'The pass can start at most 30 days from now.' },
     ]);
   });
 
-  it('names each row whose start date can’t start a pass', () => {
+  it('names each row whose start date can’t start a pass, but not one further off', () => {
     expect(
       classTapProblems(
         byStartDate,
@@ -109,8 +117,7 @@ describe('classTapProblems', () => {
       ),
     ).toEqual([
       { row: 1, message: expect.stringContaining('no start date') },
-      { row: 2, message: expect.stringContaining('2026-10-20, has passed') },
-      { row: 3, message: expect.stringContaining('more than 30 days') },
+      { row: 2, message: 'Their start date is 2026-10-20. The pass can’t start in the past.' },
     ]);
   });
 });

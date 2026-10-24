@@ -130,6 +130,15 @@ export class EntraIntegrationService {
     return entraFeatureOn(await this.getByProviderId(providerId), feature);
   }
 
+  /** The directories that have the feature on. */
+  async directoriesWith(feature: EntraFeatureKey): Promise<number[]> {
+    const rows = await this.db.selectFrom('directory_entra_integrations').selectAll().execute();
+    return rows
+      .map((r) => rowToSummary(r as Row))
+      .filter((i) => entraFeatureOn(i, feature))
+      .map((i) => i.providerId);
+  }
+
   /**
    * Decrypt and return everything the GraphClient needs to make outbound
    * calls. Returns null when no integration is configured for the

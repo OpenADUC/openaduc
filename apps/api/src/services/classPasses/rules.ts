@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { CLASS_SYNC_ALERT_MINUTES, tapExpiresAt, type ClassPassStatus } from '@openaduc/shared';
+import {
+  CLASS_SYNC_ALERT_MINUTES,
+  TAP_MAX_START_DAYS,
+  tapExpiresAt,
+  type ClassPassStatus,
+} from '@openaduc/shared';
 
 // The timing of class passes, kept free of I/O: when a pass is made for,
 // when a person still not in Entra is looked for again, and what the
@@ -7,7 +12,12 @@ import { CLASS_SYNC_ALERT_MINUTES, tapExpiresAt, type ClassPassStatus } from '@o
 
 const MINUTE = 60_000;
 /** A pass made this close to class, or after it started, starts now. */
-const START_SKEW_MS = 60_000;
+const LATE_START_MS = 60_000;
+const DAY_MS = 86_400_000;
+/** An issued pass is checked again at least this often, and once more shortly before class. */
+const RECHECK_MS = DAY_MS;
+/** A pass for a class further off than Graph allows is made this long after it's within reach. */
+const REACH_MARGIN_MS = 10 * MINUTE;
 /** Connect Sync runs every 30 minutes by default: never look less often than this. */
 const MAX_SYNC_WAIT_MS = 15 * MINUTE;
 /** Close to class, look more often, so a late sync still gets its pass in time. */
@@ -25,7 +35,7 @@ export function passWindow(
 ): { startsAt: string | null; lifetimeMinutes: number; late: boolean } | null {
   const ends = tapExpiresAt(classStartsAt, lifetimeMinutes).getTime();
   if (ends <= now.getTime()) return null;
-  if (classStartsAt.getTime() > now.getTime() + START_SKEW_MS) {
+  if (classStartsAt.getTime() > now.getTime() + LATE_START_MS) {
     return { startsAt: classStartsAt.toISOString(), lifetimeMinutes, late: false };
   }
   return {
@@ -33,6 +43,24 @@ export function passWindow(
     lifetimeMinutes: Math.ceil((ends - now.getTime()) / MINUTE),
     late: true,
   };
+}
+
+/** When a pass for this class can first be made: TAP_MAX_START_DAYS before it starts. */
+export function reachableAt(classStartsAt: Date): Date {
+  return new Date(classStartsAt.getTime() - TAP_MAX_START_DAYS * DAY_MS + REACH_MARGIN_MS);
+}
+
+/**
+ * When to check again that an issued pass's holder may still have it: a
+ * day on, or as class draws near (when the alert would), whichever comes
+ * first.
+ */
+export function recheckAt(classStartsAt: Date | null, now: Date): Date {
+  const daily = now.getTime() + RECHECK_MS;
+  const near = classStartsAt
+    ? classStartsAt.getTime() - CLASS_SYNC_ALERT_MINUTES * MINUTE
+    : Number.POSITIVE_INFINITY;
+  return new Date(near > now.getTime() ? Math.min(daily, near) : daily);
 }
 
 /** Whether class starts soon enough that someone still not in Entra is an alert. */
@@ -56,6 +84,24 @@ export function errorRetryMs(attempts: number): number {
   return Math.min(MAX_SYNC_WAIT_MS, 2 * MINUTE * 2 ** Math.max(0, attempts - 1));
 }
 
+/** Entra lists a pass for them other than the one the class made. */
+export const passReplaced = (
+  live: { id?: string | null | undefined } | null,
+  issuedMethodId: string | null,
+): boolean => !!live?.id && !!issuedMethodId && live.id !== issuedMethodId;
+
+/** A pass Entra lists that needn't be kept: used, expired, or not the class's. */
+export const passSpent = (
+  live: {
+    id?: string | null | undefined;
+    methodUsabilityReason?: string | null | undefined;
+  } | null,
+  issuedMethodId: string | null,
+): boolean =>
+  passReplaced(live, issuedMethodId) ||
+  live?.methodUsabilityReason === 'OneTimeUsed' ||
+  live?.methodUsabilityReason === 'Expired';
+
 /** What Graph says of the pass it holds, as the roster names it. */
 export function graphPassStatus(
   live: {
@@ -64,11 +110,11 @@ export function graphPassStatus(
   } | null,
   issuedMethodId: string | null,
 ): { status: ClassPassStatus; message: string | null } {
-  if (!live || (issuedMethodId && live.id && live.id !== issuedMethodId)) {
+  if (!live) return { status: 'issued', message: 'Entra hasn’t listed it yet.' };
+  if (passReplaced(live, issuedMethodId)) {
     return {
       status: 'replaced',
-      message:
-        'Entra holds another pass for them, or none: it was replaced or deleted outside the class roster.',
+      message: 'Entra holds another pass for them: it was replaced outside the class roster.',
     };
   }
   switch (live.methodUsabilityReason) {

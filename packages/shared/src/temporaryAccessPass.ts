@@ -10,6 +10,16 @@ import {
 const START_SKEW_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
 
+/** Said wherever a pass is refused because the tenant has Temporary Access Pass turned off. */
+export const TAP_POLICY_OFF_MESSAGE =
+  'Temporary Access Pass is turned off in the tenant’s authentication methods policy. Turn it on in the Microsoft Entra admin center first.';
+
+/** Why a pass can't start when asked: tapStartProblem's answer, in words. */
+export const TAP_START_MESSAGE: Record<'past' | 'tooFar', string> = {
+  past: 'The pass can’t start in the past.',
+  tooFar: `The pass can start at most ${TAP_MAX_START_DAYS} days from now.`,
+};
+
 /**
  * Why the tenant's policy won't take this pass, or null when it will. The
  * dialog uses it to hold back Issue; the API applies it again before
@@ -25,12 +35,10 @@ export function tapRequestProblem(
     return `The tenant’s policy allows a lifetime from ${lifetimeLabel(min)} to ${lifetimeLabel(max)}.`;
   }
   if (!request.isUsableOnce && policy.usableOnceOnly) {
-    return 'The tenant’s policy allows only one-time passes.';
+    return 'The tenant’s policy allows only single-use passes.';
   }
   const start = request.startsAt ? tapStartProblem(request.startsAt, now) : null;
-  if (start === 'past') return 'The pass can’t start in the past.';
-  if (start === 'tooFar') return `The pass can start at most ${TAP_MAX_START_DAYS} days from now.`;
-  return null;
+  return start ? TAP_START_MESSAGE[start] : null;
 }
 
 /** Whether a pass can't start then: it's past, or further ahead than TAP_MAX_START_DAYS. */

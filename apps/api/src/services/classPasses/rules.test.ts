@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { graphPassStatus, passWindow, syncRetryMs, timedPassStatus } from './rules.js';
+import {
+  graphPassStatus,
+  passWindow,
+  reachableAt,
+  recheckAt,
+  syncRetryMs,
+  timedPassStatus,
+} from './rules.js';
 
 const now = new Date('2026-10-24T12:00:00Z');
 const at = (iso: string) => new Date(iso);
@@ -54,11 +61,14 @@ describe('graphPassStatus', () => {
     ]);
   });
 
-  it('says a pass was replaced when Entra holds another, or none', () => {
+  it('says a pass was replaced only when Entra holds another', () => {
     expect(graphPassStatus({ id: 'tap-2', methodUsabilityReason: 'NotYetValid' }, 'tap-1')).toEqual(
       { status: 'replaced', message: expect.any(String) },
     );
-    expect(graphPassStatus(null, 'tap-1').status).toBe('replaced');
+    expect(graphPassStatus(null, 'tap-1')).toEqual({
+      status: 'issued',
+      message: 'Entra hasn’t listed it yet.',
+    });
   });
 });
 
@@ -73,6 +83,26 @@ describe('timedPassStatus', () => {
     );
     expect(timedPassStatus(pass('2026-10-24T07:00:00Z', '2026-10-24T11:00:00Z'), now)).toBe(
       'expired',
+    );
+  });
+});
+
+describe('reachableAt', () => {
+  it('makes a pass once class is within 30 days', () => {
+    expect(reachableAt(at('2026-12-20T09:00:00Z')).toISOString()).toBe('2026-11-20T09:10:00.000Z');
+  });
+});
+
+describe('recheckAt', () => {
+  it('checks a pass’s holder daily, and once more two hours before class', () => {
+    expect(recheckAt(at('2026-10-30T09:00:00Z'), now).toISOString()).toBe(
+      '2026-10-25T12:00:00.000Z',
+    );
+    expect(recheckAt(at('2026-10-24T18:00:00Z'), now).toISOString()).toBe(
+      '2026-10-24T16:00:00.000Z',
+    );
+    expect(recheckAt(at('2026-10-24T13:00:00Z'), now).toISOString()).toBe(
+      '2026-10-25T12:00:00.000Z',
     );
   });
 });

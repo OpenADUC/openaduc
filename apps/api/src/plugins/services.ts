@@ -85,6 +85,7 @@ export default fp(async (app) => {
     graph: graphClient,
     providers,
     roleGroups: () => authorization.roleGroups(),
+    capabilitiesOf: (dns) => authorization.resolveCapabilities(dns),
     logger: app.log,
   });
 

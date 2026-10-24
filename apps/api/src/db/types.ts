@@ -489,6 +489,12 @@ export interface ImportClassesTable {
   start: JSONColumnType<ClassStart>;
   lifetime_minutes: number;
   is_usable_once: boolean;
+  /** Who the class's passes are made on behalf of: the import's operator, or who took it over. */
+  authoriser_user_id: string;
+  authoriser_display_name: string | null;
+  /** When the follow-up found the authoriser could no longer issue passes; null while they can. */
+  authority_lapsed_at: Timestamp | null;
+  authority_message: string | null;
   created_at: TimestampDefault;
   updated_at: TimestampDefault;
 }
@@ -511,6 +517,8 @@ export interface ClassPassesTable {
   attempts: ColumnType<number, number | undefined, number>;
   next_attempt_at: TimestampDefault;
   claim_token: string | null;
+  /** An Entra pass a reschedule or reissue replaced, to delete before the new one is made. */
+  stale_method_id: string | null;
   updated_at: TimestampDefault;
 }
 

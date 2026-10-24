@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  TAP_POLICY_OFF_MESSAGE,
   tapExpiresAt,
   tapRequestProblem,
   type ExistingTap,
@@ -23,6 +24,7 @@ import {
   type GraphReader,
 } from './entraLookup.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
+import { AppError } from '../plugins/errorHandler.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { GraphPermissionError, type GraphResponse } from './graphClient.js';
 
@@ -45,6 +47,14 @@ export interface TapUser {
   protectedAccount: boolean;
 }
 
+export const TapNotEnabled = () =>
+  new AppError({
+    statusCode: 409,
+    code: 'tap_not_enabled',
+    message:
+      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
+  });
+
 export const tapUserOf = (user: DirectoryUser): TapUser => ({
   sid: user.sid,
   displayName: user.displayName,
@@ -66,7 +76,11 @@ export interface TapDeps {
 export interface TapPreflightResult {
   preflight: TapPreflight;
   entraUserId: string | null;
+  /** The passes Entra lists for the user, spent ones included, when it was asked. */
+  passes?: TapMethod[];
 }
+
+export type TapMethod = z.infer<typeof passSchema>;
 
 export type TapIssueCode =
   | 'privileged'
@@ -102,7 +116,7 @@ const SPENT_REASONS = new Set(['Expired', 'OneTimeUsed', 'DisabledByPolicy']);
 // it is the best this can do.
 const DNS_ADMINS = /^CN=DnsAdmins,CN=Users,DC=/i;
 
-const REFUSAL_CODES: Record<TapRefusalReason, TapIssueCode> = {
+export const REFUSAL_CODES: Record<TapRefusalReason, TapIssueCode> = {
   privileged: 'privileged',
   entraAdminRole: 'entra_admin_role',
   entraRolesUnknown: 'entra_roles_unknown',
@@ -123,6 +137,7 @@ const policySchema = z.object({
 type GraphPolicy = z.infer<typeof policySchema>;
 
 const passSchema = z.object({
+  id: z.string().nullish(),
   createdDateTime: z.string().nullish(),
   startDateTime: z.string().nullish(),
   lifetimeInMinutes: z.number().int().nullish(),
@@ -198,10 +213,7 @@ export async function tapPreflight(deps: TapDeps, user: TapUser): Promise<TapPre
   const { graph } = deps;
   const policy = await readPolicy(graph, now);
   if (policy.state !== 'enabled') {
-    return refused(
-      'policyDisabled',
-      'Temporary Access Pass is turned off in the tenant’s authentication methods policy. Turn it on in the Microsoft Entra admin center first.',
-    );
+    return refused('policyDisabled', TAP_POLICY_OFF_MESSAGE);
   }
 
   const entraUserId = await findEntraUser(graph, user.sid!);
@@ -235,6 +247,7 @@ export async function tapPreflight(deps: TapDeps, user: TapUser): Promise<TapPre
       inPolicyScope: inScope(policy, roles.groupIds),
     },
     entraUserId,
+    passes: passes.value,
   };
 }
 

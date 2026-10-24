@@ -133,7 +133,7 @@ describe('Issue TAP', () => {
     expect(replaced.json()).toMatchObject({ replaced: true });
   });
 
-  it('holds to the tenant policy’s lifetime range and one-time setting', async () => {
+  it('holds to the tenant policy’s lifetime range and single-use setting', async () => {
     await operator.stepUp();
     graph.policy.isUsableOnce = true;
     const tooLong = await issue(operator, 'alice.anders', { lifetimeMinutes: 600 });

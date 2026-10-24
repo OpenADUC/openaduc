@@ -1,41 +1,44 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Class Temporary Access Passes: what an import with "Issue TAPs for
-// class" leaves to do once its accounts exist. Each of its people gets a
-// pass that starts with their class, made once Connect Sync has brought
-// them to Entra, often days ahead. Graph shows a pass's value only in the
-// response that makes it, so it's kept, encrypted with the app's secret
-// key and bound to its job and row, until it expires or is replaced
-// (docs/adr/0003-class-taps-are-stored-until-they-expire.md).
+// class" leaves to do once its accounts exist. Why the values are stored,
+// and for how long, is docs/adr/0003-class-taps-are-stored-until-they-expire.md.
 //
 // The follow-up runs in-process without the operator: Graph is called with
 // the app's client credentials and AD read with the service account, never
-// with the operator's password, which a job holds only while their
-// elevated session lives. What it may do was fixed when the operator,
-// holding write:user.issueTap and stepped up, ran the import: a pass for
-// each account the import created, for the class they scheduled, within
-// the tenant's policy, and never to anyone who is or may be an
-// administrator, checked again each time a pass is made.
+// with an operator's password. It acts on the authority of the class's
+// authoriser (the import's operator, or whoever took the class over or
+// rescheduled it), checked every quarter of an hour: one who can no longer
+// issue passes pauses the class. Each pass is made only for an account the
+// import created, never for anyone who is or may be an administrator, and
+// that is checked again before class and before each reveal: a holder who
+// has become one has their pass deleted in Entra. A pass replaced (a
+// reschedule, a reissue) is deleted in Entra before the new one is made,
+// and a pass the class didn't make isn't replaced unasked.
 //
 // Its state is class_passes, so a restart carries on where it was: a due
 // pass is claimed (claim_token) for a lease, and one whose process died
 // is due again when the lease lapses. Graph throttling holds back that
-// directory's passes for as long as Graph asks.
+// directory's passes for as long as Graph asks, and a directory with the
+// feature off has its stored values deleted and nothing retried.
 import { randomUUID } from 'node:crypto';
 import {
+  NO_START_DATE_MESSAGE,
+  TAP_POLICY_OFF_MESSAGE,
   classStartOf,
   classTapProblems,
-  tapExpiresAt,
+  type Capability,
   type ClassPassReissue,
   type ClassPassReveal,
+  type ClassPassStatus,
+  type ClassReschedule,
   type ClassRoster,
-  type ClassRosterRow,
   type ClassStart,
   type ClassTapRequest,
 } from '@openaduc/shared';
 import type { FastifyBaseLogger } from 'fastify';
-import { sql, type Kysely, type Selectable } from 'kysely';
+import { sql, type Kysely, type Selectable, type Updateable } from 'kysely';
 import { z } from 'zod';
-import type { ClassPassesTable, DB } from '../../db/types.js';
+import type { ClassPassesTable, DB, ImportClassesTable } from '../../db/types.js';
 import type { RoleGroup } from '../../lib/groupPrivilege.js';
 import { decryptSecret, encryptSecret } from '../../lib/encryption.js';
 import { AppError, NotFound } from '../../plugins/errorHandler.js';
@@ -48,25 +51,38 @@ import type { EntraIntegrationService } from '../entraIntegration.js';
 import {
   GraphPermissionError,
   GraphThrottledError,
+  type GraphClient,
   type GraphClientFactory,
 } from '../graphClient.js';
-import { issueTap, tapUserOf, tenantTapPolicy } from '../temporaryAccessPass.js';
+import {
+  REFUSAL_CODES,
+  TapNotEnabled,
+  issueTap,
+  tapPreflight,
+  tapUserOf,
+  tenantTapPolicy,
+  type TapIssueCode,
+} from '../temporaryAccessPass.js';
+import { classAlerts, rosterRow, WAITING_CODES, type RosterPass } from './roster.js';
 import {
   errorRetryMs,
   graphPassStatus,
-  nearClass,
+  passSpent,
   passWindow,
+  reachableAt,
+  recheckAt,
   syncRetryMs,
-  timedPassStatus,
 } from './rules.js';
 
 export interface ClassPassDeps {
   db: Kysely<DB>;
   audit: Pick<AuditService, 'recordEvent'>;
-  entra: Pick<EntraIntegrationService, 'isFeatureEnabled'>;
-  graph: Pick<GraphClientFactory, 'build'>;
+  entra: Pick<EntraIntegrationService, 'directoriesWith'>;
+  graph: Pick<GraphClientFactory, 'tapGraph'>;
   providers: Pick<ProviderFactory, 'buildForDirectory'>;
   roleGroups: () => Promise<readonly RoleGroup[]>;
+  /** What OpenADUC lets someone with these AD groups do, as at sign-in. */
+  capabilitiesOf: (memberOfDns: readonly string[]) => Promise<Capability[]>;
   logger: FastifyBaseLogger;
 }
 
@@ -89,32 +105,54 @@ const LEASE = sql<Date>`now() + interval '10 minutes'`;
 const TICK_BUDGET_MS = 25_000;
 const STOP_WAIT_MS = 4_000;
 const STATUS_READS = 4;
-const OFF_RETRY_MS = 15 * 60_000;
+/** How long what Graph said of a pass, or of the tenant's last sync, is shown again unasked. */
+const STATUS_TTL_MS = 60_000;
+/** How long an authoriser found able to issue passes, or not, is taken as such. */
+const AUTHORITY_TTL_MS = 15 * 60_000;
 const INSERT_CHUNK = 1_000;
 
 const bindingOf = (jobId: string, rowId: string) => `class_passes:${jobId}:${rowId}`;
+const methodsPath = (entraUserId: string) =>
+  `/users/${encodeURIComponent(entraUserId)}/authentication/temporaryAccessPassMethods`;
+const methodPath = (entraUserId: string, methodId: string) =>
+  `${methodsPath(entraUserId)}/${encodeURIComponent(methodId)}`;
 
-const REFUSALS = new Set([
+/** Why a pass isn't made, or is taken away: its holder is, or may be, an administrator. */
+const REFUSALS = new Set<TapIssueCode>([
   'privileged',
   'entra_admin_role',
   'entra_roles_unknown',
   'membership_unknown',
 ]);
 
+const OTHER_PASS =
+  'They hold a Temporary Access Pass this class didn’t make. Reissue to replace it.';
+const NOT_HELD = {
+  issued:
+    'OpenADUC no longer holds this pass: it expired, was used or replaced. Reissue it if they need another.',
+  other: 'They have no pass to reveal.',
+};
+const OFF_PURGED =
+  ' OpenADUC has deleted the passes it held for this class; those in Entra expire as they were set to.';
+
 const livePassSchema = z.object({
   id: z.string().nullish(),
   methodUsabilityReason: z.string().nullish(),
 });
+type LivePass = z.infer<typeof livePassSchema>;
 
 type Pass = Selectable<ClassPassesTable> & {
   target_id: string | null;
   target_dn: string | null;
   provider_id: number;
-  actor_user_id: string;
-  actor_display_name: string | null;
   lifetime_minutes: number;
   is_usable_once: boolean;
+  authoriser_user_id: string;
+  authoriser_display_name: string | null;
 };
+type PassUpdate = Updateable<ClassPassesTable>;
+
+type Refusal = { code: TapIssueCode | 'not_found'; message: string };
 
 type Attempt =
   | {
@@ -128,18 +166,55 @@ type Attempt =
       late: boolean;
     }
   | { kind: 'unsynced'; lastSyncAt: string | null }
+  | { kind: 'later'; at: Date }
   | { kind: 'retry'; code: string; message: string; afterMs: number }
-  | { kind: 'refused' | 'failed'; code: string; message: string };
+  | { kind: 'refused'; code: string; message: string }
+  | { kind: 'failed'; code: string; message: string };
+
+/** The fields an issued pass has, cleared when it's gone. */
+const NO_PASS: PassUpdate = {
+  pass_enc: null,
+  entra_method_id: null,
+  pass_starts_at: null,
+  expires_at: null,
+};
+
+/** An audit event about a class (its job) or one of its passes (the person's account). */
+function event(
+  actor: ClassPassActor,
+  action: string,
+  result: 'success' | 'failure',
+  on: { providerId: number; jobId: string; pass?: Pick<Pass, 'target_id' | 'target_dn'> },
+  more: Partial<AuditEventInput> = {},
+): AuditEventInput {
+  return {
+    ...actor,
+    action,
+    result,
+    providerId: on.providerId,
+    bulkJobId: on.jobId,
+    ...(on.pass
+      ? { targetType: 'user', targetId: on.pass.target_id, targetDn: on.pass.target_dn }
+      : { targetType: 'system', targetId: on.jobId }),
+    ...more,
+  };
+}
 
 /**
  * Store the class an import's people get passes for, and a pass to make
- * for each of its rows, in the transaction that stores the job.
+ * for each of its rows, in the transaction that stores the job, on the
+ * authority of the job's operator.
  */
 export async function storeClass(
   trx: Kysely<DB>,
   jobId: string,
   classTap: ClassTapRequest,
 ): Promise<void> {
+  const job = await trx
+    .selectFrom('bulk_jobs')
+    .select(['actor_user_id', 'actor_display_name'])
+    .where('id', '=', jobId)
+    .executeTakeFirstOrThrow();
   await trx
     .insertInto('import_classes')
     .values({
@@ -147,6 +222,8 @@ export async function storeClass(
       start: JSON.stringify(classTap.start),
       lifetime_minutes: classTap.lifetimeMinutes,
       is_usable_once: classTap.isUsableOnce,
+      authoriser_user_id: job.actor_user_id,
+      authoriser_display_name: job.actor_display_name,
     })
     .execute();
   const rows = await trx
@@ -168,19 +245,18 @@ export async function storeClass(
   }
 }
 
-/** Delete the values of passes past their expiry. Returns how many went. */
-async function purgeExpiredPasses(db: Kysely<DB>): Promise<number> {
-  const purged = await db
-    .updateTable('class_passes')
-    .set({ pass_enc: null, updated_at: sql`now()` })
-    .where('pass_enc', 'is not', null)
-    .where('expires_at', '<=', sql<Date>`now()`)
-    .executeTakeFirst();
-  return Number(purged.numUpdatedRows);
-}
-
-const held = (p: Pick<Pass, 'pass_enc' | 'expires_at'>, now: Date) =>
+const isHeld = (p: Pick<Pass, 'pass_enc' | 'expires_at'>, now: Date) =>
   p.pass_enc !== null && p.expires_at !== null && new Date(p.expires_at) > now;
+
+const authoriserOf = (
+  klass: Pick<ImportClassesTable, 'authoriser_user_id'> & {
+    authoriser_display_name: string | null;
+  },
+): ClassPassActor => ({
+  actorUserId: klass.authoriser_user_id,
+  actorDisplayName: klass.authoriser_display_name,
+  actorAuthMethod: 'system',
+});
 
 export class ClassPassService {
   private timer: NodeJS.Timeout | null = null;
@@ -188,6 +264,13 @@ export class ClassPassService {
   private stopping = false;
   /** Directories Graph has throttled, until when. */
   private readonly throttledUntil = new Map<number, number>();
+  /** Whether an authoriser may still issue passes, by directory and user, as last found. */
+  private readonly authority = new Map<string, { at: number; lapsed: string | null }>();
+  /** What Graph last said of a person's pass, by Entra user, for the roster. */
+  private readonly liveStatus = new Map<string, { at: number; pass: LivePass | null }>();
+  private readonly lastSync = new Map<number, { at: number; value: string | null }>();
+  /** Passes the roster saw Entra say are spent, for the next sweep to stop holding. */
+  private readonly observedSpent = new Set<string>();
 
   constructor(private readonly deps: ClassPassDeps) {}
 
@@ -230,50 +313,166 @@ export class ClassPassService {
     }
   }
 
+  private throttled(directoryId: number, now = Date.now()): boolean {
+    return (this.throttledUntil.get(directoryId) ?? 0) > now;
+  }
+
   /**
-   * Delete the values of expired passes, then make the passes that are
-   * due, until none are or the tick's time is up. Returns how many were
-   * tried.
+   * Stop holding what needn't be held (expired passes, those the roster
+   * saw spent, every pass of a directory whose feature is off), check
+   * each class's authoriser, then work through the due passes until none
+   * are or the tick's time is up. Returns how many were taken.
    */
   async sweep(budgetMs = TICK_BUDGET_MS): Promise<number> {
-    await purgeExpiredPasses(this.deps.db);
+    const { db } = this.deps;
+    const on = await this.deps.entra.directoriesWith('temporaryAccessPass');
+    await db
+      .updateTable('class_passes')
+      .set({ pass_enc: null, updated_at: sql`now()` })
+      .where('pass_enc', 'is not', null)
+      .where((eb) =>
+        eb.or([
+          eb('expires_at', '<=', sql<Date>`now()`),
+          eb(
+            'job_id',
+            'in',
+            eb
+              .selectFrom('bulk_jobs')
+              .select('id')
+              .where(sql<boolean>`NOT (provider_id = ANY(${on}::int[]))`),
+          ),
+          ...(this.observedSpent.size > 0 ? [eb('row_id', 'in', [...this.observedSpent])] : []),
+        ]),
+      )
+      .execute();
+    this.observedSpent.clear();
+    await this.checkAuthority(on);
+
     const until = Date.now() + budgetMs;
-    let tried = 0;
+    let taken = 0;
     while (Date.now() < until && !this.stopping) {
-      const claimed = await this.claimDue();
+      const claimed = await this.claimDue(on);
       if (!claimed) break;
-      tried++;
-      await this.make(claimed.pass, claimed.token, this.systemActor(claimed.pass), {
-        action: 'import.classPass.issue',
-        auditWaits: false,
-      });
+      taken++;
+      const { pass, token } = claimed;
+      if (pass.status === 'issued') await this.recheck(pass, token);
+      else {
+        await this.make(pass, token, authoriserOf(pass), {
+          action: 'import.classPass.issue',
+          replaceExisting: false,
+          auditWaits: false,
+        });
+      }
     }
-    return tried;
+    return taken;
   }
 
-  private systemActor(pass: Pass): ClassPassActor {
-    return {
-      actorUserId: pass.actor_user_id,
-      actorDisplayName: pass.actor_display_name,
-      actorAuthMethod: 'system',
-    };
+  /** Whether the authoriser may still issue passes; null when the directory couldn't say. */
+  private async lapse(directoryId: number, userId: string, name: string | null) {
+    const key = `${directoryId}:${userId}`;
+    const known = this.authority.get(key);
+    if (known && Date.now() - known.at < AUTHORITY_TTL_MS) return known.lapsed;
+    const who = name ?? 'The operator these passes are made for';
+    let why: string | null;
+    try {
+      const directory = await this.deps.providers.buildForDirectory(directoryId);
+      const user = await directory.getUser({ kind: 'objectGuid', value: userId });
+      if (!user) why = 'their account is no longer in the directory';
+      else if (!user.enabled) why = 'their account is disabled';
+      else {
+        const caps = await this.deps.capabilitiesOf(user.memberOfDns);
+        why = caps.includes('write:user.issueTap') ? null : 'their role no longer allows it';
+      }
+    } catch (err) {
+      if (err instanceof DirectoryUnavailableError) return undefined;
+      throw err;
+    }
+    const lapsed = why
+      ? `${who} can no longer issue passes (${why}). Another operator can take over.`
+      : null;
+    this.authority.set(key, { at: Date.now(), lapsed });
+    return lapsed;
   }
 
-  /** Claim the next due pass whose account the import has created. */
-  private async claimDue(): Promise<{ pass: Pass; token: string } | null> {
+  /** Pause each class whose authoriser can no longer issue passes, and resume one whose can again. */
+  private async checkAuthority(on: readonly number[]): Promise<void> {
+    if (on.length === 0) return;
+    const classes = await this.deps.db
+      .selectFrom('import_classes as c')
+      .innerJoin('bulk_jobs as j', 'j.id', 'c.job_id')
+      .select([
+        'c.job_id',
+        'c.authoriser_user_id',
+        'c.authoriser_display_name',
+        'c.authority_lapsed_at',
+        'j.provider_id',
+      ])
+      .where(sql<boolean>`j.provider_id = ANY(${on}::int[])`)
+      .where((eb) =>
+        eb.exists(
+          eb
+            .selectFrom('class_passes as p')
+            .select('p.row_id')
+            .whereRef('p.job_id', '=', 'c.job_id')
+            .where('p.status', '=', 'waiting'),
+        ),
+      )
+      .execute();
+    for (const c of classes) {
+      const lapsed = await this.lapse(
+        c.provider_id,
+        c.authoriser_user_id,
+        c.authoriser_display_name,
+      );
+      if (lapsed === undefined || (lapsed !== null) === (c.authority_lapsed_at !== null)) continue;
+      await this.deps.db
+        .updateTable('import_classes')
+        .set({
+          authority_lapsed_at: lapsed ? sql`now()` : null,
+          authority_message: lapsed,
+          updated_at: sql`now()`,
+        })
+        .where('job_id', '=', c.job_id)
+        .where('authoriser_user_id', '=', c.authoriser_user_id)
+        .execute();
+      await this.deps.audit.recordEvent(
+        event(
+          authoriserOf(c),
+          lapsed ? 'import.class.pause' : 'import.class.resume',
+          'success',
+          { providerId: c.provider_id, jobId: String(c.job_id) },
+          lapsed ? { metadata: { reason: lapsed } } : {},
+        ),
+      );
+    }
+  }
+
+  /**
+   * Claim the next due pass: one to make, whose account the import has
+   * created and whose class isn't paused; or an issued one to check again.
+   */
+  private async claimDue(on: readonly number[]): Promise<{ pass: Pass; token: string } | null> {
+    if (on.length === 0) return null;
     const now = Date.now();
     const throttled = [...this.throttledUntil].flatMap(([id, at]) => (at > now ? [id] : []));
     const token = randomUUID();
     const { rows } = await sql<{ row_id: string }>`
-      UPDATE class_passes SET claim_token = ${token}, attempts = attempts + 1,
+      UPDATE class_passes SET claim_token = ${token},
+        attempts = CASE WHEN status = 'waiting' THEN attempts + 1 ELSE attempts END,
         next_attempt_at = ${LEASE}, updated_at = now()
       WHERE row_id = (
         SELECT p.row_id FROM class_passes p
         JOIN bulk_job_rows r ON r.id = p.row_id
         JOIN bulk_jobs j ON j.id = p.job_id
-        WHERE p.status = 'waiting' AND p.next_attempt_at <= now()
-          AND r.target_id IS NOT NULL AND r.status IN ('succeeded', 'partial')
+        JOIN import_classes c ON c.job_id = p.job_id
+        WHERE p.next_attempt_at <= now()
+          AND j.provider_id = ANY(${on}::int[])
           AND NOT (j.provider_id = ANY(${throttled}::int[]))
+          AND (
+            (p.status = 'waiting' AND c.authority_lapsed_at IS NULL
+              AND r.target_id IS NOT NULL AND r.status IN ('succeeded', 'partial'))
+            OR (p.status = 'issued' AND p.pass_enc IS NOT NULL AND p.expires_at > now())
+          )
         ORDER BY p.next_attempt_at
         LIMIT 1
         FOR UPDATE OF p SKIP LOCKED
@@ -297,60 +496,223 @@ export class ClassPassService {
         'r.target_id',
         'r.target_dn',
         'j.provider_id',
-        'j.actor_user_id',
-        'j.actor_display_name',
         'c.lifetime_minutes',
         'c.is_usable_once',
+        'c.authoriser_user_id',
+        'c.authoriser_display_name',
       ])
       .where('p.row_id', '=', rowId);
     if (jobId) q = q.where('p.job_id', '=', jobId);
     return (await q.executeTakeFirst()) ?? null;
   }
 
-  /** Make one claimed pass and record how it went. */
+  /** Change a pass this run has claimed, letting the claim go. False when it lost the claim. */
+  private async update(
+    pass: Pass,
+    token: string | null,
+    set: PassUpdate,
+    db: Kysely<DB> = this.deps.db,
+  ): Promise<boolean> {
+    let q = db
+      .updateTable('class_passes')
+      .set({ ...set, claim_token: null, updated_at: sql`now()` })
+      .where('row_id', '=', pass.row_id);
+    if (token) q = q.where('claim_token', '=', token);
+    return Number((await q.executeTakeFirst()).numUpdatedRows) > 0;
+  }
+
+  /**
+   * Whether the pass's holder may have it: their account still exists and
+   * they aren't, and can't be, an administrator, as Issue TAP decides.
+   * Throws what a check that couldn't be made throws.
+   */
+  private async privilege(
+    pass: Pass,
+    graph: GraphClient,
+  ): Promise<{ refusal: Refusal | null; current: LivePass | null }> {
+    const directory = await this.deps.providers.buildForDirectory(pass.provider_id);
+    const id = { kind: 'objectGuid' as const, value: pass.target_id! };
+    const user = await directory.getUser(id);
+    if (!user) {
+      return {
+        refusal: { code: 'not_found', message: 'The account is no longer in the directory.' },
+        current: null,
+      };
+    }
+    const { preflight, passes } = await tapPreflight(
+      {
+        graph,
+        tokenGroups: () => directory.getUserTokenGroups(id),
+        roleGroups: await this.deps.roleGroups(),
+      },
+      tapUserOf(user),
+    );
+    const code = preflight.status === 'refused' ? REFUSAL_CODES[preflight.reason] : null;
+    return {
+      refusal:
+        code && REFUSALS.has(code) && preflight.status === 'refused'
+          ? { code, message: preflight.message }
+          : null,
+      current: passes?.[0] ?? null,
+    };
+  }
+
+  /**
+   * Take a pass away from someone who may no longer hold it: deleted in
+   * Entra, its value deleted, the person refused with the reason.
+   */
+  private async revoke(
+    pass: Pass,
+    token: string | null,
+    refusal: Refusal,
+    actor: ClassPassActor,
+    graph: GraphClient | null,
+  ): Promise<void> {
+    let deleted = !pass.entra_method_id;
+    if (graph && pass.entra_user_id && pass.entra_method_id) {
+      deleted = await graph
+        .delete(methodPath(pass.entra_user_id, pass.entra_method_id))
+        .then(() => true)
+        .catch((err: unknown) => {
+          this.deps.logger.warn({ err, rowId: pass.row_id }, 'deleting a class pass failed');
+          return false;
+        });
+    }
+    await this.update(pass, token, {
+      status: 'refused',
+      ...NO_PASS,
+      error_code: refusal.code,
+      message: deleted
+        ? refusal.message
+        : `${refusal.message} OpenADUC couldn’t delete their pass in Entra: delete it in the Microsoft Entra admin center.`,
+      next_attempt_at: new Date().toISOString(),
+    });
+    await this.deps.audit.recordEvent(
+      event(
+        actor,
+        'import.classPass.revoke',
+        'success',
+        { providerId: pass.provider_id, jobId: String(pass.job_id), pass },
+        { errorCode: refusal.code, metadata: { reason: refusal.message, entraDeleted: deleted } },
+      ),
+    );
+  }
+
+  /** Check an issued pass's holder again, and stop holding a pass Entra says is spent. */
+  private async recheck(pass: Pass, token: string): Promise<void> {
+    const now = new Date();
+    const graph = await this.deps.graph.tapGraph(pass.provider_id);
+    if (!graph) {
+      await this.update(pass, token, { next_attempt_at: new Date().toISOString() });
+      return;
+    }
+    try {
+      const { refusal, current } = await this.privilege(pass, graph);
+      if (refusal) {
+        await this.revoke(pass, token, refusal, authoriserOf(pass), graph);
+        return;
+      }
+      await this.update(pass, token, {
+        ...(passSpent(current, pass.entra_method_id) ? { pass_enc: null } : {}),
+        next_attempt_at: recheckAt(
+          pass.class_starts_at ? new Date(pass.class_starts_at) : null,
+          now,
+        ).toISOString(),
+      });
+    } catch (err) {
+      const afterMs = this.retryAfter(err, pass);
+      await this.update(pass, token, {
+        next_attempt_at: new Date(now.getTime() + afterMs).toISOString(),
+      });
+    }
+  }
+
+  /** How long to wait after a check or a make that couldn't be made; logs the unexpected. */
+  private retryAfter(err: unknown, pass: Pass): number {
+    if (err instanceof GraphThrottledError) {
+      const ms = Math.max(30_000, err.retryAfterSeconds * 1000);
+      this.throttledUntil.set(pass.provider_id, Date.now() + ms);
+      return ms;
+    }
+    if (!(err instanceof GraphPermissionError || err instanceof DirectoryUnavailableError)) {
+      this.deps.logger.error({ err, rowId: pass.row_id }, 'class pass work failed');
+    }
+    return errorRetryMs(Math.max(1, pass.attempts));
+  }
+
+  /**
+   * Make one claimed pass and record how it went: the pass a reschedule
+   * or reissue replaced deleted in Entra first, then the new one made.
+   */
   private async make(
     pass: Pass,
     token: string,
     actor: ClassPassActor,
-    how: { action: string; auditWaits: boolean },
+    how: { action: string; replaceExisting: boolean; auditWaits: boolean },
   ): Promise<Attempt> {
     const now = new Date();
-    const attempt = await this.attempt(pass, now);
-    if (attempt.kind === 'retry' && attempt.code === 'entra_throttled') {
-      this.throttledUntil.set(pass.provider_id, now.getTime() + attempt.afterMs);
+    const graph = await this.deps.graph.tapGraph(pass.provider_id);
+    let attempt: Attempt;
+    if (!graph) {
+      attempt = {
+        kind: 'retry',
+        code: 'tap_not_enabled',
+        message: 'Temporary Access Pass is turned off for this directory.',
+        afterMs: errorRetryMs(pass.attempts),
+      };
+    } else {
+      const stale = pass.stale_method_id && pass.entra_user_id;
+      const notDeleted = stale
+        ? await graph
+            .delete(methodPath(pass.entra_user_id!, pass.stale_method_id!))
+            .then(() => null)
+            .catch((err: unknown) => err)
+        : null;
+      if (notDeleted) {
+        attempt = {
+          kind: 'retry',
+          code: notDeleted instanceof GraphThrottledError ? 'entra_throttled' : 'stale_not_deleted',
+          message: 'Their previous pass couldn’t be deleted in Entra, so no new one is made yet.',
+          afterMs: this.retryAfter(notDeleted, pass),
+        };
+      } else {
+        if (stale) {
+          await this.deps.db
+            .updateTable('class_passes')
+            .set({ stale_method_id: null })
+            .where('row_id', '=', pass.row_id)
+            .where('claim_token', '=', token)
+            .execute();
+        }
+        attempt = await this.attempt(pass, graph, now, how.replaceExisting);
+      }
     }
-    await this.record(pass, token, attempt, now, actor, how);
-    return attempt;
+    return this.record(pass, token, attempt, now, actor, how, graph);
   }
 
-  private async attempt(pass: Pass, now: Date): Promise<Attempt> {
+  private async attempt(
+    pass: Pass,
+    graph: GraphClient,
+    now: Date,
+    replaceExisting: boolean,
+  ): Promise<Attempt> {
     const failed = (code: string, message: string): Attempt => ({ kind: 'failed', code, message });
     if (!pass.class_starts_at) {
-      return failed(
-        'no_start',
-        'Has no start date, so there’s no class for their pass to start at.',
-      );
+      return failed('no_start', NO_START_DATE_MESSAGE);
     }
-    const window = passWindow(new Date(pass.class_starts_at), pass.lifetime_minutes, now);
+    const classStart = new Date(pass.class_starts_at);
+    const window = passWindow(classStart, pass.lifetime_minutes, now);
     if (!window) {
       return failed(
         'class_over',
         'Class was over before their pass could be made. Reschedule class to give them one.',
       );
     }
-    const off: Attempt = {
-      kind: 'retry',
-      code: 'tap_not_enabled',
-      message: 'Temporary Access Pass is turned off for this directory.',
-      afterMs: OFF_RETRY_MS,
-    };
-    const { provider_id: directoryId } = pass;
-    if (!(await this.deps.entra.isFeatureEnabled(directoryId, 'temporaryAccessPass'))) return off;
-    const graph = await this.deps.graph.build(directoryId);
-    if (!graph) return off;
+    const reachable = reachableAt(classStart);
+    if (reachable > now) return { kind: 'later', at: reachable };
 
     try {
-      const directory = await this.deps.providers.buildForDirectory(directoryId);
+      const directory = await this.deps.providers.buildForDirectory(pass.provider_id);
       const id = { kind: 'objectGuid' as const, value: pass.target_id! };
       const user = await directory.getUser(id);
       if (!user) return failed('not_found', 'The account is no longer in the directory.');
@@ -366,8 +728,7 @@ export class ClassPassService {
           startsAt: window.startsAt,
           lifetimeMinutes: window.lifetimeMinutes,
           isUsableOnce: pass.is_usable_once,
-          // Whatever pass they hold was made for this class, or nobody knows its value.
-          replaceExisting: true,
+          replaceExisting,
           fitLifetime: window.late,
         },
       );
@@ -386,43 +747,44 @@ export class ClassPassService {
       if (outcome.code === 'unsynced') {
         return { kind: 'unsynced', lastSyncAt: await tenantLastSync(graph) };
       }
-      return {
-        kind: REFUSALS.has(outcome.code) ? 'refused' : 'failed',
-        code: outcome.code,
-        message: outcome.message,
-      };
+      if (outcome.code === 'tap_exists') return failed('other_pass', OTHER_PASS);
+      return REFUSALS.has(outcome.code)
+        ? { kind: 'refused', code: outcome.code, message: outcome.message }
+        : failed(outcome.code, outcome.message);
     } catch (err) {
-      const retry = (code: string, message: string, afterMs = errorRetryMs(pass.attempts)) =>
-        ({ kind: 'retry', code, message, afterMs }) as const;
-      if (err instanceof GraphThrottledError) {
-        return retry(
-          'entra_throttled',
-          'Microsoft Graph is busy.',
-          Math.max(30_000, err.retryAfterSeconds * 1000),
-        );
-      }
       if (err instanceof GraphPermissionError && err.statusCode === 400) {
         return failed(
           'entra_rejected',
           `Microsoft Entra refused: ${err.graphMessage ?? err.message}`,
         );
       }
-      if (err instanceof GraphPermissionError) {
-        return retry('entra_error', err.hint ? `${err.message} (${err.hint})` : err.message);
-      }
-      if (err instanceof DirectoryUnavailableError) {
-        return retry('directory_unavailable', 'No domain controller could be reached.');
-      }
-      this.deps.logger.error({ err, rowId: pass.row_id }, 'making a class pass failed');
-      return retry('internal_error', 'Something went wrong making their pass.');
+      const message =
+        err instanceof GraphThrottledError
+          ? 'Microsoft Graph is busy.'
+          : err instanceof GraphPermissionError
+            ? err.hint
+              ? `${err.message} (${err.hint})`
+              : err.message
+            : err instanceof DirectoryUnavailableError
+              ? 'No domain controller could be reached.'
+              : 'Something went wrong making their pass.';
+      const code =
+        err instanceof GraphThrottledError
+          ? 'entra_throttled'
+          : err instanceof GraphPermissionError
+            ? 'entra_error'
+            : err instanceof DirectoryUnavailableError
+              ? 'directory_unavailable'
+              : 'internal_error';
+      return { kind: 'retry', code, message, afterMs: this.retryAfter(err, pass) };
     }
   }
 
   /**
-   * Record how making a pass went. A made pass replaces the one held, its
-   * value and its audit row stored together; a refusal deletes the one
-   * held; anything else leaves a pass still held as it was (a reissue
-   * that didn't take), or waits to try again.
+   * Record how making a pass went. A made pass is stored with its audit
+   * row, together; if that can't be done, the pass is deleted in Entra
+   * again and the row tried again later, so no pass is live that nobody
+   * holds. Returns what came of it, which a storage failure makes a retry.
    */
   private async record(
     pass: Pass,
@@ -431,43 +793,22 @@ export class ClassPassService {
     now: Date,
     actor: ClassPassActor,
     how: { action: string; auditWaits: boolean },
-  ): Promise<void> {
-    const { db } = this.deps;
+    graph: GraphClient | null,
+  ): Promise<Attempt> {
     const rowId = String(pass.row_id);
     const jobId = String(pass.job_id);
-    const audit = (result: 'success' | 'failure', more: Partial<AuditEventInput>) => ({
-      ...actor,
-      action: how.action,
-      result,
-      providerId: pass.provider_id,
-      bulkJobId: jobId,
-      targetType: 'user' as const,
-      targetId: pass.target_id,
-      targetDn: pass.target_dn,
-      ...more,
-    });
-    const update = (set: Record<string, unknown>, trx: Kysely<DB> = db) =>
-      trx
-        .updateTable('class_passes')
-        .set({ ...set, claim_token: null, updated_at: sql`now()` })
-        .where('row_id', '=', rowId)
-        .where('claim_token', '=', token)
-        .executeTakeFirst();
-    const cleared = {
-      pass_enc: null,
-      entra_method_id: null,
-      pass_starts_at: null,
-      expires_at: null,
-    };
-    const keepsHeld = pass.status === 'issued' && held(pass, now);
+    const on = { providerId: pass.provider_id, jobId, pass };
     const at = (ms: number) => new Date(now.getTime() + ms).toISOString();
+    const classStart = pass.class_starts_at ? new Date(pass.class_starts_at) : null;
 
     switch (attempt.kind) {
       case 'issued': {
-        await db
+        const stored = await this.deps.db
           .transaction()
           .execute(async (trx) => {
-            const stored = await update(
+            const claimed = await this.update(
+              pass,
+              token,
               {
                 status: 'issued',
                 entra_user_id: attempt.entraUserId,
@@ -478,13 +819,13 @@ export class ClassPassService {
                 error_code: null,
                 message: null,
                 tenant_last_sync_at: null,
+                next_attempt_at: recheckAt(classStart, now).toISOString(),
               },
               trx,
             );
-            // Lost the claim: whoever has it now makes the pass again.
-            if (Number(stored.numUpdatedRows) === 0) throw new LostClaim();
+            if (!claimed) throw new LostClaim();
             await this.deps.audit.recordEvent(
-              audit('success', {
+              event(actor, how.action, 'success', on, {
                 after: {
                   entraUserId: attempt.entraUserId,
                   startsAt: attempt.startsAt,
@@ -496,72 +837,95 @@ export class ClassPassService {
               }),
               trx,
             );
+            return true;
           })
-          .catch(async (err: unknown) => {
-            if (err instanceof LostClaim) return;
-            this.deps.logger.error({ err, rowId }, 'storing a class pass failed');
-            // Graph holds a pass nobody knows: the next try replaces it.
-            await update({
-              status: keepsHeld ? 'issued' : 'waiting',
-              error_code: 'internal_error',
-              message: 'Their pass couldn’t be stored.',
-              next_attempt_at: at(errorRetryMs(pass.attempts)),
-            });
+          .catch((err: unknown) => {
+            if (!(err instanceof LostClaim)) {
+              this.deps.logger.error({ err, rowId }, 'storing a class pass failed');
+            }
+            return false;
           });
-        return;
+        if (stored) return attempt;
+        // Nobody holds the pass just made: it mustn't stay live.
+        const deleted =
+          !!graph &&
+          !!attempt.methodId &&
+          (await graph
+            .delete(methodPath(attempt.entraUserId, attempt.methodId))
+            .then(() => true)
+            .catch(() => false));
+        const failure: Attempt = {
+          kind: 'retry',
+          code: 'store_failed',
+          message: deleted
+            ? 'Their pass couldn’t be stored, so it was deleted in Entra. It’s made again shortly.'
+            : 'Their pass couldn’t be stored, and couldn’t be deleted in Entra. It’s made again shortly.',
+          afterMs: errorRetryMs(pass.attempts),
+        };
+        await this.update(pass, token, {
+          status: 'waiting',
+          ...NO_PASS,
+          entra_user_id: attempt.entraUserId,
+          stale_method_id: deleted ? null : attempt.methodId,
+          error_code: failure.code,
+          message: failure.message,
+          next_attempt_at: at(failure.afterMs),
+        });
+        await this.deps.audit
+          .recordEvent(event(actor, how.action, 'failure', on, { errorCode: failure.code }))
+          .catch((err) => this.deps.logger.error({ err }, 'audit insert failed'));
+        return failure;
       }
       case 'unsynced':
-        await update({
+        await this.update(pass, token, {
           status: 'waiting',
-          ...cleared,
-          error_code: 'unsynced',
+          ...NO_PASS,
+          error_code: WAITING_CODES.unsynced,
           message: null,
           tenant_last_sync_at: attempt.lastSyncAt,
-          next_attempt_at: at(
-            syncRetryMs(
-              pass.attempts,
-              pass.class_starts_at ? new Date(pass.class_starts_at) : null,
-              now,
-            ),
-          ),
+          next_attempt_at: at(syncRetryMs(pass.attempts, classStart, now)),
         });
-        if (how.auditWaits) {
-          await this.deps.audit.recordEvent(audit('failure', { errorCode: 'unsynced' }));
-        }
-        return;
+        break;
+      case 'later':
+        await this.update(pass, token, {
+          status: 'waiting',
+          error_code: WAITING_CODES.notYet,
+          message: null,
+          next_attempt_at: attempt.at.toISOString(),
+        });
+        break;
       case 'retry':
-        await update(
-          keepsHeld
-            ? { next_attempt_at: sql`now()` }
-            : {
-                status: 'waiting',
-                error_code: attempt.code,
-                message: attempt.message,
-                next_attempt_at: at(attempt.afterMs),
-              },
-        );
-        if (how.auditWaits) {
-          await this.deps.audit.recordEvent(audit('failure', { errorCode: attempt.code }));
-        }
-        return;
+        await this.update(pass, token, {
+          status: 'waiting',
+          error_code: attempt.code,
+          message: attempt.message,
+          next_attempt_at: at(attempt.afterMs),
+        });
+        break;
       case 'refused':
       case 'failed':
-        await update(
-          attempt.kind === 'failed' && keepsHeld
-            ? { next_attempt_at: sql`now()` }
-            : {
-                status: attempt.kind,
-                ...cleared,
-                error_code: attempt.code,
-                message: attempt.message,
-                next_attempt_at: sql`now()`,
-              },
-        );
+        await this.update(pass, token, {
+          status: attempt.kind,
+          ...NO_PASS,
+          error_code: attempt.code,
+          message: attempt.message,
+          next_attempt_at: now.toISOString(),
+        });
         await this.deps.audit.recordEvent(
-          audit('failure', { errorCode: attempt.code, metadata: { message: attempt.message } }),
+          event(actor, how.action, 'failure', on, {
+            errorCode: attempt.code,
+            metadata: { message: attempt.message },
+          }),
         );
-        return;
+        return attempt;
     }
+    if (how.auditWaits) {
+      const code = attempt.kind === 'retry' ? attempt.code : (attempt.kind as string);
+      await this.deps.audit.recordEvent(
+        event(actor, how.action, 'failure', on, { errorCode: code }),
+      );
+    }
+    return attempt;
   }
 
   // ---- The class roster ---------------------------------------------------
@@ -576,30 +940,86 @@ export class ClassPassService {
     return found;
   }
 
-  /** Whether the job has a class, and how many of its people class finds still not in Entra. */
-  async alertOf(jobId: string): Promise<{ unsyncedAlert: ClassRoster['unsyncedAlert'] } | null> {
-    const found = await this.deps.db
+  private async alertsFor(
+    jobId: string,
+    providerId: number,
+    klass: Selectable<ImportClassesTable>,
+    passes: Parameters<typeof classAlerts>[0],
+  ) {
+    const on = (await this.deps.entra.directoriesWith('temporaryAccessPass')).includes(
+      Number(providerId),
+    );
+    return classAlerts(
+      passes,
+      {
+        lifetimeMinutes: klass.lifetime_minutes,
+        authority:
+          klass.authority_lapsed_at && klass.authority_message
+            ? { name: klass.authoriser_display_name, message: klass.authority_message }
+            : null,
+        off: on
+          ? null
+          : `Temporary Access Pass is turned off for this directory, so no passes are made.${OFF_PURGED}`,
+      },
+      new Date(),
+    );
+  }
+
+  /** The class's alerts, for the import's page; null when it didn't schedule one. */
+  async alertOf(
+    jobId: string,
+    providerId: number,
+  ): Promise<{ alerts: ClassRoster['alerts'] } | null> {
+    const klass = await this.deps.db
       .selectFrom('import_classes')
-      .select('lifetime_minutes')
+      .selectAll()
       .where('job_id', '=', jobId)
       .executeTakeFirst();
-    if (!found) return null;
+    if (!klass) return null;
     const passes = await this.deps.db
       .selectFrom('class_passes as p')
       .innerJoin('bulk_job_rows as r', 'r.id', 'p.row_id')
-      .select(['p.status', 'p.class_starts_at', 'r.target_id'])
+      .select(['p.status', 'p.class_starts_at', 'p.error_code', 'p.message', 'r.target_id'])
       .where('p.job_id', '=', jobId)
       .execute();
-    return { unsyncedAlert: unsyncedAlert(passes, found.lifetime_minutes, new Date()) };
+    return { alerts: await this.alertsFor(jobId, providerId, klass, passes) };
   }
 
-  /** The class roster: each person, how their pass stands in Entra, and whether it's held. */
+  /** What Graph says of a person's pass, asked at most once a minute and never while it's throttled. */
+  private async livePass(
+    graph: GraphClient,
+    providerId: number,
+    entraUserId: string,
+  ): Promise<LivePass | null | undefined> {
+    const known = this.liveStatus.get(entraUserId);
+    if (known && Date.now() - known.at < STATUS_TTL_MS) return known.pass;
+    if (this.throttled(providerId)) return undefined;
+    const res = await graph.getJson(methodsPath(entraUserId));
+    const pass = listOf(livePassSchema).parse(res.data).value[0] ?? null;
+    this.liveStatus.set(entraUserId, { at: Date.now(), pass });
+    return pass;
+  }
+
+  private async tenantSync(graph: GraphClient | null, providerId: number) {
+    if (!graph) return null;
+    const known = this.lastSync.get(providerId);
+    if (known && Date.now() - known.at < STATUS_TTL_MS) return known.value;
+    if (this.throttled(providerId)) return known?.value ?? null;
+    const value = await tenantLastSync(graph);
+    this.lastSync.set(providerId, { at: Date.now(), value });
+    return value;
+  }
+
+  /**
+   * The class roster: each person, how their pass stands in Entra, and
+   * whether it's held. It writes nothing: a pass Entra says is spent is
+   * shown as not held, and the next sweep stops holding it.
+   */
   async roster(job: JobRecord, readerId: string): Promise<ClassRoster> {
-    const { db } = this.deps;
     const klass = await this.classOf(job);
-    const graph = await this.deps.graph.build(job.provider_id);
+    const graph = await this.deps.graph.tapGraph(job.provider_id);
     const now = new Date();
-    const rows = await db
+    const passes = await this.deps.db
       .selectFrom('class_passes as p')
       .innerJoin('bulk_job_rows as r', 'r.id', 'p.row_id')
       .selectAll('p')
@@ -609,94 +1029,52 @@ export class ClassPassService {
       .execute();
 
     let statusError: string | null = null;
-    const live = new Map<string, { status: ClassRosterRow['status']; message: string | null }>();
-    // Passes Entra has replaced with another. One it lists none for is
-    // kept: it may be a moment before a pass just made is listed.
-    const replaced = new Set<string>();
-    const toRead = rows.filter(
-      (r) =>
-        r.status === 'issued' && r.entra_user_id && r.expires_at && new Date(r.expires_at) > now,
-    );
+    const live = new Map<string, { status: ClassPassStatus; message: string | null }>();
+    const spent = new Set<string>();
     if (graph) {
-      await inBatches(toRead, STATUS_READS, async (r) => {
-        try {
-          const res = await graph.getJson(
-            `/users/${encodeURIComponent(r.entra_user_id!)}/authentication/temporaryAccessPassMethods`,
-          );
-          const current = listOf(livePassSchema).parse(res.data).value[0] ?? null;
-          live.set(String(r.row_id), graphPassStatus(current, r.entra_method_id));
-          if (current?.id && r.entra_method_id && current.id !== r.entra_method_id) {
-            replaced.add(String(r.row_id));
-          }
-        } catch (err) {
-          if (!(err instanceof GraphThrottledError || err instanceof GraphPermissionError))
-            throw err;
-          statusError =
-            err instanceof GraphThrottledError
-              ? 'Microsoft Graph is busy, so some passes show what their times say.'
-              : `OpenADUC couldn’t ask Entra how the passes stand: ${err.message}`;
-        }
-      });
+      const issued = passes.filter(
+        (p) =>
+          p.status === 'issued' && p.entra_user_id && p.expires_at && new Date(p.expires_at) > now,
+      );
+      for (let i = 0; i < issued.length; i += STATUS_READS) {
+        await Promise.all(
+          issued.slice(i, i + STATUS_READS).map(async (p) => {
+            const rowId = String(p.row_id);
+            try {
+              const current = await this.livePass(graph, job.provider_id, p.entra_user_id!);
+              if (current === undefined) {
+                statusError = 'Microsoft Graph is busy, so some passes show what their times say.';
+                return;
+              }
+              live.set(rowId, graphPassStatus(current, p.entra_method_id));
+              if (passSpent(current, p.entra_method_id) && p.pass_enc) {
+                spent.add(rowId);
+                this.observedSpent.add(rowId);
+              }
+            } catch (err) {
+              if (err instanceof GraphThrottledError) {
+                this.throttledUntil.set(job.provider_id, Date.now() + err.retryAfterSeconds * 1000);
+                statusError = 'Microsoft Graph is busy, so some passes show what their times say.';
+              } else if (err instanceof GraphPermissionError) {
+                statusError = `OpenADUC couldn’t ask Entra how the passes stand: ${err.message}`;
+              } else throw err;
+            }
+          }),
+        );
+      }
     }
-    // A pass Entra says is spent, or has replaced, needn't be kept.
-    const spent = [...live].flatMap(([rowId, s]) =>
-      s.status === 'used' || s.status === 'expired' || replaced.has(rowId) ? [rowId] : [],
+
+    const paused = !graph || klass.authority_lapsed_at !== null;
+    const rows = passes.map((p) =>
+      rosterRow(
+        {
+          ...p,
+          row_id: String(p.row_id),
+          held: !!graph && isHeld(p, now) && !spent.has(String(p.row_id)),
+        } satisfies RosterPass,
+        { lifetimeMinutes: klass.lifetime_minutes, paused, live: live.get(String(p.row_id)), now },
+      ),
     );
-    if (spent.length > 0) {
-      await db
-        .updateTable('class_passes')
-        .set({ pass_enc: null, updated_at: sql`now()` })
-        .where('row_id', 'in', spent)
-        .where('pass_enc', 'is not', null)
-        .execute();
-    }
-
-    const lifetime = klass.lifetime_minutes;
-    const rosterRows = rows.map((r): ClassRosterRow => {
-      const input = r.input_json ?? {};
-      const rowId = String(r.row_id);
-      const classEnds = r.class_starts_at ? tapExpiresAt(r.class_starts_at, lifetime) : null;
-      const base = {
-        rowId,
-        line: Number(input['line']),
-        displayName: String(input['displayName'] ?? ''),
-        samAccountName: String(input['samAccountName'] ?? ''),
-        personalEmail: (input['otherMailbox'] as string | null) ?? null,
-        mobile: (input['mobile'] as string | null) ?? null,
-        id: r.target_id,
-        message: r.message,
-        startsAt: r.class_starts_at ? new Date(r.class_starts_at).toISOString() : null,
-        expiresAt: classEnds?.toISOString() ?? null,
-        held: held(r, now) && !spent.includes(rowId),
-      };
-      if (r.status === 'issued') {
-        const times = {
-          startsAt: new Date(r.pass_starts_at ?? r.class_starts_at!),
-          expiresAt: new Date(r.expires_at!),
-        };
-        const known = live.get(rowId) ?? { status: timedPassStatus(times, now), message: null };
-        return {
-          ...base,
-          ...known,
-          startsAt: times.startsAt.toISOString(),
-          expiresAt: times.expiresAt.toISOString(),
-        };
-      }
-      if (r.status === 'refused' || r.status === 'failed') return { ...base, status: r.status };
-      if (!r.target_id) {
-        const coming = r.row_status === 'pending' || r.row_status === 'running';
-        return {
-          ...base,
-          status: coming ? 'awaitingAccount' : 'notCreated',
-          message: coming ? null : r.error_message,
-        };
-      }
-      return {
-        ...base,
-        status: r.error_code && r.error_code !== 'unsynced' ? 'retrying' : 'waitingForSync',
-      };
-    });
-
     return {
       job: {
         id: String(job.id),
@@ -706,75 +1084,120 @@ export class ClassPassService {
       },
       class: {
         start: klass.start,
-        lifetimeMinutes: lifetime,
+        lifetimeMinutes: klass.lifetime_minutes,
         isUsableOnce: klass.is_usable_once,
         updatedAt: new Date(klass.updated_at).toISOString(),
       },
-      lastSyncAt: graph ? await tenantLastSync(graph) : null,
-      unsyncedAlert: unsyncedAlert(rows, lifetime, now),
+      authoriser: {
+        name: klass.authoriser_display_name,
+        own: klass.authoriser_user_id === readerId,
+      },
+      lastSyncAt: await this.tenantSync(graph, job.provider_id).catch(() => null),
+      alerts: await this.alertsFor(String(job.id), job.provider_id, klass, passes),
       statusError,
-      rows: rosterRows.sort((a, b) => a.line - b.line),
+      rows: rows.sort((a, b) => a.line - b.line),
     };
   }
 
-  /** A held pass's value, audited as revealed (never the value), the reveal refused once it isn't held. */
-  async reveal(
-    job: JobRecord,
-    rowId: string,
-    audit: Omit<AuditEventInput, 'action' | 'result'>,
-  ): Promise<ClassPassReveal> {
+  /**
+   * A held pass's value, once its holder is found still not an
+   * administrator: one who has become one, or can't be cleared, has the
+   * pass taken away instead. Every reveal, and every refusal, is audited;
+   * the value never is.
+   */
+  async reveal(job: JobRecord, rowId: string, actor: ClassPassActor): Promise<ClassPassReveal> {
     const pass = await this.load(rowId, String(job.id));
     if (!pass) throw NotFound('That person isn’t on this class roster.');
-    const event = (result: 'success' | 'failure', more: Partial<AuditEventInput> = {}) => ({
-      ...audit,
-      action: 'import.classPass.reveal',
-      result,
-      actorAuthMethod: 'ad-password' as const,
-      providerId: job.provider_id,
-      bulkJobId: String(job.id),
-      targetType: 'user' as const,
-      targetId: pass.target_id,
-      targetDn: pass.target_dn,
-      ...more,
-    });
-    if (pass.status !== 'issued' || !held(pass, new Date())) {
-      await this.deps.audit.recordEvent(event('failure', { errorCode: 'not_held' }));
-      throw new AppError({
-        statusCode: 410,
-        code: 'gone',
-        message:
-          pass.status === 'issued'
-            ? 'OpenADUC no longer holds this pass: it expired or was used. Reissue it if they need another.'
-            : 'They have no pass to reveal yet.',
-      });
+    const on = { providerId: job.provider_id, jobId: String(job.id), pass };
+    const refuse = async (error: AppError): Promise<never> => {
+      await this.deps.audit.recordEvent(
+        event(actor, 'import.classPass.reveal', 'failure', on, { errorCode: error.code }),
+      );
+      throw error;
+    };
+    const now = new Date();
+    if (pass.status !== 'issued' || !isHeld(pass, now) || this.observedSpent.has(rowId)) {
+      return refuse(
+        new AppError({
+          statusCode: 410,
+          code: 'gone',
+          message: pass.status === 'issued' ? NOT_HELD.issued : NOT_HELD.other,
+        }),
+      );
+    }
+    const graph = await this.deps.graph.tapGraph(job.provider_id);
+    if (!graph) throw TapNotEnabled();
+    let refusal: Refusal | null;
+    try {
+      ({ refusal } = await this.privilege(pass, graph));
+    } catch (err) {
+      if (err instanceof GraphThrottledError) this.retryAfter(err, pass);
+      return refuse(
+        new AppError({
+          statusCode: 503,
+          code: 'unverified',
+          message:
+            'OpenADUC couldn’t check that they still aren’t an administrator, so it doesn’t reveal their pass. Try again in a minute.',
+        }),
+      );
+    }
+    if (refusal) {
+      await this.revoke(pass, null, refusal, actor, graph);
+      return refuse(
+        new AppError({
+          statusCode: 409,
+          code: refusal.code,
+          message: `${refusal.message} Their pass has been deleted.`,
+        }),
+      );
     }
     const value = decryptSecret(pass.pass_enc!, bindingOf(String(job.id), rowId));
     const startsAt = new Date(pass.pass_starts_at ?? pass.class_starts_at!).toISOString();
     const expiresAt = new Date(pass.expires_at!).toISOString();
     // Audited before it's handed over: a reveal that can't be audited doesn't happen.
-    await this.deps.audit.recordEvent(event('success', { metadata: { startsAt, expiresAt } }));
+    await this.deps.audit.recordEvent(
+      event(actor, 'import.classPass.reveal', 'success', on, { metadata: { startsAt, expiresAt } }),
+    );
     return { temporaryAccessPass: value, startsAt, expiresAt, isUsableOnce: pass.is_usable_once };
   }
 
   /**
-   * Make one person's pass again, now, for the class as scheduled: a lost
-   * or burned pass is replaced, and one still waiting is tried at once.
-   * Audited as the operator's, whatever came of it.
+   * Make one person's pass again, now, for the class as scheduled: the
+   * pass they hold is deleted in Entra first and its value with it, then
+   * a new one made, replacing any pass the class didn't make, which the
+   * operator confirmed. Audited as the operator's, whatever came of it.
    */
   async reissue(job: JobRecord, rowId: string, actor: ClassPassActor): Promise<ClassPassReissue> {
     await this.classOf(job);
+    const before = await this.load(rowId, String(job.id));
+    if (!before) throw NotFound('That person isn’t on this class roster.');
+    if (!before.target_id) {
+      throw new AppError({
+        statusCode: 409,
+        code: 'not_created',
+        message: 'The import hasn’t created their account, so there’s no one to give a pass to.',
+      });
+    }
     const token = randomUUID();
     const claimed = await this.deps.db
       .updateTable('class_passes')
-      .set({ claim_token: token, attempts: 1, next_attempt_at: LEASE, updated_at: sql`now()` })
+      .set({
+        claim_token: token,
+        attempts: 1,
+        next_attempt_at: LEASE,
+        status: 'waiting',
+        stale_method_id: sql`COALESCE(entra_method_id, stale_method_id)`,
+        ...NO_PASS,
+        error_code: null,
+        message: null,
+        updated_at: sql`now()`,
+      })
       .where('row_id', '=', rowId)
       .where('job_id', '=', job.id)
       .where((eb) =>
         eb.or([eb('claim_token', 'is', null), eb('next_attempt_at', '<=', sql<Date>`now()`)]),
       )
       .executeTakeFirst();
-    const pass = await this.load(rowId, String(job.id));
-    if (!pass) throw NotFound('That person isn’t on this class roster.');
     if (Number(claimed.numUpdatedRows) === 0) {
       throw new AppError({
         statusCode: 409,
@@ -782,21 +1205,10 @@ export class ClassPassService {
         message: 'Their pass is being made right now. Try again in a moment.',
       });
     }
-    if (!pass.target_id) {
-      await this.deps.db
-        .updateTable('class_passes')
-        .set({ claim_token: null, next_attempt_at: sql`now()` })
-        .where('row_id', '=', rowId)
-        .where('claim_token', '=', token)
-        .execute();
-      throw new AppError({
-        statusCode: 409,
-        code: 'not_created',
-        message: 'The import hasn’t created their account, so there’s no one to give a pass to.',
-      });
-    }
+    const pass = (await this.load(rowId, String(job.id)))!;
     const attempt = await this.make(pass, token, actor, {
       action: 'import.classPass.reissue',
+      replaceExisting: true,
       auditWaits: true,
     });
     switch (attempt.kind) {
@@ -807,36 +1219,44 @@ export class ClassPassService {
           outcome: 'waiting',
           message: 'They aren’t in Microsoft Entra now: their pass is made when they appear.',
         };
+      case 'later':
+        return {
+          outcome: 'waiting',
+          message: 'Class is more than 30 days off: their pass is made once it’s within reach.',
+        };
       case 'retry':
-      case 'failed': {
-        const kept = pass.status === 'issued' && held(pass, new Date());
-        const message = kept
-          ? `Their pass wasn’t replaced, so the one they have still stands: ${attempt.message}`
-          : attempt.message;
-        return { outcome: attempt.kind === 'retry' ? 'waiting' : 'failed', message };
-      }
+        return {
+          // Made, but not stored, so deleted again: it didn't happen.
+          outcome: attempt.code === 'store_failed' ? 'failed' : 'waiting',
+          message: attempt.message,
+        };
+      case 'failed':
       case 'refused':
-        return { outcome: 'refused', message: attempt.message };
+        return { outcome: attempt.kind, message: attempt.message };
     }
   }
 
   /**
-   * Move class: every pass is made again for the new start, the values
-   * held for the old one deleted. Refused, with nothing changed, when the
-   * new start doesn't suit the tenant's policy for everyone.
+   * Move class: each person whose new start hasn't passed gets their pass
+   * made again for it, the one they hold deleted in Entra first and its
+   * value now; those whose new start has passed are left as they were and
+   * said. Rescheduling makes the operator the class's authoriser.
    */
-  async reschedule(job: JobRecord, start: ClassStart, actor: ClassPassActor): Promise<void> {
+  async reschedule(
+    job: JobRecord,
+    start: ClassStart,
+    actor: ClassPassActor,
+  ): Promise<ClassReschedule> {
     const { db } = this.deps;
     const klass = await this.classOf(job);
-    const graph = await this.deps.graph.build(job.provider_id);
-    if (!graph) throw NotFound('This directory has no Microsoft Entra integration.');
+    const graph = await this.deps.graph.tapGraph(job.provider_id);
+    if (!graph) throw TapNotEnabled();
     const policy = await tenantTapPolicy(graph);
     if (!policy) {
       throw new AppError({
         statusCode: 409,
         code: 'policy_disabled',
-        message:
-          'Temporary Access Pass is turned off in the tenant’s authentication methods policy. Turn it on in the Microsoft Entra admin center first.',
+        message: TAP_POLICY_OFF_MESSAGE,
       });
     }
     const rows = await db
@@ -848,6 +1268,7 @@ export class ClassPassService {
         'r.status as row_status',
         sql<string | null>`r.input_json->>'startDate'`.as('start_date'),
         sql<string | null>`r.input_json->>'line'`.as('line'),
+        sql<string | null>`r.input_json->>'displayName'`.as('display_name'),
       ])
       .where('p.job_id', '=', job.id)
       .execute();
@@ -855,42 +1276,48 @@ export class ClassPassService {
     const attending = rows.filter(
       (r) => r.target_id !== null || r.row_status === 'pending' || r.row_status === 'running',
     );
-    const classTap = {
-      start,
-      lifetimeMinutes: klass.lifetime_minutes,
-      isUsableOnce: klass.is_usable_once,
-    };
     const problems = classTapProblems(
-      classTap,
+      { start, lifetimeMinutes: klass.lifetime_minutes, isUsableOnce: klass.is_usable_once },
       attending.map((r) => ({ startDate: r.start_date })),
       policy,
-    ).map((p) =>
-      p.row === null ? p.message : `Row ${attending[p.row]!.line ?? '?'}: ${p.message}`,
     );
-    if (problems.length > 0) {
+    const whole = problems.find((p) => p.row === null);
+    if (whole)
+      throw new AppError({ statusCode: 400, code: 'outside_policy', message: whole.message });
+    const skippedRows = new Map(problems.map((p) => [attending[p.row!]!.row_id, p.message]));
+    const moving = attending.filter((r) => !skippedRows.has(r.row_id));
+    if (moving.length === 0) {
       throw new AppError({
         statusCode: 400,
         code: 'outside_policy',
-        message: `${problems.slice(0, 3).join(' ')}${problems.length > 3 ? ` (and ${problems.length - 3} more)` : ''}`,
+        message: `Nobody’s class can start then: ${problems[0]?.message ?? ''}`,
       });
     }
+    const authoriser = {
+      authoriser_user_id: actor.actorUserId!,
+      authoriser_display_name: actor.actorDisplayName ?? null,
+    };
 
     await db.transaction().execute(async (trx) => {
       await trx
         .updateTable('import_classes')
-        .set({ start: JSON.stringify(start), updated_at: sql`now()` })
+        .set({
+          start: JSON.stringify(start),
+          ...authoriser,
+          authority_lapsed_at: null,
+          authority_message: null,
+          updated_at: sql`now()`,
+        })
         .where('job_id', '=', job.id)
         .execute();
-      for (const r of rows) {
+      for (const r of moving) {
         await trx
           .updateTable('class_passes')
           .set({
             status: 'waiting',
             class_starts_at: classStartOf(start, r.start_date)?.toISOString() ?? null,
-            pass_enc: null,
-            entra_method_id: null,
-            pass_starts_at: null,
-            expires_at: null,
+            stale_method_id: sql`COALESCE(entra_method_id, stale_method_id)`,
+            ...NO_PASS,
             error_code: null,
             message: null,
             attempts: 0,
@@ -903,17 +1330,60 @@ export class ClassPassService {
           .execute();
       }
       await this.deps.audit.recordEvent(
-        {
-          ...actor,
-          action: 'import.class.reschedule',
-          result: 'success',
-          providerId: job.provider_id,
-          bulkJobId: String(job.id),
-          targetType: 'user',
-          before: { start: klass.start },
-          after: { start },
-          metadata: { rows: rows.length },
-        },
+        event(
+          actor,
+          'import.class.reschedule',
+          'success',
+          { providerId: job.provider_id, jobId: String(job.id) },
+          {
+            before: { start: klass.start, authoriser: klass.authoriser_display_name },
+            after: { start, authoriser: authoriser.authoriser_display_name },
+            metadata: { rescheduled: moving.length, skipped: skippedRows.size },
+          },
+        ),
+        trx,
+      );
+    });
+    this.kick();
+    return {
+      rescheduled: moving.length,
+      skipped: attending
+        .filter((r) => skippedRows.has(r.row_id))
+        .map((r) => ({
+          rowId: String(r.row_id),
+          line: Number(r.line),
+          displayName: r.display_name ?? '',
+          message: skippedRows.get(r.row_id)!,
+        })),
+    };
+  }
+
+  /** Make the operator the one the class's passes are made on behalf of, resuming a paused class. */
+  async takeOver(job: JobRecord, actor: ClassPassActor): Promise<void> {
+    const klass = await this.classOf(job);
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable('import_classes')
+        .set({
+          authoriser_user_id: actor.actorUserId!,
+          authoriser_display_name: actor.actorDisplayName ?? null,
+          authority_lapsed_at: null,
+          authority_message: null,
+          updated_at: sql`now()`,
+        })
+        .where('job_id', '=', job.id)
+        .execute();
+      await this.deps.audit.recordEvent(
+        event(
+          actor,
+          'import.class.takeOver',
+          'success',
+          { providerId: job.provider_id, jobId: String(job.id) },
+          {
+            before: { authoriser: klass.authoriser_display_name },
+            after: { authoriser: actor.actorDisplayName ?? null },
+          },
+        ),
         trx,
       );
     });
@@ -922,33 +1392,3 @@ export class ClassPassService {
 }
 
 class LostClaim extends Error {}
-
-/** People still not in Entra with their class this close and not yet over. */
-function unsyncedAlert(
-  passes: readonly {
-    status: string;
-    class_starts_at: Date | string | null;
-    target_id: string | null;
-  }[],
-  lifetimeMinutes: number,
-  now: Date,
-): ClassRoster['unsyncedAlert'] {
-  const starts = passes.flatMap((p) => {
-    if (p.status !== 'waiting' || !p.target_id || !p.class_starts_at) return [];
-    const start = new Date(p.class_starts_at);
-    const ongoing = tapExpiresAt(start, lifetimeMinutes) > now;
-    return ongoing && nearClass(start, now) ? [start.getTime()] : [];
-  });
-  if (starts.length === 0) return null;
-  return { count: starts.length, startsAt: new Date(Math.min(...starts)).toISOString() };
-}
-
-async function inBatches<T>(
-  items: readonly T[],
-  size: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
-  for (let i = 0; i < items.length; i += size) {
-    await Promise.all(items.slice(i, i + size).map(fn));
-  }
-}

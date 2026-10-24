@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
   IMPORT_JOB_ACTION,
+  TAP_POLICY_OFF_MESSAGE,
   bulkJobResponseSchema,
   classTapProblems,
   importJobResponseSchema,
@@ -32,9 +33,8 @@ import {
   savePlacementRules,
 } from '../services/userImport.js';
 import { actorFrom, requireFor } from '../services/bulkJobs/requestContext.js';
-import { tenantTapPolicy } from '../services/temporaryAccessPass.js';
+import { TapNotEnabled, tenantTapPolicy } from '../services/temporaryAccessPass.js';
 import { graphFailure } from './graphFailure.js';
-import { TapNotEnabled } from './temporaryAccessPass.js';
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 
@@ -158,21 +158,10 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       kind: 'class',
       message,
     });
-    const graph = (await app.services.entraIntegration.isFeatureEnabled(
-      directoryId,
-      'temporaryAccessPass',
-    ))
-      ? await app.services.graphClient.build(directoryId)
-      : null;
+    const graph = await app.services.graphClient.tapGraph(directoryId);
     if (!graph) return [problem(TapNotEnabled().message)];
     const policy = await tenantTapPolicy(graph).catch(graphFailure);
-    if (!policy) {
-      return [
-        problem(
-          'Temporary Access Pass is turned off in the tenant’s authentication methods policy, so there can be no class passes.',
-        ),
-      ];
-    }
+    if (!policy) return [problem(TAP_POLICY_OFF_MESSAGE)];
     return classTapProblems(body.classTap, body.rows, policy).map((p) => problem(p.message, p.row));
   }
 
@@ -274,7 +263,7 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       const jobs = app.services.bulkJobs;
       return importJobResponseSchema.parse({
         ...(await importJobView(app.db, (id) => jobs.describeOne(id), job)),
-        classTap: await app.services.classPasses.alertOf(String(job.id)),
+        classTap: await app.services.classPasses.alertOf(String(job.id), job.provider_id),
       });
     },
   });

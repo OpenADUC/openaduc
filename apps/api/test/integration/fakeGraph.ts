@@ -60,6 +60,18 @@ export class FakeTapGraph {
   /** Each pass's value, in the order they were made. */
   values: string[] = [];
 
+  /** The passes deleted, in order: Entra user and method ids. */
+  deleted(): { entraUserId: string; methodId: string }[] {
+    return this.requests.flatMap((r) => {
+      const m = /\/users\/([^/]+)\/authentication\/temporaryAccessPassMethods\/([^/]+)$/.exec(
+        new URL(r.url).pathname,
+      );
+      return m && r.method === 'DELETE'
+        ? [{ entraUserId: decodeURIComponent(m[1]!), methodId: decodeURIComponent(m[2]!) }]
+        : [];
+    });
+  }
+
   /** The passes created, in order, with what they were created with. */
   created(): { entraUserId: string; body: Record<string, unknown> }[] {
     return this.requests.flatMap((r) => {
@@ -99,6 +111,19 @@ export class FakeTapGraph {
       )?.[1];
       const id = sid ? this.synced.get(sid) : undefined;
       return json({ value: id ? [{ id }] : [] });
+    }
+    const one = /^\/users\/([^/]+)\/authentication\/temporaryAccessPassMethods\/([^/]+)$/.exec(
+      path,
+    );
+    if (one && method === 'DELETE') {
+      const id = decodeURIComponent(one[1]!);
+      const held = this.passes.get(id) ?? [];
+      const kept = held.filter((p) => p.id !== decodeURIComponent(one[2]!));
+      if (kept.length === held.length) {
+        return json({ error: { code: 'NotFound', message: 'no such method' } }, 404);
+      }
+      this.passes.set(id, kept);
+      return new Response(null, { status: 204 });
     }
     const passes = /^\/users\/([^/]+)\/authentication\/temporaryAccessPassMethods$/.exec(path);
     if (passes) {

@@ -137,13 +137,14 @@ describe('tapPreflight', () => {
         inPolicyScope: true,
       },
       entraUserId: ENTRA_ID,
+      passes: [],
     });
     expect(graph.gets).toContain(
       `/users?$filter=onPremisesSecurityIdentifier eq '${alice.sid}'&$select=id&$count=true`,
     );
   });
 
-  it('says when the tenant makes every pass one-time', async () => {
+  it('says when the tenant makes every pass single-use', async () => {
     const graph = new FakeGraph();
     graph.policy.isUsableOnce = true;
     const { preflight } = await tapPreflight(deps(graph), alice);
@@ -423,7 +424,7 @@ describe('issueTap', () => {
     expect(graph.posts).toHaveLength(1);
   });
 
-  it('holds to the tenant policy’s lifetime range and one-time setting', async () => {
+  it('holds to the tenant policy’s lifetime range and single-use setting', async () => {
     const graph = new FakeGraph();
     graph.policy.isUsableOnce = true;
     expect(await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 600 })).toEqual({
