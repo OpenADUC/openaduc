@@ -84,6 +84,15 @@ describe('the bulk job panel', () => {
     expect(page.findAll('button').map((b) => b.attributes('disabled'))).toEqual(['', '']);
   });
 
+  it('says a revert reverts, and where its failures are explained', () => {
+    const running = panel(aJob('running', { pending: 42 }, { revertsJobId: '6' }));
+    expect(text(running)).toContain('Reverting 42 accounts…');
+
+    const done = panel(aJob('finished', { succeeded: 40, failed: 2 }, { revertsJobId: '6' }));
+    expect(text(done)).toContain('Reverted 40 of 42 accounts');
+    expect(text(done)).toContain('2 failed. The revert’s entry below lists why.');
+  });
+
   it('reports a result with failures, and offers to retry them', async () => {
     const page = panel(aJob('finished', { succeeded: 40, failed: 2 }));
 
