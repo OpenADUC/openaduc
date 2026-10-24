@@ -17,6 +17,8 @@ export interface NormalizedPhone {
   value: string;
   /** Why the value may be wrong, or null. */
   warning: string | null;
+  /** False when it couldn't be read as a number, so `value` is as typed. */
+  readable: boolean;
 }
 
 /** The ISO 3166 codes a directory's default country can be. */
@@ -33,7 +35,7 @@ export function normalizePhone(
   options: { kind: PhoneKind; defaultCountry?: string | null | undefined },
 ): NormalizedPhone {
   const typed = input.trim();
-  if (!typed) return { value: '', warning: null };
+  if (!typed) return { value: '', warning: null, readable: true };
   const country =
     options.defaultCountry && isSupportedCountry(options.defaultCountry)
       ? (options.defaultCountry as CountryCode)
@@ -43,6 +45,7 @@ export function normalizePhone(
     const international = typed.startsWith('+') || typed.startsWith('00');
     return {
       value: typed,
+      readable: false,
       warning:
         !country && !international
           ? `Add the country code (such as +44): “${typed}” has none, and this directory has no default country.`
@@ -51,7 +54,7 @@ export function normalizePhone(
   }
   const value = `+${parsed.countryCallingCode} ${parsed.nationalNumber}${parsed.ext ? `x${parsed.ext}` : ''}`;
   if (options.kind === 'mobile' && parsed.getType() === 'FIXED_LINE') {
-    return { value, warning: `${value} is a landline number, not a mobile.` };
+    return { value, warning: `${value} is a landline number, not a mobile.`, readable: true };
   }
-  return { value, warning: null };
+  return { value, warning: null, readable: true };
 }

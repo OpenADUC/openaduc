@@ -4,6 +4,7 @@ import { suggestNames, type NamingDeviation, type NamingSuggestion } from './nam
 import {
   RANDOM_MODE_MUST_CHANGE_NOTE,
   approvalKey,
+  phonesToWrite,
   planNewUser,
   type NewUserForm,
   type NewUserPlanContext,
@@ -68,6 +69,7 @@ describe('planNewUser', () => {
       personalEmail: 'jane@example.org',
       mobile: '+44 7400123456',
       telephoneNumber: null,
+      keepPhonesAsTyped: [],
       password: { mode: 'random' },
       enabled: true,
     });
@@ -167,8 +169,26 @@ describe('planNewUser', () => {
     expect(plan.request).toMatchObject({
       mobile: '+44 2079460958',
       telephoneNumber: 'ask reception',
+      keepPhonesAsTyped: ['telephoneNumber'],
     });
     expect(plan.warnings.map((w) => w.field)).toEqual(['mobile', 'telephoneNumber']);
     expect(plan.mobile.warning).toContain('landline');
+  });
+});
+
+describe('phonesToWrite', () => {
+  it('writes readable numbers Entra’s way, landlines in a mobile included', () => {
+    expect(phonesToWrite({ mobile: '020 7946 0958', telephoneNumber: '' }, [], 'GB')).toEqual({
+      values: { mobile: '+44 2079460958', telephoneNumber: null },
+      problems: [],
+    });
+  });
+
+  it('refuses an unreadable number unless asked to keep it as typed', () => {
+    const refused = phonesToWrite({ telephoneNumber: 'ask reception' }, [], 'GB');
+    expect(refused.problems).toEqual([expect.objectContaining({ field: 'telephoneNumber' })]);
+    expect(
+      phonesToWrite({ telephoneNumber: ' ask reception ' }, ['telephoneNumber'], 'GB'),
+    ).toEqual({ values: { mobile: null, telephoneNumber: 'ask reception' }, problems: [] });
   });
 });
