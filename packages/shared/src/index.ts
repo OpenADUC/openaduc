@@ -21,5 +21,6 @@ export * from './schemas/roles.js';
 export * from './schemas/naming.js';
 export * from './password.js';
 export * from './phone.js';
+export * from './country.js';
 export * from './schemas/userCreate.js';
 export * from './userCreation.js';

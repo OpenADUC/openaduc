@@ -140,6 +140,8 @@ const HANDLED_ATTRS = new Set<string>([
   'l',
   'st',
   'postalCode',
+  // Still hidden here; the raw attributes keep it now so bulk edits can read it.
+  'physicalDeliveryOfficeName',
   'otherMailbox',
   'otherHomePhone',
   'otherMobile',

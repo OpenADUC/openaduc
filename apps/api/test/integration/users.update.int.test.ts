@@ -79,5 +79,6 @@ describe('editing a user’s attributes', () => {
       after_json: { company: 'Globex' },
       metadata_json: { fields: ['company'] },
     });
+    await operator.patch(`/api/users/${alice.id}`, { patch: { company: null } });
   });
 });

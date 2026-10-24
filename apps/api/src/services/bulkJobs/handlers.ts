@@ -2,8 +2,10 @@
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
+  bulkAttributeChangesSchema,
   bulkGroupMembershipRequestSchema,
   bulkJobCreateRequestSchema,
+  bulkUserAttributesRequestSchema,
   type BulkGroupMembershipRequest,
   type BulkJobAction,
   type BulkJobSubject,
@@ -19,6 +21,15 @@ import {
   type WriteContext,
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
+import {
+  attributesPreviewToken,
+  changesSubject,
+  fieldChanges,
+  liveValues,
+  patchFor,
+  resolveChanges,
+  rowSnapshots,
+} from '../bulkAttributes.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import {
   membershipRequirement,
@@ -30,7 +41,7 @@ import {
 import { previewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
 import { BulkJobRequestError } from './errors.js';
-import { failureMessage } from './rowMessages.js';
+import { writeUserAttributes } from '../userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -384,10 +395,92 @@ function membershipFailure(
   }
 }
 
+const attributesInputSchema = z.object({ changes: bulkAttributeChangesSchema });
+
+/**
+ * Edit each user's attributes, one row per user. A row reads the user
+ * live and writes only the fields not already as asked, in one change
+ * audited as the single-user edit is; a user with none to change is
+ * skipped, and nothing is written or audited for them.
+ */
+function userAttributesHandler(): BulkJobHandler<
+  z.infer<typeof bulkUserAttributesRequestSchema>,
+  z.infer<typeof attributesInputSchema>
+> {
+  return {
+    action: 'user.update',
+    capability: 'write:user.attributes',
+    request: bulkUserAttributesRequestSchema,
+    rows: ({ ids, changes }) =>
+      ids.map((id) => ({ targetId: id.toLowerCase(), input: { changes } })),
+    input: attributesInputSchema,
+    async prepare({ ids, changes, previewToken: token }, { db, directoryId }) {
+      if (token !== attributesPreviewToken(ids, changes)) {
+        throw new BulkJobRequestError(
+          'preview_mismatch',
+          'The users or changes aren’t the ones previewed. Preview the change again.',
+        );
+      }
+      return { attributes: changesSubject(await resolveChanges(db, directoryId, ids, changes)) };
+    },
+    async run(row, ctx) {
+      const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
+      if (!live) return { ok: false, errorCode: 'not_found', audited: false };
+      const { user } = live;
+      const targetDn = user.distinguishedName;
+      let changes;
+      try {
+        // The manager's DN as it is now, should it have moved since the job started.
+        const resolved = await resolveChanges(
+          ctx.db,
+          ctx.provider.id,
+          [row.targetId],
+          row.input.changes,
+        );
+        changes = fieldChanges(liveValues(user), resolved);
+      } catch (err) {
+        if (!(err instanceof BulkJobRequestError)) throw err;
+        return {
+          ok: false,
+          errorCode: err.code,
+          message:
+            err.code === 'manager_not_found'
+              ? 'The manager is no longer in the directory.'
+              : err.message,
+          audited: false,
+          targetDn,
+        };
+      }
+      if (changes.length === 0) {
+        return { ok: true, unchanged: true, before: row.before, after: row.after, targetDn };
+      }
+      const result = await writeUserAttributes(
+        ctx.services,
+        ctx.provider,
+        user,
+        patchFor(changes),
+        ctx.writeCtx,
+        ctx.audit,
+      );
+      if (!result.ok) {
+        return {
+          ok: false,
+          errorCode: result.errorCode ?? 'directory_error',
+          errorMessage: result.errorMessage ?? null,
+          audited: true,
+          targetDn,
+        };
+      }
+      return { ok: true, ...rowSnapshots(changes), targetDn };
+    },
+  };
+}
+
 export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.disable': userAccountHandler(DISABLE_USER, 'write:user.enableDisable'),
   'user.enable': userAccountHandler(ENABLE_USER, 'write:user.enableDisable'),
   'user.unlock': userAccountHandler(UNLOCK_USER, 'write:user.unlock'),
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
+  'user.update': userAttributesHandler(),
 };

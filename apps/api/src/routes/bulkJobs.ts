@@ -42,7 +42,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       handler: async (req, reply) => {
         const id = await jobs
           .create(actorFrom(req), action, req.body, (subject) => requireFor(req, action, subject))
-          .catch(refuse);
+          .catch((err: unknown) => refuseBulkRequest(app, err));
         return reply
           .status(202)
           .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
@@ -132,21 +132,6 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 
-  /** A request the job can't start as asked, as its HTTP error. */
-  function refuse(err: unknown): never {
-    if (err instanceof BulkJobRequestError) {
-      switch (err.code) {
-        case 'group_not_found':
-          throw NotFound(err.message);
-        case 'preview_mismatch':
-          throw Conflict(err.message);
-        case 'protected_unacknowledged':
-          throw app.httpErrors.unprocessableEntity(err.message);
-      }
-    }
-    throw err;
-  }
-
   async function ownJob(req: FastifyRequest) {
     const { id } = jobParamSchema.parse(req.params);
     const job = await jobs.find(String(id), req.directoryId!, req.actor!.session.actorUserId);
@@ -168,4 +153,21 @@ function actorFrom(req: FastifyRequest): JobActor {
     userAgent: req.headers['user-agent'] ?? null,
     correlationId: req.correlationId,
   };
+}
+
+/** A request a bulk job (or its preview) can't take as asked, as its HTTP error. */
+export function refuseBulkRequest(app: FastifyInstance, err: unknown): never {
+  if (err instanceof BulkJobRequestError) {
+    switch (err.code) {
+      case 'group_not_found':
+      case 'manager_not_found':
+        throw NotFound(err.message);
+      case 'preview_mismatch':
+        throw Conflict(err.message);
+      case 'protected_unacknowledged':
+      case 'manager_in_selection':
+        throw app.httpErrors.unprocessableEntity(err.message);
+    }
+  }
+  throw err;
 }

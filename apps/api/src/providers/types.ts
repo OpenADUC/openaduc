@@ -343,6 +343,9 @@ export interface UserAttributePatch {
   l?: string | null | undefined;
   st?: string | null | undefined;
   postalCode?: string | null | undefined;
+  postOfficeBox?: string | null | undefined;
+  countryCode?: string | null | undefined;
+  physicalDeliveryOfficeName?: string | null | undefined;
   managerDn?: string | null | undefined;
   // Multi-valued attributes — null or empty array clears, non-empty replaces.
   otherMailbox?: string[] | null | undefined;
