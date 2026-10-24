@@ -12,11 +12,12 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type {
-  BulkAccountRequest,
-  BulkJob,
-  BulkJobRevertRequest,
-  BulkUserAttributesRequest,
+import {
+  IMPORT_JOB_ACTION,
+  type BulkAccountRequest,
+  type BulkJob,
+  type BulkJobRevertRequest,
+  type BulkUserAttributesRequest,
 } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
@@ -175,11 +176,12 @@ export function useBulkActions(opts: {
       )
     ).flat();
     if (job.value?.id !== done.id) return;
+    const failed = failures.flatMap((f) => (f.targetId === null ? [] : [{ ...f, id: f.targetId }]));
     bulkErrors.value = new Map(
-      failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
+      failed.map((f) => [f.id, f.errorMessage ?? f.errorCode ?? 'Failed']),
     );
     if (announce || stored(SELECTED_KEY) !== done.id) {
-      opts.selectedIds.value = new Set(failures.map((f) => f.targetId));
+      opts.selectedIds.value = new Set(failed.map((f) => f.id));
       store(SELECTED_KEY, done.id);
     }
     if (failures.length === 0 && done.status === 'finished' && announce) {
@@ -322,7 +324,10 @@ export function useBulkActions(opts: {
     try {
       const latest = id ? (await api.bulkJobs.get(id)).job : (await api.bulkJobs.list(1)).jobs[0];
       if (attached !== attachment) return;
-      if (!latest || latest.id === stored(DISMISSED_KEY)) return;
+      // An import's results are on its own page.
+      if (!latest || latest.id === stored(DISMISSED_KEY) || latest.action === IMPORT_JOB_ACTION) {
+        return;
+      }
       const stoppedAt = latest.finishedAt ? new Date(latest.finishedAt).getTime() : null;
       if (stoppedAt !== null && Date.now() - stoppedAt > RESULT_SHOWN_FOR_MS) return;
       await show(latest, false);

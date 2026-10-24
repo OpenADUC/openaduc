@@ -255,6 +255,17 @@ describe('bulk actions', () => {
     expect(bulk.job.value).toBeNull();
   });
 
+  it('leaves an import to its own results page', async () => {
+    const { bulk } = setup();
+    bulkJobs.list.mockResolvedValue({
+      jobs: [aJob('finished', { partial: 1 }, { action: 'user.create' })],
+    });
+
+    await bulk.restore();
+
+    expect(bulk.job.value).toBeNull();
+  });
+
   it('continues a paused job after a step-up', async () => {
     const { bulk, auth } = setup(NOT_ELEVATED);
     bulkJobs.list.mockResolvedValue({
