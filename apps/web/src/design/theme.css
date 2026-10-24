@@ -1092,6 +1092,10 @@
   .p-dialog.ds-sheet input {
     font-size: 16px;
   }
+
+  .p-dialog.ds-sheet .p-inputtext {
+    min-height: 44px;
+  }
 }
 
 /* PrimeVue Toast / Message */
