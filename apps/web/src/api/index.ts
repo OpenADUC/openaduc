@@ -13,6 +13,8 @@ import type {
   BulkGroupMembershipRequest,
   BulkJob,
   BulkJobRow,
+  BulkJobRevertPreview,
+  BulkJobRevertRequest,
   BulkJobRowStatus,
   BulkMembershipOp,
   BulkUserAttributesPreview,
@@ -747,6 +749,17 @@ export const api = {
     },
     cancel(id: string): Promise<{ job: BulkJob }> {
       return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    },
+    /** What reverting the job would do: who it puts back, who's changed since, who it can't. */
+    revertPreview(id: string): Promise<BulkJobRevertPreview> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/revert/preview`);
+    },
+    /** Start reverting the job, as previewed; the revert is a job of its own. */
+    revert(id: string, body: BulkJobRevertRequest): Promise<{ job: BulkJob }> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/revert`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
     },
   },
   audit: {

@@ -33,13 +33,19 @@ describe('a bulk job in the audit log', () => {
       title: 'Bulk disable by Jane Doe: 42 users',
       outcome: '40 succeeded · 2 failed',
       tone: 'red',
+      reverted: null,
     });
     expect(
       describeBulkEntry(
         summary({ action: 'user.unlock', total: 1, counts: counts({ total: 1, succeeded: 1 }) }),
         null,
       ),
-    ).toEqual({ title: 'Bulk unlock: 1 user', outcome: '1 succeeded · 0 failed', tone: 'green' });
+    ).toEqual({
+      title: 'Bulk unlock: 1 user',
+      outcome: '1 succeeded · 0 failed',
+      tone: 'green',
+      reverted: null,
+    });
   });
 
   it('says when it is still running, paused or was stopped', () => {
@@ -123,6 +129,24 @@ describe('a bulk job in the audit log', () => {
       title: 'Bulk disable by Jane Doe: 42 users',
       outcome: null,
       tone: 'muted',
+      reverted: null,
     });
+  });
+
+  it('says what a revert reverts, and who reverted a job and when', () => {
+    expect(describeBulkEntry(summary({ revertsJobId: '6', total: 40 }), 'Sam Lee').title).toBe(
+      'Revert of bulk disable by Sam Lee: 40 users',
+    );
+    const revertedBy = (status: 'finished' | 'running' | 'cancelled') => ({
+      jobId: '8',
+      actorDisplayName: 'Sam Lee',
+      createdAt: '2026-10-24T09:30:00.000Z',
+      status,
+    });
+    const reverted = (status: 'finished' | 'running' | 'cancelled') =>
+      describeBulkEntry(summary({ revertedBy: revertedBy(status) }), 'Jane Doe').reverted;
+    expect(reverted('finished')).toMatch(/^Reverted by Sam Lee on .+/);
+    expect(reverted('running')).toMatch(/^Being reverted by Sam Lee, since .+/);
+    expect(reverted('cancelled')).toMatch(/^Revert by Sam Lee on .+ was stopped$/);
   });
 });

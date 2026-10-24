@@ -791,6 +791,7 @@ describe('reassigning the direct reports', () => {
     subject: { attributes: [{ field: 'manager', value: 'Max Boss' }] },
     status: 'finished',
     pauseReason: null,
+    revertsJobId: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),
