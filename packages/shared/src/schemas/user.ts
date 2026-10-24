@@ -489,6 +489,46 @@ export const userDeletePreflightResponseSchema = z.object({
 });
 export type UserDeletePreflightResponse = z.infer<typeof userDeletePreflightResponseSchema>;
 
+// ---- Match a pasted list ------------------------------------------------
+//
+// Each entry (an email, logon name, UPN or display name) is matched against
+// the cached users. Duplicate entries come back once.
+export const MAX_USER_MATCH_ENTRIES = 1000;
+
+export const userMatchRequestSchema = z
+  .object({
+    entries: z.array(z.string().max(512)).min(1).max(MAX_USER_MATCH_ENTRIES),
+  })
+  .strict();
+export type UserMatchRequest = z.infer<typeof userMatchRequestSchema>;
+
+export const userMatchCandidateSchema = z.object({
+  id: z.string(),
+  samAccountName: z.string(),
+  userPrincipalName: z.string().nullable(),
+  displayName: z.string().nullable(),
+  email: z.string().nullable(),
+  department: z.string().nullable(),
+  title: z.string().nullable(),
+  enabled: z.boolean(),
+  distinguishedName: z.string(),
+});
+export type UserMatchCandidate = z.infer<typeof userMatchCandidateSchema>;
+
+export const userMatchResultSchema = z.discriminatedUnion('status', [
+  z.object({ entry: z.string(), status: z.literal('matched'), user: userMatchCandidateSchema }),
+  z.object({
+    entry: z.string(),
+    status: z.literal('ambiguous'),
+    candidates: z.array(userMatchCandidateSchema),
+  }),
+  z.object({ entry: z.string(), status: z.literal('unmatched') }),
+]);
+export type UserMatchResult = z.infer<typeof userMatchResultSchema>;
+
+export const userMatchResponseSchema = z.object({ results: z.array(userMatchResultSchema) });
+export type UserMatchResponse = z.infer<typeof userMatchResponseSchema>;
+
 // ---- Directory policy --------------------------------------------------
 //
 // Domain-wide security policy read from the AD root object. Surfaced in

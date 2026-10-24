@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { sql, type RawBuilder, type Selectable } from 'kysely';
 import {
   accountExpiryRequestSchema,
   csvRow,
@@ -9,6 +9,8 @@ import {
   userDetailSchema,
   userDeletePreflightRequestSchema,
   userDeleteRequestSchema,
+  userMatchRequestSchema,
+  userMatchResponseSchema,
   userRenameRequestSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
@@ -16,17 +18,21 @@ import {
   type RecycleBinStatus,
   type UserDeletePreflightResponse,
   type UserDetail,
+  type UserMatchResponse,
+  type UserMatchResult,
   type UserSearchResponse,
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
 import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
-import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
+import { lookupsFor, matchEntries } from '../lib/userMatch.js';
+import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import type { UserCacheRecordsTable } from '../db/types.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
@@ -467,14 +473,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const result: UserSearchResponse = {
         freshness: await listFreshness(app.db, provider.id, 'users'),
         rows: rows.map((r) => ({
-          id: r.object_guid,
-          samAccountName: r.sam_account_name ?? '',
-          userPrincipalName: r.user_principal_name,
-          displayName: r.display_name,
-          email: r.email,
-          department: r.department,
-          title: r.title,
-          enabled: r.enabled,
+          ...cachedUserIdentity(r),
           locked: r.locked,
           passwordNeverExpires: r.password_never_expires,
           passwordMustChange: r.password_must_change,
@@ -495,22 +494,110 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         pageSize: q.pageSize,
       };
 
-      // Optional search auditing.
-      if (await app.services.settings.get<boolean>('audit.search_enabled', false)) {
-        await app.services.audit
-          .recordEvent({
-            ...auditContextFromRequest(req),
-            action: 'user.search',
-            result: 'success',
-            actorAuthMethod: 'ad-password',
-            providerId: provider.id,
-            targetType: 'user',
-            metadata: { query: q, returned: result.rows.length, total: result.total },
-          })
-          .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
-      }
+      await recordSearchAudit(app, req, provider.id, {
+        query: q,
+        returned: result.rows.length,
+        total: result.total,
+      });
 
       return userSearchResponseSchema.parse(result);
+    },
+  });
+
+  // ---- POST /api/users/match -------------------------------------------
+  // A read sent as POST: a list of 1,000 entries doesn't fit a query string.
+  app.post('/api/users/match', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<UserMatchResponse> => {
+      const body = userMatchRequestSchema.parse(req.body);
+      const provider = await app.services.providers.buildForRequest(req);
+      const lookups = lookupsFor(body.entries);
+      if (lookups.length > MAX_USER_MATCH_LOOKUPS) {
+        throw BadRequest('Too many entries. Match up to 1,000 at a time.');
+      }
+
+      // Postgres folds case for both the lookups and the cached values, so
+      // the two always agree (JS and Postgres lowercase some letters
+      // differently).
+      const folded = new Map(
+        lookups.length === 0
+          ? []
+          : (
+              await sql<{ lookup: string; key: string }>`
+                select lookup, lower(lookup) as key from unnest(${lookups}::text[]) as lookup
+              `.execute(app.db)
+            ).rows.map((r) => [r.lookup, r.key]),
+      );
+      const keys = [...new Set(folded.values())];
+      const smtpKeys = keys.filter((k) => k.includes('@')).map((k) => `smtp:${k}`);
+      const proxies = sql`raw_attributes_json -> 'proxyAddresses'`;
+      const proxyList = sql`jsonb_array_elements_text(
+        case jsonb_typeof(${proxies})
+          when 'array' then ${proxies}
+          when 'string' then jsonb_build_array(${proxies})
+          else '[]'::jsonb
+        end
+      )`;
+
+      const rows =
+        keys.length === 0
+          ? []
+          : await app.db
+              .selectFrom('user_cache_records')
+              .where('provider_id', '=', provider.id)
+              .where('deleted_at', 'is', null)
+              .where((eb) =>
+                eb.or([
+                  inKeys('sam_account_name', keys),
+                  inKeys('user_principal_name', keys),
+                  inKeys('email', keys),
+                  inKeys('display_name', keys),
+                  ...(smtpKeys.length > 0
+                    ? [
+                        sql<boolean>`exists (
+                          select 1 from ${proxyList} as p(address)
+                          where lower(p.address) = any(${smtpKeys}::text[])
+                        )`,
+                      ]
+                    : []),
+                ]),
+              )
+              .selectAll()
+              .select([
+                sql<string[]>`array_remove(array[
+                  lower(sam_account_name), lower(user_principal_name), lower(email)
+                ], null) || array(
+                  select lower(substr(p.address, 6)) from ${proxyList} as p(address)
+                  where lower(p.address) like 'smtp:%'
+                )`.as('identifier_keys'),
+                sql<string | null>`lower(display_name)`.as('display_name_key'),
+              ])
+              .execute();
+
+      const results = matchEntries(
+        body.entries,
+        rows.map((r) => ({
+          ...cachedUserIdentity(r),
+          distinguishedName: r.distinguished_name,
+          identifierKeys: r.identifier_keys,
+          displayNameKey: r.display_name_key,
+        })),
+        (lookup) => folded.get(lookup)!,
+      );
+
+      const count = (status: UserMatchResult['status']) =>
+        results.filter((r) => r.status === status).length;
+      await recordSearchAudit(app, req, provider.id, {
+        pastedEntries: body.entries.length,
+        matched: count('matched'),
+        ambiguous: count('ambiguous'),
+        unmatched: count('unmatched'),
+        matchedUserIds: [
+          ...new Set(results.flatMap((r) => (r.status === 'matched' ? [r.user.id] : []))),
+        ],
+      });
+
+      return userMatchResponseSchema.parse({ results });
     },
   });
 
@@ -1378,6 +1465,50 @@ async function toggleEnabled(
   }
   await app.services.userLiveRefresh.refresh(provider, id);
   return { ok: true, before: result.before, after: result.after };
+}
+
+// Splitting comma lists server-side can turn 1,000 entries into more
+// lookups; this bounds the query's key array.
+const MAX_USER_MATCH_LOOKUPS = 5_000;
+
+/** `lower(column)` is one of `keys` (already lowercased by Postgres). */
+function inKeys(column: string, keys: string[]): RawBuilder<boolean> {
+  return sql<boolean>`lower(${sql.ref(column)}) = any(${keys}::text[])`;
+}
+
+/** The fields every user listing shares, from a cache row. */
+function cachedUserIdentity(r: Selectable<UserCacheRecordsTable>) {
+  return {
+    id: r.object_guid,
+    samAccountName: r.sam_account_name ?? '',
+    userPrincipalName: r.user_principal_name,
+    displayName: r.display_name,
+    email: r.email,
+    department: r.department,
+    title: r.title,
+    enabled: r.enabled,
+  };
+}
+
+/** Records a user search when the `audit.search_enabled` setting is on. */
+async function recordSearchAudit(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  providerId: number,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  if (!(await app.services.settings.get<boolean>('audit.search_enabled', false))) return;
+  await app.services.audit
+    .recordEvent({
+      ...auditContextFromRequest(req),
+      action: 'user.search',
+      result: 'success',
+      actorAuthMethod: 'ad-password',
+      providerId,
+      targetType: 'user',
+      metadata,
+    })
+    .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
 }
 
 function dateOrNull(v: Date | string | null): string | null {
