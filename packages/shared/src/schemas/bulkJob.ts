@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
+import type { GroupPrivilege } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
 export const BULK_JOB_ACTIONS = ['user.disable', 'user.enable', 'user.unlock'] as const;
@@ -45,17 +46,75 @@ export type BulkJobRowStatus = (typeof BULK_JOB_ROW_STATUSES)[number];
 
 export const MAX_BULK_JOB_ROWS = 10_000;
 
-/** Starting a job that acts on users by id. */
-export const bulkJobCreateRequestSchema = z.object({
-  ids: z
+/** The most groups one membership job adds users to, or removes them from. */
+export const MAX_BULK_GROUPS = 20;
+
+const uniqueGuids = (max: number, what: string) =>
+  z
     .array(z.guid())
     .min(1)
-    .max(MAX_BULK_JOB_ROWS)
+    .max(max)
     .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
-      message: 'ids must be unique',
-    }),
+      message: `${what} must be unique`,
+    });
+
+/** Starting a job that acts on users by id. */
+export const bulkJobCreateRequestSchema = z.object({
+  ids: uniqueGuids(MAX_BULK_JOB_ROWS, 'ids'),
 });
 export type BulkJobCreateRequest = z.infer<typeof bulkJobCreateRequestSchema>;
+
+/** Adding users to groups, or removing them from groups: one row per user. */
+export const bulkGroupMembershipRequestSchema = bulkJobCreateRequestSchema.extend({
+  groupIds: uniqueGuids(MAX_BULK_GROUPS, 'groupIds'),
+});
+export type BulkGroupMembershipRequest = z.infer<typeof bulkGroupMembershipRequestSchema>;
+
+export const BULK_MEMBERSHIP_OPS = ['add', 'remove'] as const;
+export type BulkMembershipOp = (typeof BULK_MEMBERSHIP_OPS)[number];
+
+/** What a membership job would change, asked before starting it. */
+export const bulkGroupMembershipPreviewRequestSchema = bulkGroupMembershipRequestSchema.extend({
+  op: z.enum(BULK_MEMBERSHIP_OPS),
+});
+export type BulkGroupMembershipPreviewRequest = z.infer<
+  typeof bulkGroupMembershipPreviewRequestSchema
+>;
+
+export interface BulkGroupPreviewUser {
+  id: string;
+  name: string;
+}
+
+/** One group in a membership job's preview, read from the cache. */
+export interface BulkGroupPreviewGroup {
+  id: string;
+  name: string;
+  distinguishedName: string;
+  /** Null for a group that grants no administrative rights. */
+  privilege: GroupPrivilege | null;
+  /** How many of the users the job would add to it, or remove from it. */
+  changes: number;
+  /**
+   * The users it would leave alone, already as the job would leave them:
+   * members already (for an add, the group being their primary group
+   * included), or not direct members (for a remove).
+   */
+  unchanged: BulkGroupPreviewUser[];
+  /**
+   * Members only through a nested group, or for a remove through their
+   * primary group: an add makes them direct members, and a remove leaves
+   * them members.
+   */
+  indirect: BulkGroupPreviewUser[];
+}
+
+export interface BulkGroupMembershipPreview {
+  op: BulkMembershipOp;
+  groups: BulkGroupPreviewGroup[];
+  /** Users asked for that the cache doesn't know; their rows would fail. */
+  unknownIds: string[];
+}
 
 export const bulkJobCountsSchema = z.object({
   total: z.number().int(),

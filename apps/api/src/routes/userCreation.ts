@@ -10,8 +10,6 @@ import {
   userCreateFinishRequestSchema,
   userCreateRequestSchema,
   type CopiedGroup,
-  type GroupPrivilege,
-  type Role,
   type UserCopySource,
   type UserCreatePassword,
   type UserCreateResponse,
@@ -19,7 +17,7 @@ import {
 } from '@openaduc/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { isProtectedGroup } from '../lib/groupDeletion.js';
+import { groupPrivilege } from '../lib/groupDeletion.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import { ridOf } from '../lib/sid.js';
 import { BadRequest, Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
@@ -372,7 +370,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
         id: g.id,
         name: g.name,
         distinguishedName: g.distinguishedName,
-        privilege: privilegeOf(g, roleOf.get(g.distinguishedName.toLowerCase())),
+        privilege: groupPrivilege(g, roleOf.get(g.distinguishedName.toLowerCase())),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -521,12 +519,6 @@ async function finishFor(
     mustChange: false,
     groups,
   };
-}
-
-/** What membership in a group grants: AD's protection first, as the bigger of the two. */
-function privilegeOf(group: CachedGroup, role: Role | undefined): GroupPrivilege | null {
-  if (isProtectedGroup(group)) return { reason: 'protected' };
-  return role ? { reason: 'role', role } : null;
 }
 
 type AuditedCreate = ReturnType<typeof auditOf>;

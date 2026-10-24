@@ -18,6 +18,7 @@ const STEP_UP_EXEMPT = new Set([
 // Reads sent as POST because their input doesn't fit a query string.
 const READ_ONLY_POSTS = new Set([
   'POST /api/users/match',
+  'POST /api/users/bulk-groups/preview',
   'POST /api/directories/:id/naming/check',
 ]);
 

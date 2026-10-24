@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { GroupDeleteBlockReason, Role } from '@openaduc/shared';
+import type { GroupDeleteBlockReason, GroupPrivilege, Role } from '@openaduc/shared';
 import { GROUP_TYPE } from '../providers/active-directory/normalize.js';
 import { rawFlag, rawScalarValue } from './rawAttributes.js';
 import { ridOf } from './sid.js';
@@ -55,6 +55,12 @@ export function isProtectedGroup(group: GroupLike): boolean {
   return group.sid!.startsWith('S-1-5-32-')
     ? PROTECTED_BUILTIN_RIDS.has(rid)
     : PROTECTED_DOMAIN_RIDS.has(rid);
+}
+
+/** What membership in a group grants: AD's protection first, as the bigger of the two. */
+export function groupPrivilege(group: GroupLike, role: Role | undefined): GroupPrivilege | null {
+  if (isProtectedGroup(group)) return { reason: 'protected' };
+  return role ? { reason: 'role', role } : null;
 }
 
 /**
