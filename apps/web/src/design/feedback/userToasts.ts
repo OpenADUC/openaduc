@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // What a write to a user says when it lands or fails, wherever it was made.
+import type { UserCreateResponse } from '@openaduc/shared';
 import type { ToastMessageOptions } from 'primevue/toast';
 import type { AccountAction } from '../composables/useAccountActions.js';
 import type { ResetOutcome } from '../composables/usePasswordReset.js';
@@ -67,3 +68,14 @@ export const expirySetSummary = (name: string, expiresAt: string | null) =>
 
 export const expiryFailedSummary = (name: string) =>
   `Couldn’t change when ${name}’s account expires`;
+
+/** The success toast for a new user, wherever it was created from. */
+export function userCreatedToast(created: UserCreateResponse): ToastMessageOptions {
+  const enabled = created.completed.includes('enable');
+  return {
+    severity: 'success',
+    summary: 'User created',
+    detail: `${created.samAccountName} was created${enabled ? '' : ', disabled'}.`,
+    life: 4000,
+  };
+}

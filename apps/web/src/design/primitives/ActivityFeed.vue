@@ -23,6 +23,12 @@ interface FeedItem {
 
 const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: string }> = {
   'user.view': { title: 'Account viewed', iconClass: 'pi pi-eye', tone: 'tone-muted' },
+  'user.create': { title: 'Account created', iconClass: 'pi pi-user-plus', tone: 'tone-green' },
+  'user.create.finish': {
+    title: 'Account creation finished',
+    iconClass: 'pi pi-user-plus',
+    tone: 'tone-green',
+  },
   'user.update': { title: 'Attributes updated', iconClass: 'pi pi-pencil', tone: 'tone-blue' },
   'user.unlock': { title: 'Account unlocked', iconClass: 'pi pi-lock-open', tone: 'tone-green' },
   'user.disable': { title: 'Account disabled', iconClass: 'pi pi-ban', tone: 'tone-amber' },

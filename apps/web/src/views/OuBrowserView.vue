@@ -21,9 +21,11 @@ import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import { useOuContents } from '../design/composables/useOuContents.js';
 import { useOuTree } from '../design/composables/useOuTree.js';
-import type { DirectoryOu, GroupCreateResponse } from '@openaduc/shared';
+import type { DirectoryOu, GroupCreateResponse, UserCreateResponse } from '@openaduc/shared';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
 import { groupCreatedToast } from '../design/feedback/groupToasts.js';
+import NewUserDialog from '../design/feedback/NewUserDialog.vue';
+import { userCreatedToast } from '../design/feedback/userToasts.js';
 
 const auth = useAuthStore();
 const toast = useToast();
@@ -32,6 +34,7 @@ const canCreateOu = computed(() => auth.hasCapability('write:ou.create'));
 const canUpdateOu = computed(() => auth.hasCapability('write:ou.update'));
 const canDeleteOu = computed(() => auth.hasCapability('write:ou.delete'));
 const canCreateGroup = computed(() => auth.hasCapability('write:group.create'));
+const canCreateUser = computed(() => auth.hasCapability('write:user.create'));
 
 // ---- OU tree -------------------------------------------------------------
 
@@ -261,6 +264,14 @@ const ctxItems = computed<MenuItem[]>(() => {
       tooltip: 'Create a new organizational unit under this one.',
     });
   }
+  if (canCreateUser.value) {
+    items.push({
+      label: 'New user…',
+      icon: 'pi pi-user-plus',
+      command: () => openNewUser(ou.distinguishedName),
+      tooltip: 'Create a user in this OU.',
+    });
+  }
   if (canCreateGroup.value) {
     items.push({
       label: 'New group…',
@@ -309,7 +320,13 @@ const ctxItems = computed<MenuItem[]>(() => {
 });
 
 async function onTreeNodeContext(event: MouseEvent, node: TreeNode): Promise<void> {
-  if (!canCreateOu.value && !canUpdateOu.value && !canDeleteOu.value && !canCreateGroup.value) {
+  if (
+    !canCreateOu.value &&
+    !canUpdateOu.value &&
+    !canDeleteOu.value &&
+    !canCreateGroup.value &&
+    !canCreateUser.value
+  ) {
     return;
   }
   event.preventDefault();
@@ -358,6 +375,27 @@ function onGroupCreated(created: GroupCreateResponse): void {
   newGroupOpen.value = false;
   toast.add(groupCreatedToast(created));
   if (selectedDn.value) void loadContents(selectedDn.value);
+}
+
+// ---- New user ------------------------------------------------------------
+
+const newUserOpen = ref(false);
+const newUserOuDn = ref<string | null>(null);
+
+function openNewUser(ouDn: string): void {
+  newUserOuDn.value = ouDn;
+  newUserOpen.value = true;
+}
+
+/** The operator lands on the new user's page. */
+async function onUserCreated(created: UserCreateResponse): Promise<void> {
+  newUserOpen.value = false;
+  if (created.id) {
+    await router.push({ name: 'user-detail', params: { id: created.id } });
+  } else if (selectedDn.value) {
+    void loadContents(selectedDn.value);
+  }
+  if (created.remaining.length === 0) toast.add(userCreatedToast(created));
 }
 
 // ---- Create OU dialog ----------------------------------------------------
@@ -595,8 +633,18 @@ async function onDeleteSubmit(): Promise<void> {
           </div>
           <code v-if="selectedOu" class="dn-line">{{ selectedOu.distinguishedName }}</code>
         </template>
-        <template v-if="selectedOu && canCreateGroup" #actions>
+        <template v-if="selectedOu && (canCreateGroup || canCreateUser)" #actions>
           <Button
+            v-if="canCreateUser"
+            label="New user"
+            icon="pi pi-user-plus"
+            size="small"
+            severity="secondary"
+            outlined
+            @click="openNewUser(selectedOu.distinguishedName)"
+          />
+          <Button
+            v-if="canCreateGroup"
             label="New group"
             icon="pi pi-plus"
             size="small"
@@ -946,6 +994,13 @@ async function onDeleteSubmit(): Promise<void> {
         </span>
       </template>
     </ContextMenu>
+
+    <NewUserDialog
+      v-if="newUserOpen"
+      v-model:visible="newUserOpen"
+      :ou-dn="newUserOuDn"
+      @created="onUserCreated"
+    />
 
     <NewGroupDialog
       v-if="newGroupOpen"
