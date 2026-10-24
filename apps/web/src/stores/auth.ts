@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { computed, onScopeDispose, ref } from 'vue';
 import type { ElevatedSessionState, LoginRequest, MeResponse } from '@openaduc/shared';
 import { api } from '../api/index.js';
+import { clearAllDrafts } from '../design/lib/importDraft.js';
 import { ApiError, setElevatedIdleEndHandler, setStepUpRequiredHandler } from '../api/client.js';
 
 const NOT_ELEVATED: ElevatedSessionState = {
@@ -113,6 +114,7 @@ export const useAuthStore = defineStore('auth', () => {
       await api.auth.logout();
     } finally {
       actor.value = null;
+      clearAllDrafts();
     }
   }
 

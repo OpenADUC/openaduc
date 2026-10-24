@@ -19,6 +19,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerBulkJobRoutes } from './routes/bulkJobs.js';
 import { registerUserCreationRoutes } from './routes/userCreation.js';
+import { registerUserImportRoutes } from './routes/userImport.js';
 import { registerDeletedUserRoutes } from './routes/deletedUsers.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSetupRoutes } from './routes/setup.js';
@@ -90,6 +91,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerUserRoutes(app);
   await registerBulkJobRoutes(app);
   await registerUserCreationRoutes(app);
+  await registerUserImportRoutes(app);
   await registerDeletedUserRoutes(app);
   await registerAuditRoutes(app);
   await registerDirectoryRoutes(app);

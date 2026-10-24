@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type {
   GroupScope,
+  ImportPerson,
   GroupType,
   NamingLookups,
   NewUserOrganisationField,
@@ -23,6 +24,11 @@ export type DirectoryObjectIdentifier =
   | { kind: 'distinguishedName'; value: string }
   | { kind: 'samAccountName'; value: string }
   | { kind: 'userPrincipalName'; value: string };
+
+export interface PeopleLookups {
+  employeeIds: readonly string[];
+  identifiers: readonly string[];
+}
 
 /** Any object, as found by its GUID or DN. */
 export interface DirectoryObjectRef {
@@ -564,6 +570,16 @@ export interface DirectoryProvider {
   // collide with: sAMAccountName, UPN, mail and SMTP proxy addresses
   // anywhere in the domain, and CNs in each OU. Reads with the service account.
   findTakenNames(lookups: NamingLookups): Promise<TakenNames>;
+  // The users holding any of these employee IDs, or any of these values
+  // as mail, an SMTP proxy address, UPN or sAMAccountName, anywhere in the
+  // domain. Reads with the service account.
+  findPeople(lookups: PeopleLookups): Promise<ImportPerson[]>;
+  // The objects that exist of these, by DN or objectGUID, in one search.
+  // Reads with the service account.
+  findObjects(refs: {
+    dns: readonly string[];
+    guids: readonly string[];
+  }): Promise<DirectoryObjectRef[]>;
   // The forest's extra UPN suffixes (uPNSuffixes on the Partitions
   // container), not including the domain's own DNS name.
   getUpnSuffixes(): Promise<string[]>;

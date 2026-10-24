@@ -80,6 +80,13 @@ import type {
   UserSearchQuery,
   UserSearchResponse,
   UserUpdateRequest,
+  ImportCheckResponse,
+  ImportLookupRequest,
+  ImportLookupResponse,
+  ImportRequest,
+  PlacementRulesResponse,
+  PlacementRulesSave,
+  PlacementRulesSaveResponse,
 } from '@openaduc/shared';
 import { BULK_ACCOUNT_ACTIONS, bulkJobPath } from '@openaduc/shared';
 import { apiFetch, type ApiFetchInit } from './client.js';
@@ -445,6 +452,16 @@ export const api = {
     create(body: UserCreateRequest): Promise<UserCreateResponse> {
       return apiFetch('/users', { method: 'POST', body: JSON.stringify(body) });
     },
+    import: {
+      /** Who in the directory holds an import's employee IDs, emails and managers. */
+      lookup(body: ImportLookupRequest): Promise<ImportLookupResponse> {
+        return apiFetch('/users/import/lookup', { method: 'POST', body: JSON.stringify(body) });
+      },
+      /** The final check: nothing is written. */
+      check(body: ImportRequest): Promise<ImportCheckResponse> {
+        return apiFetch('/users/import/check', { method: 'POST', body: JSON.stringify(body) });
+      },
+    },
     copySource(id: string): Promise<UserCopySource> {
       return apiFetch(`/users/${encodeURIComponent(id)}/copy`);
     },
@@ -794,6 +811,17 @@ export const api = {
       check(id: number, body: NamingCheckRequest): Promise<NamingCheckResponse> {
         return apiFetch(`/directories/${id}/naming/check`, {
           method: 'POST',
+          body: JSON.stringify(body),
+        });
+      },
+    },
+    placementRules: {
+      get(id: number): Promise<PlacementRulesResponse> {
+        return apiFetch(`/directories/${id}/placement-rules`);
+      },
+      save(id: number, body: PlacementRulesSave): Promise<PlacementRulesSaveResponse> {
+        return apiFetch(`/directories/${id}/placement-rules`, {
+          method: 'PUT',
           body: JSON.stringify(body),
         });
       },
