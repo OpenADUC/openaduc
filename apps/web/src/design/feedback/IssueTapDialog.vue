@@ -10,7 +10,7 @@ import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
 import Select from 'primevue/select';
 import Message from 'primevue/message';
-import { lifetimeLabel, type TapIssueResponse } from '@openaduc/shared';
+import { lifetimeLabel, tapExpiresAt, type TapIssueResponse } from '@openaduc/shared';
 import { useIssueTap, type TapTarget } from '../composables/useIssueTap.js';
 import { fmtAbsolute, fmtRelative } from '../lib/format.js';
 
@@ -62,10 +62,7 @@ const existingText = computed(() => {
   const held = existing.value;
   if (!held) return null;
   const start = held.startsAt ?? held.createdAt;
-  const ends =
-    start && held.lifetimeMinutes
-      ? new Date(Date.parse(start) + held.lifetimeMinutes * 60_000)
-      : null;
+  const ends = start && held.lifetimeMinutes ? tapExpiresAt(start, held.lifetimeMinutes) : null;
   const parts = [
     held.isUsableOnce ? 'one-time' : 'multi-use',
     held.usabilityReason === 'NotYetValid' && start
@@ -145,6 +142,16 @@ function close(): void {
         a password and register their own sign-in methods. Whoever holds it can sign in as them.
       </p>
 
+      <Message
+        v-if="preflight.inPolicyScope === false"
+        severity="warn"
+        :closable="false"
+        class="tap-msg"
+      >
+        {{ name }} isn’t among the users the tenant’s Temporary Access Pass policy covers, so
+        Microsoft Entra may not accept a pass for them. Add them to the policy in the Microsoft
+        Entra admin center first.
+      </Message>
       <Message v-if="existing" severity="warn" :closable="false" class="tap-msg">
         {{ name }} already has a pass ({{ existingText }}). Issuing a new one replaces it, and the
         old one stops working.

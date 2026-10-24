@@ -516,7 +516,6 @@ function openResetDialog(): void {
 }
 
 // ---- Issue Temporary Access Pass -------------------------------------------
-// Offered only when the directory's Entra integration has the feature on.
 
 const tapDialogOpen = ref(false);
 

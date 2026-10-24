@@ -11,10 +11,10 @@ import { useToast } from 'primevue/usetoast';
 import {
   api,
   type DirectorySummary,
-  type EntraFeatureKey,
   type EntraIntegrationPut,
   type EntraIntegrationSummary,
 } from '../../api/index.js';
+import { TAP_PERMISSIONS, type EntraFeatureKey } from '@openaduc/shared';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
@@ -137,10 +137,11 @@ const FEATURES: FeatureRow[] = [
     key: 'temporaryAccessPass',
     label: 'Temporary Access Pass',
     description:
-      'Adds Issue Temporary Access Pass to user pages, for admins and operators, within the tenant’s Temporary Access Pass policy. The pass is shown once and never stored.',
-    permissionNote:
-      'UserAuthMethod-TAP.ReadWrite.All, Policy.Read.AuthenticationMethod and User.Read.All (Application)',
-    risk: 'Whoever can issue a Temporary Access Pass can sign in as that user. OpenADUC refuses members of privileged AD groups, of groups mapped to its Admin role, and holders of Entra admin roles.',
+      'Adds Issue Temporary Access Pass to user pages, for operators with the Issue TAP capability, within the tenant’s Temporary Access Pass policy. The pass is shown once and never stored.',
+    permissionNote: `${Object.values(TAP_PERMISSIONS)
+      .map((p) => p.name)
+      .join(', ')} (Application)`,
+    risk: 'Whoever can issue a Temporary Access Pass can sign in as that user. OpenADUC refuses members of privileged AD groups, of groups mapped to its Admin role, and anyone holding or eligible for a Microsoft Entra role.',
   },
 ];
 
@@ -454,13 +455,17 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
               <code>Directory.Read.All</code> &mdash; tenant identity (used by the test connection)
             </li>
             <li>
-              <code>UserAuthMethod-TAP.ReadWrite.All</code> &mdash; Temporary Access Pass only.
-              Narrower than <code>UserAuthenticationMethod.ReadWrite.All</code>, which also manages
-              every other sign-in method.
+              <code>{{ TAP_PERMISSIONS.issue.name }}</code> &mdash; Temporary Access Pass only.
+              Narrower than <code>{{ TAP_PERMISSIONS.issue.alsoMetBy[0] }}</code
+              >, which also manages every other sign-in method.
             </li>
             <li>
-              <code>Policy.Read.AuthenticationMethod</code> &mdash; the tenant’s Temporary Access
+              <code>{{ TAP_PERMISSIONS.policy.name }}</code> &mdash; the tenant’s Temporary Access
               Pass policy
+            </li>
+            <li>
+              <code>{{ TAP_PERMISSIONS.roles.name }}</code> &mdash; Entra roles a user holds or is
+              eligible for, so Temporary Access Pass refuses them
             </li>
           </ul>
           <p class="entra-help">

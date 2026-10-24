@@ -16,6 +16,7 @@ const ready: TapPreflight = {
     usableOnceOnly: true,
   },
   existing: null,
+  inPolicyScope: true,
 };
 const api = {
   users: {
@@ -73,6 +74,13 @@ describe('the Issue TAP dialog', () => {
     await dialog.setProps({ visible: true });
     await flushPromises();
     expect(dialog.find('[data-testid="tap-value"]').exists()).toBe(false);
+  });
+
+  it('warns when the tenant’s policy doesn’t cover the user, and still issues', async () => {
+    const dialog = open({ ...ready, inPolicyScope: false });
+    await flushPromises();
+    expect(dialog.text()).toContain('Microsoft Entra may not accept a pass for them');
+    expect(button(dialog, 'Issue pass')!.attributes('disabled')).toBeUndefined();
   });
 
   it('says an unsynced user is waiting for sync', async () => {

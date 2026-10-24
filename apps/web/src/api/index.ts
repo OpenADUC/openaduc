@@ -62,6 +62,8 @@ import type {
   OuListResponse,
   OuUpdateRequest,
   ResetPasswordRequest,
+  EntraFeatureKey,
+  EntraTestResponse,
   TapIssueRequest,
   TapIssueResponse,
   TapPreflight,
@@ -191,15 +193,6 @@ export type SyncTaskKey =
   | 'entra.signins.events'
   | 'entra.mfa.registration'
   | 'entra.password-expiry.notify';
-
-export type EntraFeatureKey =
-  | 'photos'
-  | 'signInActivity'
-  | 'signInEvents'
-  | 'mfaRegistration'
-  | 'teamsAdminWebhook'
-  | 'passwordExpiryNotifications'
-  | 'temporaryAccessPass';
 
 export interface EntraIntegrationSummary {
   id: number;
