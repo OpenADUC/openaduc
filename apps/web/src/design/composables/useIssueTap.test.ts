@@ -27,7 +27,7 @@ const policy = {
   maxLifetimeMinutes: 480,
   usableOnceOnly: false,
 };
-const ready: TapPreflight = { status: 'ready', policy, existing: null };
+const ready: TapPreflight = { status: 'ready', policy, existing: null, inPolicyScope: true };
 const existing = {
   createdAt: '2026-10-24T11:00:00Z',
   startsAt: '2026-10-24T11:00:00Z',
@@ -116,13 +116,18 @@ describe('useIssueTap', () => {
     const { tap } = await setup();
     tap.startLater.value = true;
     expect(tap.problem.value).toBe('Choose when the pass starts.');
-    tap.startsAtLocal.value = '2999-10-26T08:00';
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    const local = `${tomorrow.toISOString().slice(0, 10)}T08:00`;
+    tap.startsAtLocal.value = local;
     tap.submit();
     await settled();
     expect(issueTap).toHaveBeenCalledWith(
       'u1',
-      expect.objectContaining({ startsAt: new Date('2999-10-26T08:00').toISOString() }),
+      expect.objectContaining({ startsAt: new Date(local).toISOString() }),
     );
+
+    tap.startsAtLocal.value = '2999-10-26T08:00';
+    expect(tap.problem.value).toBe('The pass can start at most 30 days from now.');
   });
 
   it('warns that the pass the user holds will be replaced, and replaces it', async () => {
