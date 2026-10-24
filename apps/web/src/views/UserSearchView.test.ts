@@ -6,7 +6,7 @@ import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { UserMatchCandidate, UserSummary } from '@openaduc/shared';
+import type { BulkJob, UserMatchCandidate, UserSummary } from '@openaduc/shared';
 
 const summary = (id: string, displayName: string): UserSummary => ({
   id,
@@ -58,6 +58,21 @@ const api = {
       })),
     })),
   },
+  bulkJobs: {
+    list: vi.fn(async (): Promise<{ jobs: BulkJob[] }> => ({ jobs: [] })),
+    get: vi.fn(),
+    rows: vi.fn(async () => ({
+      rows: [
+        {
+          targetId: 'bsmith',
+          targetName: 'Bob Smith',
+          status: 'failed' as const,
+          errorCode: 'permission_denied',
+          errorMessage: 'The directory refused the change: insufficient access',
+        },
+      ],
+    })),
+  },
 };
 vi.mock('../api/index.js', () => ({ api }));
 
@@ -76,13 +91,13 @@ async function openUsers(query: string) {
     ],
   });
   await router.push(`/users${query}`);
+  useAuthStore(pinia).actor = {
+    capabilities: ['read:user', 'write:user.enableDisable'],
+  } as never;
   const page = mount(RouterView, {
     attachTo: document.body,
     global: { plugins: [pinia, router, PrimeVue, ToastService], stubs: { teleport: true } },
   });
-  useAuthStore(pinia).actor = {
-    capabilities: ['read:user', 'write:user.enableDisable'],
-  } as never;
   await flushPromises();
   return page;
 }
@@ -130,6 +145,50 @@ describe('the user list, selecting from a pasted list', () => {
     await button(page, 'Refresh').trigger('click');
     await flushPromises();
 
+    expect(page.get('.bulkbar-count').text()).toBe('1 selected');
+  });
+});
+
+describe('the user list, coming back to a bulk job', () => {
+  const aJob = (status: BulkJob['status'], succeeded: number, failed: number): BulkJob => ({
+    id: '7',
+    action: 'user.disable',
+    status,
+    pauseReason: null,
+    actorDisplayName: 'OpenADUC Operator',
+    createdAt: new Date().toISOString(),
+    finishedAt: status === 'finished' ? new Date().toISOString() : null,
+    counts: {
+      total: 2,
+      pending: 2 - succeeded - failed,
+      running: 0,
+      succeeded,
+      failed,
+      skipped: 0,
+    },
+  });
+
+  it('shows the progress of a job still running', async () => {
+    api.bulkJobs.list.mockResolvedValueOnce({ jobs: [aJob('running', 1, 0)] });
+    api.bulkJobs.get.mockResolvedValue({ job: aJob('running', 1, 0) });
+    const page = await openUsers('');
+
+    expect(page.get('.bulk-job').text()).toContain('Disabling 2 accounts…');
+    expect(page.get('.bulk-job').text()).toContain('1 of 2 done.');
+    expect(button(page, 'Paste a list').attributes('disabled')).toBeDefined();
+  });
+
+  it('keeps a finished job’s failed accounts selected until it’s dismissed', async () => {
+    localStorage.clear();
+    api.bulkJobs.list.mockResolvedValueOnce({ jobs: [aJob('finished', 1, 1)] });
+    const page = await openUsers('');
+
+    expect(page.get('.bulk-job').text()).toContain('Disabled 1 of 2 accounts');
+    expect(page.get('.bulkbar-count').text()).toBe('1 selected');
+    expect(api.bulkJobs.rows).toHaveBeenCalledWith('7', 'failed');
+
+    await button(page, 'Dismiss').trigger('click');
+    expect(page.find('.bulk-job').exists()).toBe(false);
     expect(page.get('.bulkbar-count').text()).toBe('1 selected');
   });
 });
