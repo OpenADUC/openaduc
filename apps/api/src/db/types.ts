@@ -455,6 +455,23 @@ export interface ImportPlacementRulesTable {
   updated_at: TimestampDefault;
 }
 
+/** A licence an Entra group grants. */
+export interface EntraGroupSku {
+  skuId: string;
+  skuPartNumber: string | null;
+  disabledPlans: number;
+}
+
+/** See migrations/20261026000001_entra_group_licenses.ts. */
+export interface EntraGroupLicensesTable {
+  provider_id: number;
+  entra_group_id: string;
+  display_name: string | null;
+  on_premises_sid: string | null;
+  skus: JSONColumnType<EntraGroupSku[]>;
+  refreshed_at: TimestampDefault;
+}
+
 /** See migrations/20261025000001_bulk_job_creates.ts. */
 export interface ImportPasswordsTable {
   id: Generated<string>;
@@ -485,6 +502,7 @@ export interface DB {
   bulk_job_rows: BulkJobRowsTable;
   import_placement_rules: ImportPlacementRulesTable;
   import_passwords: ImportPasswordsTable;
+  entra_group_licenses: EntraGroupLicensesTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;
   app_settings: AppSettingsTable;

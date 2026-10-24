@@ -199,6 +199,8 @@ export const userDetailSchema = userSummarySchema.extend({
         .nullable(),
       /** The integration's Temporary Access Pass feature is on, so Issue TAP is offered. */
       temporaryAccessPass: z.boolean(),
+      /** The integration's licenses feature is on, so the page shows the user's licenses. */
+      licenses: z.boolean(),
     })
     .nullable(),
   // Every populated LDAP attribute on the user entry, with binary blobs

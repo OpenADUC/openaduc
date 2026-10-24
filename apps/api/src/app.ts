@@ -28,6 +28,7 @@ import { registerNamingRoutes } from './routes/naming.js';
 import { registerNewUserSettingsRoutes } from './routes/newUserSettings.js';
 import { registerEntraIntegrationRoutes } from './routes/entraIntegrations.js';
 import { registerTemporaryAccessPassRoutes } from './routes/temporaryAccessPass.js';
+import { registerLicenseRoutes } from './routes/licenses.js';
 import { registerRoleMappingRoutes, registerSettingsRoutes } from './routes/settings.js';
 import { registerGroupRoutes } from './routes/groups.js';
 import { registerComputerRoutes } from './routes/computers.js';
@@ -100,6 +101,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerNewUserSettingsRoutes(app);
   await registerEntraIntegrationRoutes(app);
   await registerTemporaryAccessPassRoutes(app);
+  await registerLicenseRoutes(app);
   await registerSettingsRoutes(app);
   await registerRoleMappingRoutes(app);
   await registerGroupRoutes(app);

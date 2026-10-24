@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger } from 'fastify';
-import { TAP_PERMISSIONS } from '@openaduc/shared';
+import { LICENSE_PERMISSIONS, TAP_PERMISSIONS } from '@openaduc/shared';
 import type { EntraIntegrationCreds, EntraIntegrationService } from './entraIntegration.js';
 
 // Microsoft Graph client built around the OAuth 2.0 client-credentials
@@ -333,6 +333,12 @@ function permissionHintForPath(status: number, path: string, code: string | null
     }
     if (path.includes('/roleManagement/')) {
       return `${TAP_PERMISSIONS.roles.name} (Application) is required to read Entra role assignments and eligibilities`;
+    }
+    if (path.startsWith('/subscribedSkus')) {
+      return `${LICENSE_PERMISSIONS.skus.name} (Application) is required to read the tenant’s subscriptions`;
+    }
+    if (path.startsWith('/groups')) {
+      return `${LICENSE_PERMISSIONS.groups.name} (Application) is required to read groups and the licenses they grant`;
     }
     if (path.startsWith('/users')) {
       return `${TAP_PERMISSIONS.users.name} (Application) is required to find users and their groups`;

@@ -16,6 +16,7 @@ import { runEntraSignInActivity } from './runners/entraSignInActivity.js';
 import { runEntraSignInsEvents } from './runners/entraSignInsEvents.js';
 import { runEntraMfaRegistration } from './runners/entraMfaRegistration.js';
 import { runEntraPasswordExpiryNotify } from './runners/entraPasswordExpiryNotify.js';
+import { runEntraLicensedGroups } from './runners/entraLicensedGroups.js';
 
 // In-code registry of every known task. The DB stores per-directory
 // overrides (cadence, anchor, enabled), but the runner, default cadence,
@@ -216,6 +217,18 @@ export const TASK_REGISTRY: Record<SyncTaskKey, TaskDefinition> = {
     notifyAfterFailures: 3,
     requires: { entra: true },
     runner: runEntraPasswordExpiryNotify,
+  },
+  'entra.licenses.groups': {
+    key: 'entra.licenses.groups',
+    label: 'Licensed groups (Graph)',
+    // One list query; hourly keeps group-picker badges close to Entra.
+    defaultIntervalMinutes: 60,
+    priority: 86,
+    seedByDefault: true,
+    watchdogMinutes: 10,
+    notifyAfterFailures: 6,
+    requires: { entra: true },
+    runner: runEntraLicensedGroups,
   },
 };
 

@@ -841,6 +841,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                     : null,
                 temporaryAccessPass:
                   integration.hasClientSecret && integration.features.temporaryAccessPass === true,
+                licenses: integration.hasClientSecret && integration.features.licenses === true,
               }
             : null,
         rawAttributes: rawAttributesFor(
