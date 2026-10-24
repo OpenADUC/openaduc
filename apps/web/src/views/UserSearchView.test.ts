@@ -153,6 +153,7 @@ describe('the user list, coming back to a bulk job', () => {
   const aJob = (status: BulkJob['status'], succeeded: number, failed: number): BulkJob => ({
     id: '7',
     action: 'user.disable',
+    subject: null,
     status,
     pauseReason: null,
     actorDisplayName: 'OpenADUC Operator',

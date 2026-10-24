@@ -40,6 +40,7 @@ const heading = anEvent({
   bulkJobId: '7',
   bulk: {
     action: 'user.disable',
+    subject: null,
     status: 'finished',
     pauseReason: null,
     total: 2,

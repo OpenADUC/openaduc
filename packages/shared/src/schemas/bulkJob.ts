@@ -3,19 +3,26 @@ import { z } from 'zod';
 import type { GroupPrivilege } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
-export const BULK_JOB_ACTIONS = ['user.disable', 'user.enable', 'user.unlock'] as const;
+export const BULK_JOB_ACTIONS = [
+  'user.disable',
+  'user.enable',
+  'user.unlock',
+  'user.group.add',
+  'user.group.remove',
+] as const;
 export type BulkJobAction = (typeof BULK_JOB_ACTIONS)[number];
 
-/** The action without its object type, as in "disable". */
-export type BulkJobVerb = BulkJobAction extends `user.${infer V}` ? V : never;
-
-export function bulkJobVerb(action: BulkJobAction): BulkJobVerb {
-  return action.slice('user.'.length) as BulkJobVerb;
-}
+const BULK_JOB_PATHS: Record<BulkJobAction, string> = {
+  'user.disable': '/users/bulk-disable',
+  'user.enable': '/users/bulk-enable',
+  'user.unlock': '/users/bulk-unlock',
+  'user.group.add': '/users/bulk-add-to-groups',
+  'user.group.remove': '/users/bulk-remove-from-groups',
+};
 
 /** The route, under /api, that starts a job of this action. */
 export function bulkJobPath(action: BulkJobAction): string {
-  return `/users/bulk-${bulkJobVerb(action)}`;
+  return BULK_JOB_PATHS[action];
 }
 
 /**
@@ -126,9 +133,17 @@ export const bulkJobCountsSchema = z.object({
 });
 export type BulkJobCounts = z.infer<typeof bulkJobCountsSchema>;
 
+/** What a job acts with, besides its rows: the groups a membership job adds to or removes from. */
+export const bulkJobSubjectSchema = z.object({
+  groups: z.array(z.object({ id: z.string(), name: z.string() })),
+});
+export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
+
 export const bulkJobSchema = z.object({
   id: z.string(),
   action: z.enum(BULK_JOB_ACTIONS),
+  /** Null for a job that acts on its rows alone, as disable does. */
+  subject: bulkJobSubjectSchema.nullable(),
   status: z.enum(BULK_JOB_STATUSES),
   pauseReason: z.enum(BULK_JOB_PAUSE_REASONS).nullable(),
   actorDisplayName: z.string().nullable(),
@@ -159,6 +174,8 @@ export const bulkJobRowsQuerySchema = z.object({
 /** A bulk job as the audit log shows it, on the `bulk.create` event that heads it. */
 export const auditBulkSummarySchema = z.object({
   action: z.enum(BULK_JOB_ACTIONS),
+  /** From its `bulk.create` event. */
+  subject: bulkJobSubjectSchema.nullable(),
   /** Null once the job's record is gone; its audit events remain. */
   status: z.enum(BULK_JOB_STATUSES).nullable(),
   pauseReason: z.enum(BULK_JOB_PAUSE_REASONS).nullable(),

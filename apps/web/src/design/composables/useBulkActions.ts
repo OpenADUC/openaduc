@@ -10,12 +10,13 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import { bulkJobVerb, type BulkJob, type BulkJobVerb } from '@openaduc/shared';
+import type { BulkJob } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { accounts, BULK_VERBS, bulkJobActive } from '../lib/bulkJob.js';
 
-export type BulkAction = BulkJobVerb;
+/** The bulk actions that change the accounts themselves. */
+export type BulkAction = 'disable' | 'enable' | 'unlock';
 
 const CONSEQUENCE: Record<BulkAction, string> = {
   disable: "They won't be able to sign in until an operator enables them again.",
@@ -76,8 +77,8 @@ export function useBulkActions(opts: {
       busy.value ||
       (job.value !== null && (job.value.status === 'paused' || bulkJobActive(job.value))),
   );
-  const pendingBulkAction = computed<BulkAction | null>(() =>
-    job.value && bulkJobActive(job.value) ? bulkJobVerb(job.value.action) : null,
+  const pendingBulkAction = computed<BulkJob['action'] | null>(() =>
+    job.value && bulkJobActive(job.value) ? job.value.action : null,
   );
 
   const confirmation = computed(() => {

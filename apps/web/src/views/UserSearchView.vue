@@ -784,7 +784,7 @@ onMounted(() => {
             icon="pi pi-unlock"
             severity="warn"
             size="small"
-            :loading="bulkRunning && pendingBulkAction === 'unlock'"
+            :loading="bulkRunning && pendingBulkAction === 'user.unlock'"
             :disabled="bulkRunning"
             @click="requestBulk('unlock')"
           />
@@ -794,7 +794,7 @@ onMounted(() => {
             icon="pi pi-ban"
             severity="danger"
             size="small"
-            :loading="bulkRunning && pendingBulkAction === 'disable'"
+            :loading="bulkRunning && pendingBulkAction === 'user.disable'"
             :disabled="bulkRunning"
             @click="requestBulk('disable')"
           />
@@ -804,7 +804,7 @@ onMounted(() => {
             icon="pi pi-check"
             severity="secondary"
             size="small"
-            :loading="bulkRunning && pendingBulkAction === 'enable'"
+            :loading="bulkRunning && pendingBulkAction === 'user.enable'"
             :disabled="bulkRunning"
             @click="requestBulk('enable')"
           />

@@ -23,7 +23,12 @@ import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
 import type { SessionsService } from '../sessions.js';
 import type { UserLiveRefreshService } from '../userLiveRefresh.js';
-import { BULK_JOB_HANDLERS, type BulkJobHandlers, type BulkRowOutcome } from './handlers.js';
+import {
+  BULK_JOB_HANDLERS,
+  failureMessage,
+  type BulkJobHandlers,
+  type BulkRowOutcome,
+} from './handlers.js';
 
 export type JobRecord = Selectable<BulkJobsTable>;
 type RowRecord = Selectable<BulkJobRowsTable>;
@@ -45,7 +50,7 @@ export interface BulkJobDeps {
   sessions: Pick<SessionsService, 'findActiveElevated'>;
   credentialCache: Pick<CredentialCacheService, 'get'>;
   providers: Pick<ProviderFactory, 'buildForDirectory'>;
-  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh'>;
+  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
 }
 
 /** Enough rows at once to keep a DC busy, not to flood it. */
@@ -114,7 +119,10 @@ export class BulkJobService {
   /** Throws a ZodError for a bad request body. */
   async create(actor: JobActor, action: BulkJobAction, body: unknown): Promise<string> {
     const handler = this.handlers[action];
-    const rows = handler.rows(handler.request.parse(body));
+    const request = handler.request.parse(body);
+    const rows = handler.rows(request);
+    const subject =
+      (await handler.subject?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
@@ -130,7 +138,13 @@ export class BulkJobService {
     const jobId = await this.db.transaction().execute(async (trx) => {
       const job = await trx
         .insertInto('bulk_jobs')
-        .values({ ...actorColumns(actor), status: 'queued', heartbeat_at: sql`now()`, action })
+        .values({
+          ...actorColumns(actor),
+          status: 'queued',
+          heartbeat_at: sql`now()`,
+          action,
+          subject_json: subject ? JSON.stringify(subject) : null,
+        })
         .returning('id')
         .executeTakeFirstOrThrow();
       for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
@@ -161,7 +175,7 @@ export class BulkJobService {
         action: 'bulk.create',
         result: 'success',
         targetType: 'user',
-        metadata: { action, total: rows.length },
+        metadata: { action, total: rows.length, ...(subject ? { subject } : {}) },
       });
     } catch (err) {
       await this.db.deleteFrom('bulk_jobs').where('id', '=', jobId).execute();
@@ -488,7 +502,7 @@ export class BulkJobService {
           targetDn: row.target_dn,
           input: handler.input.parse(row.input_json),
         },
-        { provider, writeCtx, audit, services: this.deps },
+        { db: this.db, provider, writeCtx, audit, services: this.deps },
       );
     } catch (err) {
       if (err instanceof DirectoryUnavailableError && !wasAudited(err)) {
@@ -530,7 +544,7 @@ export class BulkJobService {
         error_code: outcome.ok ? null : outcome.errorCode,
         error_message: outcome.ok
           ? null
-          : failureMessage(outcome.errorCode, outcome.errorMessage ?? null),
+          : (outcome.message ?? failureMessage(outcome.errorCode, outcome.errorMessage ?? null)),
         before_json: outcome.before ? JSON.stringify(outcome.before) : null,
         after_json: outcome.after ? JSON.stringify(outcome.after) : null,
         ...(outcome.targetDn ? { target_dn: outcome.targetDn } : {}),
@@ -593,6 +607,7 @@ export class BulkJobService {
     return jobs.map((j) => ({
       id: String(j.id),
       action: j.action,
+      subject: j.subject_json,
       status: j.status,
       pauseReason: j.pause_reason,
       actorDisplayName: j.actor_display_name,
@@ -665,21 +680,4 @@ function auditBase(actor: JobActor, jobId: string): Omit<AuditEventInput, 'actio
 
 function emptyCounts(): BulkJobCounts {
   return { total: 0, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0 };
-}
-
-/** What a failed row says to the operator. */
-function failureMessage(code: string, detail: string | null): string {
-  const reason = detail ? `: ${detail}` : '';
-  switch (code) {
-    case 'not_found':
-      return 'No such user in the directory.';
-    case 'permission_denied':
-      return `The directory refused the change${reason}`;
-    case 'directory_unavailable':
-      return 'No domain controller could be reached.';
-    case 'interrupted':
-      return 'OpenADUC stopped while changing this account. Check it, then retry.';
-    default:
-      return `The change failed${reason}`;
-  }
 }

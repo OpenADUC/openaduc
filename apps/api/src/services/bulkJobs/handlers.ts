@@ -1,8 +1,23 @@
 // SPDX-License-Identifier: BUSL-1.1
+import type { Kysely } from 'kysely';
 import { z } from 'zod';
-import { bulkJobCreateRequestSchema, type BulkJobAction, type Capability } from '@openaduc/shared';
+import {
+  bulkGroupMembershipRequestSchema,
+  bulkJobCreateRequestSchema,
+  type BulkGroupMembershipRequest,
+  type BulkJobAction,
+  type BulkJobSubject,
+  type BulkMembershipOp,
+  type Capability,
+} from '@openaduc/shared';
+import type { DB } from '../../db/types.js';
+import { rawScalarValue } from '../../lib/rawAttributes.js';
+import { NotFound } from '../../plugins/errorHandler.js';
 import type { DirectoryProvider, WriteContext } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
+import { findCachedGroups } from '../groupCache.js';
+import { alreadyAsAsked, isPrimaryGroup } from '../groupMembershipPreview.js';
+import { refreshMembershipCache, writeGroupMembership } from '../groupMembershipWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -13,13 +28,14 @@ import {
 import type { UserLiveRefreshService } from '../userLiveRefresh.js';
 
 export interface BulkRowContext {
+  db: Kysely<DB>;
   provider: DirectoryProvider;
   writeCtx: WriteContext;
   /** The row's audit fields, the bulk id included. */
   audit: Omit<AuditEventInput, 'action' | 'result'>;
   services: {
     audit: Pick<AuditService, 'recordEvent'>;
-    userLiveRefresh: Pick<UserLiveRefreshService, 'refresh'>;
+    userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
   };
 }
 
@@ -37,6 +53,8 @@ export type BulkRowOutcome =
       before?: Record<string, unknown> | null;
       after?: Record<string, unknown> | null;
       targetDn?: string;
+      /** What the row says to the operator, in place of the message for its code. */
+      message?: string;
       /** The row's failure is in the audit log already. */
       audited: boolean;
     };
@@ -53,13 +71,19 @@ export interface BulkJobRowInput<Input> {
  * runs. `run` makes the row's write, audits it as the single-object route
  * would (else returns `audited: false` and the job audits the failure),
  * and reports the before/after a revert would restore. Throwing
- * DirectoryUnavailableError pauses the job.
+ * DirectoryUnavailableError pauses the job. `subject`, for a job that acts
+ * with more than its rows, names what with (and throws an HTTP error when
+ * it can't), so the job's progress and its audit entry can say it.
  */
 export interface BulkJobHandler<Request = unknown, Input = unknown> {
   action: BulkJobAction;
   capability: Capability;
   request: z.ZodType<Request>;
   rows(request: Request): BulkJobRowInput<Input>[];
+  subject?(
+    request: Request,
+    lookup: { db: Kysely<DB>; directoryId: number },
+  ): Promise<BulkJobSubject>;
   input: z.ZodType<Input>;
   run(
     row: { targetId: string; targetDn: string | null; input: Input },
@@ -108,8 +132,142 @@ function userAccountHandler(
   };
 }
 
+const groupIdsInputSchema = z.object({ groupIds: z.array(z.string()) });
+
+/**
+ * Add each user to the job's groups, or remove them, one row per user so
+ * a row's result is that user's, naming any group that failed. A group the
+ * user is already as asked in is left alone, so a retried row only makes
+ * the changes still missing. Each change is audited as the single-member
+ * route audits it.
+ */
+function groupMembershipHandler(
+  op: BulkMembershipOp,
+): BulkJobHandler<BulkGroupMembershipRequest, z.infer<typeof groupIdsInputSchema>> {
+  const action = `user.group.${op}` as const;
+  const notDone = op === 'add' ? 'Not added to' : 'Not removed from';
+  return {
+    action,
+    capability: 'write:group.membership',
+    request: bulkGroupMembershipRequestSchema,
+    rows: ({ ids, groupIds }) => {
+      const input = { groupIds: groupIds.map((id) => id.toLowerCase()) };
+      return ids.map((id) => ({ targetId: id.toLowerCase(), input }));
+    },
+    input: groupIdsInputSchema,
+    async subject({ groupIds }, { db, directoryId }) {
+      const ids = groupIds.map((id) => id.toLowerCase());
+      const found = new Map(
+        (await findCachedGroups(db, directoryId, { ids })).map((g) => [g.id.toLowerCase(), g]),
+      );
+      return {
+        groups: ids.map((id) => {
+          const group = found.get(id);
+          if (!group) throw NotFound('group not found');
+          return { id, name: group.name };
+        }),
+      };
+    },
+    async run(row, ctx) {
+      const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
+      if (!live) return { ok: false, errorCode: 'not_found', audited: false };
+      const { user } = live;
+      const groups = new Map(
+        (await findCachedGroups(ctx.db, ctx.provider.id, { ids: row.input.groupIds })).map((g) => [
+          g.id.toLowerCase(),
+          g,
+        ]),
+      );
+      const memberOf = new Set(user.memberOfDns.map((dn) => dn.toLowerCase()));
+      const primaryGroupId = rawScalarValue(user.rawAttributes['primaryGroupID']);
+      const changed: { id: string; name: string }[] = [];
+      const failed: string[] = [];
+      let errorCode: string | null = null;
+
+      for (const groupId of row.input.groupIds) {
+        const group = groups.get(groupId);
+        if (!group) {
+          // Gone from the directory since the job started.
+          await ctx.services.audit.recordEvent({
+            ...ctx.audit,
+            action,
+            result: 'failure',
+            errorCode: 'not_found',
+            targetType: 'user',
+            targetId: user.objectGuid,
+            targetDn: user.distinguishedName,
+            metadata: { groupId },
+          });
+          errorCode ??= 'not_found';
+          failed.push(`${notDone} a group that no longer exists.`);
+          continue;
+        }
+        const state = memberOf.has(group.distinguishedName.toLowerCase())
+          ? 'direct'
+          : isPrimaryGroup(group, primaryGroupId)
+            ? 'primary'
+            : 'none';
+        if (alreadyAsAsked(op, state)) continue;
+        const result = await writeGroupMembership(
+          ctx.services.audit,
+          ctx.provider,
+          { kind: 'user', op, member: user, group },
+          ctx.writeCtx,
+          ctx.audit,
+        );
+        if (result.ok) {
+          changed.push({ id: group.id, name: group.name });
+        } else {
+          const code = result.errorCode ?? 'directory_error';
+          errorCode ??= code;
+          failed.push(
+            `${notDone} ${group.name}: ${failureMessage(code, result.errorMessage ?? null)}`,
+          );
+        }
+      }
+
+      if (changed.length > 0) {
+        await refreshMembershipCache(
+          { db: ctx.db, userLiveRefresh: ctx.services.userLiveRefresh },
+          ctx.provider,
+          { kind: 'user', memberId: row.targetId },
+        );
+      }
+      const snapshot = (isMember: boolean) =>
+        changed.length === 0 ? null : { groups: changed.map((g) => ({ ...g, isMember })) };
+      const fields = {
+        before: snapshot(op === 'remove'),
+        after: snapshot(op === 'add'),
+        targetDn: user.distinguishedName,
+      };
+      return errorCode === null
+        ? { ok: true, ...fields }
+        : { ok: false, errorCode, message: failed.join(' '), audited: true, ...fields };
+    },
+  };
+}
+
 export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.disable': userAccountHandler(DISABLE_USER, 'write:user.enableDisable'),
   'user.enable': userAccountHandler(ENABLE_USER, 'write:user.enableDisable'),
   'user.unlock': userAccountHandler(UNLOCK_USER, 'write:user.unlock'),
+  'user.group.add': groupMembershipHandler('add'),
+  'user.group.remove': groupMembershipHandler('remove'),
 };
+
+/** What a failed row says to the operator. */
+export function failureMessage(code: string, detail: string | null): string {
+  const reason = detail ? `: ${detail}` : '';
+  switch (code) {
+    case 'not_found':
+      return 'No such user in the directory.';
+    case 'permission_denied':
+      return `The directory refused the change${reason}`;
+    case 'directory_unavailable':
+      return 'No domain controller could be reached.';
+    case 'interrupted':
+      return 'OpenADUC stopped while changing this account. Check it, then retry.';
+    default:
+      return `The change failed${reason}`;
+  }
+}

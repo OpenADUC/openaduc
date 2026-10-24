@@ -12,6 +12,8 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
   'user.enable': { verb: 'Enable', ing: 'Enabling', ed: 'Enabled' },
   'user.unlock': { verb: 'Unlock', ing: 'Unlocking', ed: 'Unlocked' },
+  'user.group.add': { verb: 'Add', ing: 'Adding', ed: 'Added' },
+  'user.group.remove': { verb: 'Remove', ing: 'Removing', ed: 'Removed' },
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
