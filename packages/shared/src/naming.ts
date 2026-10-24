@@ -5,6 +5,8 @@
 // Pure, so the settings preview, the create and import workflows and the
 // API's uniqueness check all agree.
 
+import { CONTROL_CHARS, samAccountNameSchema } from './schemas/user.js';
+
 export const NAMING_TOKENS = ['first', 'last', 'f', 'l', 'mi'] as const;
 export type NamingToken = (typeof NAMING_TOKENS)[number];
 export const DEFAULT_NAMING_PATTERN = '{first}.{last}';
@@ -109,7 +111,23 @@ export type NamingDeviation =
       approval: 'none' | 'blocked';
       reason: string;
     }
-  | { kind: 'unusable'; field?: NameField; approval: 'blocked'; reason: string };
+  | {
+      /** A name the operator typed is already held; typed names aren't suffixed. */
+      kind: 'taken';
+      attribute: NamingAttribute;
+      source: 'directory' | 'batch';
+      value: string;
+      approval: 'blocked';
+      reason: string;
+    }
+  | {
+      kind: 'unusable';
+      field?: NameField;
+      /** Set when it's a name the operator typed that can't be used. */
+      attribute?: 'samAccountName' | 'userPrincipalName';
+      approval: 'blocked';
+      reason: string;
+    };
 
 export interface NamingSuggestion {
   samAccountName: string;
@@ -122,10 +140,23 @@ export interface NamingSuggestion {
   deviations: NamingDeviation[];
 }
 
+/**
+ * Names the operator typed in place of the pattern's. They're used as
+ * typed: checked, but never suffixed. A typed UPN also gives the
+ * sAMAccountName, cut to 20 characters, unless that's typed too.
+ */
+export interface NameOverrides {
+  samAccountName?: string | null | undefined;
+  /** The whole UPN, `local@suffix`. */
+  userPrincipalName?: string | null | undefined;
+  displayName?: string | null | undefined;
+}
+
 export interface NamingRequest {
   name: PersonName;
   /** The OU the account will be created in; CNs are checked only when given. */
   ouDn?: string | undefined;
+  overrides?: NameOverrides | undefined;
 }
 
 /** Values already held in the directory. Compared case-insensitively. */
@@ -545,12 +576,16 @@ type Clash = { attr: NamingAttribute; source: 'directory' | 'batch' };
  * - a clash of the sAMAccountName alone (often a truncated one) suffixes
  *   just that, keeping the UPN and email the person would otherwise get.
  *
- * A CN taken in the target OU gets the sAMAccountName in brackets.
+ * A CN taken in the target OU gets the sAMAccountName in brackets. Names
+ * the operator typed (`overrides`) are never suffixed: one already held
+ * blocks the request.
  */
 export function resolveNames(
   requests: NamingRequest[],
   settings: NamingSettings,
   taken: TakenNames,
+  /** The forest's UPN suffixes, which a typed UPN must end in, when known. */
+  upnSuffixes?: readonly string[],
 ): NamingSuggestion[] {
   const held: Record<NamingAttribute, NameSet> = {
     samAccountName: new NameSet(taken.samAccountNames),
@@ -563,69 +598,79 @@ export function resolveNames(
       const source = held[attr].holder(valueOf(names, attr));
       return source ? [{ attr, source }] : [];
     });
-  const ALL: NamingAttribute[] = ['samAccountName', 'userPrincipalName', 'mail'];
 
-  return requests.map(({ name, ouDn }) => {
+  return requests.map(({ name, ouDn, overrides }) => {
     const p = prepare(name, settings.pattern);
-    const base = accountNames(samWith(p, 1), upnLocalWith(p, 1), settings.upnSuffix);
-    const deviations = [
-      ...p.deviations,
-      ...truncation(
-        'samAccountName',
-        p.username,
-        base.samAccountName,
-        base.upnLocal === p.username ? 'The UPN and email keep the full name.' : '',
-      ),
-      ...truncation('userPrincipalName', p.username, base.upnLocal, ''),
-      ...truncation('displayName', p.fullDisplayName, p.displayName, ''),
+    const typed = typedNames(overrides, upnSuffixes);
+    const displayName = typed.displayName ?? p.displayName;
+    // What the pattern still builds; the rest is as typed.
+    const free: NamingAttribute[] = [
+      ...(typed.samAccountName === undefined ? ['samAccountName' as const] : []),
+      ...(typed.upn === undefined ? ['userPrincipalName' as const, 'mail' as const] : []),
     ];
+    const addressesFree = typed.upn === undefined;
+    const samFree = typed.samAccountName === undefined;
+    const candidate = (n: number, suffixSam: boolean, suffixAddresses: boolean) =>
+      accountNames(
+        typed.samAccountName ?? samWith(p, suffixSam ? n : 1),
+        typed.upn?.local ?? upnLocalWith(p, suffixAddresses ? n : 1),
+        typed.upn?.suffix ?? settings.upnSuffix,
+      );
+    const base = candidate(1, false, false);
+    const samNote = base.upnLocal === p.username ? 'The UPN and email keep the full name.' : '';
+    const deviations: NamingDeviation[] = [
+      ...(addressesFree ? p.deviations : []),
+      ...typed.deviations,
+      ...(samFree ? truncation('samAccountName', p.username, base.samAccountName, samNote) : []),
+      ...(addressesFree ? truncation('userPrincipalName', p.username, base.upnLocal, '') : []),
+      ...(typed.displayName === undefined
+        ? truncation('displayName', p.fullDisplayName, p.displayName, '')
+        : []),
+    ];
+    for (const { attr, source } of clashesOf(
+      base,
+      ALL_ATTRIBUTES.filter((a) => !free.includes(a)),
+    )) {
+      deviations.push(takenBy(attr, valueOf(base, attr), source));
+    }
     const result = (names: AccountNames, cn: string): NamingSuggestion => ({
       ...names,
       cn,
-      displayName: p.displayName,
+      displayName,
       deviations,
     });
     if (deviations.some((d) => d.approval === 'blocked')) {
-      return result(base, cutText(p.displayName, NAME_LIMITS.cn));
+      return result(base, cutText(displayName, NAME_LIMITS.cn));
     }
 
     let names = base;
-    const clashes = clashesOf(base, ALL);
+    const clashes = clashesOf(base, free);
     if (clashes.length > 0) {
       const addressesClash = clashes.some((c) => c.attr !== 'samAccountName');
-      const candidate = (n: number) =>
-        accountNames(
-          samWith(p, n),
-          addressesClash ? upnLocalWith(p, n) : base.upnLocal,
-          settings.upnSuffix,
-        );
+      const checked = free.filter((a) => addressesClash || a === 'samAccountName');
+      const next = (n: number) => candidate(n, true, addressesClash);
       let suffix = 2;
-      while (
-        suffix <= MAX_SUFFIX &&
-        clashesOf(candidate(suffix), addressesClash ? ALL : ['samAccountName']).length
-      ) {
-        suffix++;
-      }
+      while (suffix <= MAX_SUFFIX && clashesOf(next(suffix), checked).length) suffix++;
       if (suffix > MAX_SUFFIX) {
         deviations.push({
           kind: 'unusable',
           approval: 'blocked',
           reason: `Every suffix up to ${MAX_SUFFIX} is taken for "${p.username}". Enter a different username.`,
         });
-        return result(base, cutText(p.displayName, NAME_LIMITS.cn));
+        return result(base, cutText(displayName, NAME_LIMITS.cn));
       }
-      names = candidate(suffix);
-      deviations.push(collision(base, names, suffix, clashes, addressesClash));
+      names = next(suffix);
+      deviations.push(collision(base, names, suffix, clashes, addressesClash, samFree));
     }
-    for (const attr of ALL) held[attr].claim(valueOf(names, attr));
+    for (const attr of ALL_ATTRIBUTES) held[attr].claim(valueOf(names, attr));
 
-    let cn = cutText(p.displayName, NAME_LIMITS.cn);
-    let intended = p.displayName;
+    let cn = cutText(displayName, NAME_LIMITS.cn);
+    let intended = displayName;
     if (ouDn) {
       const source = heldCns.holder(cnKey({ ouDn, cn }));
       if (source) {
         const tail = ` (${names.samAccountName})`;
-        const fallback = cutText(p.displayName, NAME_LIMITS.cn, tail);
+        const fallback = cutText(displayName, NAME_LIMITS.cn, tail);
         const alsoTaken = heldCns.holder(cnKey({ ouDn, cn: fallback })) !== null;
         deviations.push({
           kind: 'cn_collision',
@@ -638,13 +683,115 @@ export function resolveNames(
             : `"${cn}" already exists in this OU, so the account is named "${fallback}".`,
         });
         cn = fallback;
-        intended = p.displayName + tail;
+        intended = displayName + tail;
       }
       heldCns.claim(cnKey({ ouDn, cn }));
     }
     deviations.push(...truncation('cn', intended, cn, 'The display name keeps the full name.'));
     return result(names, cn);
   });
+}
+
+const ALL_ATTRIBUTES: NamingAttribute[] = ['samAccountName', 'userPrincipalName', 'mail'];
+
+function takenBy(
+  attribute: NamingAttribute,
+  value: string,
+  source: 'directory' | 'batch',
+): NamingDeviation {
+  const where =
+    source === 'directory' ? 'used in the directory' : 'taken by another person in this list';
+  return {
+    kind: 'taken',
+    attribute,
+    source,
+    value,
+    approval: 'blocked',
+    reason: `The ${ATTRIBUTE_LABEL[attribute]} "${value}" is already ${where}.`,
+  };
+}
+
+interface TypedNames {
+  samAccountName: string | undefined;
+  upn: { local: string; suffix: string } | undefined;
+  displayName: string | undefined;
+  deviations: NamingDeviation[];
+}
+
+// Entra ID's characters for a UPN's local part; a synced account whose UPN
+// has others gets an onmicrosoft.com one instead.
+const UPN_LOCAL = /^[A-Za-z0-9'._!#^~-]+$/;
+
+/** The typed names, checked; a typed UPN without a typed sAMAccountName gives it. */
+function typedNames(
+  overrides: NameOverrides | undefined,
+  upnSuffixes?: readonly string[],
+): TypedNames {
+  const clean = (v: string | null | undefined) => v?.trim() || undefined;
+  const deviations: NamingDeviation[] = [];
+  const unusable = (attribute: 'samAccountName' | 'userPrincipalName', reason: string) =>
+    deviations.push({ kind: 'unusable', attribute, approval: 'blocked', reason });
+
+  const upnTyped = clean(overrides?.userPrincipalName);
+  let upn: TypedNames['upn'];
+  if (upnTyped !== undefined) {
+    const at = upnTyped.lastIndexOf('@');
+    upn = { local: at < 0 ? upnTyped : upnTyped.slice(0, at), suffix: upnTyped.slice(at + 1) };
+    if (at <= 0 || !upn.suffix) {
+      unusable('userPrincipalName', `The UPN "${upnTyped}" needs a suffix: name@domain.`);
+    } else if (upn.local.length > NAME_LIMITS.userPrincipalName) {
+      unusable(
+        'userPrincipalName',
+        `The UPN "${upnTyped}" has ${upn.local.length} characters before the @; Entra ID allows ${NAME_LIMITS.userPrincipalName}.`,
+      );
+    } else if (
+      !UPN_LOCAL.test(upn.local) ||
+      /^\.|\.$|\.\./.test(upn.local) ||
+      /\s|@/.test(upn.suffix) ||
+      CONTROL_CHARS.test(upn.suffix)
+    ) {
+      unusable(
+        'userPrincipalName',
+        `The UPN "${upnTyped}" won't sync to Entra ID: before the @, use letters, digits and ' . - _ ! # ^ ~, with no dot at either end or two in a row.`,
+      );
+    } else if (
+      upnSuffixes &&
+      !upnSuffixes.some((x) => x.toLowerCase() === upn!.suffix.toLowerCase())
+    ) {
+      unusable(
+        'userPrincipalName',
+        `"${upn.suffix}" isn't one of this domain's UPN suffixes (${upnSuffixes.join(', ')}).`,
+      );
+    }
+  }
+
+  let samAccountName = clean(overrides?.samAccountName);
+  if (samAccountName === undefined && upn) {
+    samAccountName = upn.local.slice(0, NAME_LIMITS.samAccountName).replace(/[._-]+$/, '');
+    deviations.push(
+      ...truncation(
+        'samAccountName',
+        upn.local,
+        samAccountName,
+        'The UPN and email keep the full name.',
+      ),
+    );
+  }
+  if (samAccountName !== undefined) {
+    const problem = samAccountNameSchema.safeParse(samAccountName);
+    if (samAccountName.length > NAME_LIMITS.samAccountName) {
+      unusable(
+        'samAccountName',
+        `The sAMAccountName "${samAccountName}" is ${samAccountName.length} characters; AD allows ${NAME_LIMITS.samAccountName}.`,
+      );
+    } else if (!problem.success) {
+      unusable(
+        'samAccountName',
+        `The sAMAccountName "${samAccountName}" ${problem.error.issues[0]?.message ?? 'is invalid'}.`,
+      );
+    }
+  }
+  return { samAccountName, upn, displayName: clean(overrides?.displayName), deviations };
 }
 
 function valueOf(names: AccountNames, attr: NamingAttribute): string {
@@ -657,6 +804,7 @@ function collision(
   suffix: number,
   clashes: Clash[],
   addressesClash: boolean,
+  samFree: boolean,
 ): NamingDeviation {
   const source = clashes.some((c) => c.source === 'directory') ? 'directory' : 'batch';
   const many = clashes.length > 1;
@@ -666,17 +814,24 @@ function collision(
   const where =
     source === 'directory' ? 'used in the directory' : 'taken by another person in this list';
   const taken = `The ${values} ${many ? 'are' : 'is'} already ${where}.`;
+  const addresses = `With ${suffix} added, the UPN and email become "${names.upn}"`;
   return {
     kind: 'collision',
     source,
     taken: clashes.map((c) => c.attr),
-    changed: addressesClash ? ['samAccountName', 'userPrincipalName', 'mail'] : ['samAccountName'],
+    changed: addressesClash
+      ? samFree
+        ? ['samAccountName', 'userPrincipalName', 'mail']
+        : ['userPrincipalName', 'mail']
+      : ['samAccountName'],
     suffix,
     from: addressesClash ? base.upnLocal : base.samAccountName,
     to: addressesClash ? names.upnLocal : names.samAccountName,
     approval: 'individual',
     reason: addressesClash
-      ? `${taken} With ${suffix} added, the UPN and email become "${names.upn}" and the sAMAccountName "${names.samAccountName}".`
+      ? samFree
+        ? `${taken} ${addresses} and the sAMAccountName "${names.samAccountName}".`
+        : `${taken} ${addresses}.`
       : `${taken} With ${suffix} added it becomes "${names.samAccountName}"; the UPN and email are free and stay "${names.upn}".`,
   };
 }
@@ -716,21 +871,24 @@ export function namingLookups(requests: NamingRequest[], settings: NamingSetting
   const cnPrefixes = new Map<string, OuName>();
   // A fallback's tail is " (" + a sAMAccountName + ")".
   const longestTail = NAME_LIMITS.samAccountName + 3;
-  for (const { name, ouDn } of requests) {
+  for (const { name, ouDn, overrides } of requests) {
     const p = prepare(name, settings.pattern);
-    if (!p.username) continue;
+    const typed = typedNames(overrides);
     const budgets = (limit: number) => [0, 1, 2, 3].map((digits) => fit(p, limit - digits));
-    sam.add(commonPrefix(budgets(NAME_LIMITS.samAccountName)));
-    upn.add(commonPrefix(budgets(NAME_LIMITS.userPrincipalName)));
+    if (typed.samAccountName !== undefined) sam.add(typed.samAccountName);
+    else if (p.username) sam.add(commonPrefix(budgets(NAME_LIMITS.samAccountName)));
+    if (typed.upn) upn.add(typed.upn.local);
+    else if (p.username) upn.add(commonPrefix(budgets(NAME_LIMITS.userPrincipalName)));
+    const displayName = typed.displayName ?? p.displayName;
     if (ouDn) {
-      const cn = { ouDn, cn: cutText(p.displayName, NAME_LIMITS.cn) };
+      const cn = { ouDn, cn: cutText(displayName, NAME_LIMITS.cn) };
       cns.set(cnKey(cn), cn);
       const prefix = {
         ouDn,
         cn:
-          p.displayName.length + longestTail <= NAME_LIMITS.cn
-            ? `${p.displayName} (`
-            : p.displayName.slice(0, NAME_LIMITS.cn - longestTail).trimEnd(),
+          displayName.length + longestTail <= NAME_LIMITS.cn
+            ? `${displayName} (`
+            : displayName.slice(0, NAME_LIMITS.cn - longestTail).trimEnd(),
       };
       cnPrefixes.set(cnKey(prefix), prefix);
     }

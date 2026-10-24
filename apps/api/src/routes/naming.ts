@@ -101,15 +101,22 @@ export async function registerNamingRoutes(app: FastifyInstance): Promise<void> 
         const cached = await findCachedOu(app.db, directory.id, ouDn);
         ous.set(ouDn, cached?.distinguished_name ?? ouDn);
       }
-      const requests = body.names.map(({ ouDn, ...name }) => ({
+      const requests = body.names.map(({ ouDn, overrides, ...name }) => ({
         name,
         ouDn: ouDn ? ous.get(ouDn) : undefined,
+        overrides,
       }));
       const provider = await app.services.providers.buildForRequest(req);
       const taken = await provider.findTakenNames(namingLookups(requests, directory.naming));
+      const typedUpn = requests.some((r) => r.overrides?.userPrincipalName?.trim());
       return {
         naming: directory.naming,
-        suggestions: resolveNames(requests, directory.naming, taken),
+        suggestions: resolveNames(
+          requests,
+          directory.naming,
+          taken,
+          typedUpn ? await upnSuffixes(req, directory.domain) : undefined,
+        ),
       };
     },
   });

@@ -143,6 +143,35 @@ describe('naming pattern', () => {
     }
   });
 
+  it('checks names the operator typed as typed, against the directory', async () => {
+    const res = await operator.post(`${url}/check`, {
+      names: [
+        {
+          first: 'Zed',
+          last: 'Quinn',
+          ouDn: staffOu,
+          overrides: { samAccountName: 'Alice.Anders', displayName: 'Alice Anders' },
+        },
+        { first: 'Zed', last: 'Quinn', overrides: { userPrincipalName: 'zq@nowhere.example' } },
+        { first: 'Zed', last: 'Quinn', overrides: { userPrincipalName: `zq@${EXTRA_SUFFIX}` } },
+      ],
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const [sam, foreign, extra] = res.json<NamingCheckResponse>().suggestions;
+    expect(sam).toMatchObject({ samAccountName: 'Alice.Anders', upn: `zed.quinn@${DC.domain}` });
+    expect(sam!.deviations).toEqual([
+      expect.objectContaining({ kind: 'taken', attribute: 'samAccountName', approval: 'blocked' }),
+    ]);
+    expect(foreign!.deviations).toEqual([
+      expect.objectContaining({ kind: 'unusable', attribute: 'userPrincipalName' }),
+    ]);
+    expect(extra).toMatchObject({
+      samAccountName: 'zq',
+      upn: `zq@${EXTRA_SUFFIX}`,
+      deviations: [],
+    });
+  });
+
   it('accepts a container under the base DN, and refuses any other OU', async () => {
     const [users] = await check(operator, [
       { first: 'Zed', last: 'Quinn', ouDn: `CN=Users,${DC.baseDn}` },
