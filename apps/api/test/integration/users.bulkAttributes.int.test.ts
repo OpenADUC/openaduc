@@ -11,6 +11,7 @@ import type {
 import {
   asAdministrator,
   configureDirectory,
+  finishedJob,
   readDirectoryUser,
   reseedDirectory,
   startApi,
@@ -265,16 +266,7 @@ describe('editing users’ attributes in bulk', () => {
       return res.json<{ job: BulkJob }>().job;
     }
 
-    async function finished(id: string): Promise<BulkJob> {
-      for (let i = 0; i < 300; i++) {
-        const { job } = (await operator.get(`/api/bulk-jobs/${id}`)).json<{ job: BulkJob }>();
-        if (job.status !== 'queued' && job.status !== 'running' && job.counts.pending === 0) {
-          return job;
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      throw new Error(`bulk job ${id} didn’t finish`);
-    }
+    const finished = (id: string) => finishedJob(operator, id);
 
     const rowsWith = async (id: string, status: BulkJobRow['status']) =>
       (await operator.get(`/api/bulk-jobs/${id}/rows?status=${status}`)).json<{
