@@ -48,8 +48,8 @@ const mode = computed({
 
 const classTap = computed(() => draft.options.classTap);
 const useOptions = [
-  { value: false, label: 'Any number of sign-ins until it expires' },
-  { value: true, label: 'One sign-in' },
+  { value: false, label: 'Multi-use: any number of sign-ins until it expires' },
+  { value: true, label: 'Single-use: one sign-in' },
 ];
 </script>
 
@@ -200,10 +200,10 @@ const useOptions = [
           option-value="value"
           class="op-select"
         />
-        <p v-else class="op-note">One sign-in: the tenant allows only one-time passes.</p>
+        <p v-else class="op-note">Single-use: the tenant allows only single-use passes.</p>
         <p v-if="!multiUseAllowed || classTap.isUsableOnce" class="op-note">
-          A one-time pass is used up if setting up Authenticator fails halfway; reissue it from the
-          class roster.
+          A single-use pass is used up if setting up Authenticator fails halfway; reissue it from
+          the class roster.
         </p>
       </div>
 

@@ -9,6 +9,7 @@ const classRoster = vi.fn();
 const revealClassPass = vi.fn();
 const reissueClassPass = vi.fn();
 const rescheduleClass = vi.fn();
+const takeOverClass = vi.fn();
 const stepUp = vi.fn(async () => ({
   elevated: {
     active: true,
@@ -18,7 +19,9 @@ const stepUp = vi.fn(async () => ({
 }));
 vi.mock('../../api/index.js', () => ({
   api: {
-    users: { import: { classRoster, revealClassPass, reissueClassPass, rescheduleClass } },
+    users: {
+      import: { classRoster, revealClassPass, reissueClassPass, rescheduleClass, takeOverClass },
+    },
     auth: { stepUp },
   },
 }));
@@ -54,8 +57,9 @@ const ROSTER: ClassRoster = {
     isUsableOnce: false,
     updatedAt: '2026-10-24T08:00:00Z',
   },
+  authoriser: { name: 'Olive Operator', own: true },
   lastSyncAt: '2026-10-24T11:30:00.000Z',
-  unsyncedAlert: null,
+  alerts: { unsynced: null, stuck: [], authority: null, off: null },
   statusError: null,
   rows: [ROW],
 };
@@ -88,7 +92,8 @@ describe('useClassRoster', () => {
     classRoster.mockResolvedValue(ROSTER);
     revealClassPass.mockResolvedValue(PASS);
     reissueClassPass.mockResolvedValue({ outcome: 'issued', message: null });
-    rescheduleClass.mockResolvedValue(undefined);
+    rescheduleClass.mockResolvedValue({ rescheduled: 1, skipped: [] });
+    takeOverClass.mockResolvedValue(undefined);
   });
 
   it('loads the import’s roster', async () => {
@@ -208,6 +213,36 @@ describe('useClassRoster', () => {
     expect(rescheduleClass).toHaveBeenCalledWith('42', {
       start: { kind: 'startDate', time: '10:30', timeZone: 'UTC' },
     });
+    stop();
+  });
+
+  it('takes the class over after step-up, then shows the roster afresh', async () => {
+    const { roster, stop } = await setup(false);
+    roster.takeOver();
+    await settled();
+    expect(takeOverClass).not.toHaveBeenCalled();
+    await useAuthStore().stepUp('pw');
+    await settled();
+    expect(takeOverClass).toHaveBeenCalledWith('42');
+    expect(classRoster).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it('says whom a reschedule left as they were', async () => {
+    const skipped = [
+      {
+        rowId: '7',
+        line: 2,
+        displayName: 'Cara Cole',
+        message: 'Their start date is 2026-10-20. The pass can’t start in the past.',
+      },
+    ];
+    rescheduleClass.mockResolvedValue({ rescheduled: 0, skipped });
+    const { roster, stop } = await setup();
+    roster.startReschedule();
+    roster.reschedule();
+    await settled();
+    expect(roster.rescheduled.value).toEqual({ rescheduled: 0, skipped });
     stop();
   });
 });

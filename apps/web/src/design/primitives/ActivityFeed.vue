@@ -138,7 +138,7 @@ function detailFor(e: AuditEventRow): string {
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
   if (e.action === 'user.tap.issue' && typeof md.lifetimeMinutes === 'number') {
-    return `${lifetimeLabel(md.lifetimeMinutes)}, ${md.isUsableOnce ? 'one-time' : 'multi-use'}`;
+    return `${lifetimeLabel(md.lifetimeMinutes)}, ${md.isUsableOnce ? 'single-use' : 'multi-use'}`;
   }
   if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
     return expiryText(md.expiresAt ? String(md.expiresAt) : null, true);

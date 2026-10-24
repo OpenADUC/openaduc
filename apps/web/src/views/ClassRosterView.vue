@@ -19,6 +19,7 @@ import {
 import PageHeader from '../design/primitives/PageHeader.vue';
 import { useClassRoster } from '../design/composables/useClassRoster.js';
 import { fmtAbsolute } from '../design/lib/format.js';
+import ClassAlerts from './importJob/ClassAlerts.vue';
 import ImportJobTabs from './importJob/ImportJobTabs.vue';
 
 const props = defineProps<{ id: string }>();
@@ -39,6 +40,7 @@ const {
   newDate,
   newTime,
   byStartDate,
+  rescheduled,
 } = r;
 
 watch(
@@ -52,6 +54,9 @@ const TONE: Record<ClassPassStatus, string> = {
   notCreated: 'red',
   waitingForSync: 'amber',
   retrying: 'amber',
+  scheduled: 'muted',
+  paused: 'amber',
+  otherPass: 'amber',
   refused: 'red',
   failed: 'red',
   notYetValid: 'blue',
@@ -86,8 +91,11 @@ const schedule = computed(() => {
     c.start.kind === 'fixed'
       ? `Class starts ${fmtAbsolute(c.start.startsAt)}`
       : `Class starts on each person’s start date at ${c.start.time} (${c.start.timeZone})`;
-  const use = c.isUsableOnce ? 'one sign-in' : 'any number of sign-ins';
-  return `${when}. Passes last ${lifetimeLabel(c.lifetimeMinutes)}, for ${use}.`;
+  const use = c.isUsableOnce ? 'single-use' : 'multi-use';
+  const by = roster.value?.authoriser.name
+    ? `, made on ${roster.value.authoriser.name}’s authority`
+    : '';
+  return `${when}. Passes last ${lifetimeLabel(c.lifetimeMinutes)}, ${use}${by}.`;
 });
 
 const title = computed(() => {
@@ -123,11 +131,14 @@ const title = computed(() => {
     <p v-else-if="loading && !roster" class="hint">Loading…</p>
 
     <template v-if="roster">
-      <Message v-if="roster.unsyncedAlert" severity="warn" :closable="false" class="cr-msg">
-        {{ people(roster.unsyncedAlert.count) }}
-        {{ roster.unsyncedAlert.count === 1 ? 'isn’t' : 'aren’t' }} in Microsoft Entra yet, and
-        class starts {{ fmtAbsolute(roster.unsyncedAlert.startsAt) }}. Their passes are made as soon
-        as Connect Sync brings them; check that it’s running.
+      <ClassAlerts
+        :alerts="roster.alerts"
+        can-take-over
+        :taking-over="r.takingOver.value"
+        @take-over="r.takeOver"
+      />
+      <Message v-if="r.takeOverError.value" severity="error" :closable="false" class="cr-msg">
+        {{ r.takeOverError.value }}
       </Message>
       <Message v-if="roster.statusError" severity="info" :closable="false" class="cr-msg">
         {{ roster.statusError }}
@@ -167,7 +178,8 @@ const title = computed(() => {
             <span class="cr-at">{{ r.timeZone.value }}</span>
           </div>
           <Message severity="warn" :closable="false" class="cr-msg">
-            Every pass is made again for the new start. Passes already handed out stop working.
+            Every pass is made again for the new start, the ones they hold deleted first: passes
+            already handed out stop working. Rescheduling makes you the one the passes are made for.
             <span class="cr-confirm">
               <Button
                 label="Reschedule"
@@ -190,6 +202,19 @@ const title = computed(() => {
             {{ rescheduleError }}
           </Message>
         </div>
+        <Message
+          v-if="rescheduled?.skipped.length"
+          severity="info"
+          :closable="false"
+          class="cr-msg"
+        >
+          Rescheduled {{ people(rescheduled.rescheduled) }}. Left as they were:
+          <ul class="cr-skipped">
+            <li v-for="s in rescheduled.skipped" :key="s.rowId">
+              Row {{ s.line }} ({{ s.displayName }}): {{ s.message }}
+            </li>
+          </ul>
+        </Message>
       </section>
 
       <section class="cr-section" aria-labelledby="cr-people">
@@ -417,6 +442,11 @@ const title = computed(() => {
   margin: 4px 0 0;
   font-size: 12px;
   color: var(--text-2);
+}
+
+.cr-skipped {
+  margin: 4px 0 0;
+  padding-left: 16px;
 }
 
 .cr-note-warn {

@@ -23,8 +23,9 @@ const roster: ClassRoster = {
     isUsableOnce: false,
     updatedAt: '2026-10-24T08:00:00Z',
   },
+  authoriser: { name: 'Olive Operator', own: false },
   lastSyncAt: lastSync.toISOString(),
-  unsyncedAlert: { count: 1, startsAt: soon },
+  alerts: { unsynced: { count: 1, startsAt: soon }, stuck: [], authority: null, off: null },
   statusError: null,
   rows: [
     {
@@ -61,6 +62,7 @@ const api = {
   users: {
     import: {
       classRoster: vi.fn(async () => roster),
+      takeOverClass: vi.fn(async () => undefined),
       revealClassPass: vi.fn(async () => ({
         temporaryAccessPass: 'Tap-Value-7Kq2',
         startsAt: soon,
@@ -129,5 +131,27 @@ describe('the class roster', () => {
     await flushPromises();
     expect(api.users.import.revealClassPass).toHaveBeenCalledWith('42', '7');
     expect(page.find('[data-testid="class-pass"]').text()).toBe('Tap-Value-7Kq2');
+  });
+
+  it('offers to take over a class whose authoriser can no longer issue passes', async () => {
+    api.users.import.classRoster.mockResolvedValueOnce({
+      ...roster,
+      alerts: {
+        ...roster.alerts,
+        authority: {
+          name: 'Olive Operator',
+          message:
+            'Olive Operator can no longer issue passes (their account is disabled). Another operator can take over.',
+        },
+      },
+    });
+    const page = await openRoster();
+    expect(page.text()).toContain('Olive Operator can no longer issue passes');
+    await page
+      .findAll('button')
+      .find((b) => b.text() === 'Take over')!
+      .trigger('click');
+    await flushPromises();
+    expect(api.users.import.takeOverClass).toHaveBeenCalledWith('42');
   });
 });

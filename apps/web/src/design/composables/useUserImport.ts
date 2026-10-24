@@ -16,6 +16,7 @@
 
 import { computed, reactive, ref, shallowRef, watch } from 'vue';
 import {
+  CLASS_TAP_DEFAULT_LIFETIME_MINUTES,
   DEFAULT_NEW_USER_SETTINGS,
   IMPORT_FIELDS,
   IMPORT_FIELD_LABEL,
@@ -81,6 +82,7 @@ import {
   type TypedNames,
 } from '../lib/importDraft.js';
 import { latestRequest } from '../lib/latestRequest.js';
+import { fromLocalInputs } from '../lib/localDateTime.js';
 import { GROUP_PAGE_SIZE, MIN_GROUP_QUERY } from './useAddToGroup.js';
 import { lifetimeOptionsFor } from './useIssueTap.js';
 import { useDebouncedSearch } from './useDebouncedSearch.js';
@@ -757,7 +759,9 @@ export function useUserImport() {
       date: '',
       time: '09:00',
       byStartDate: startDateMapped.value,
-      ...(policy ? classTapDefaults(policy) : { lifetimeMinutes: 240, isUsableOnce: true }),
+      ...(policy
+        ? classTapDefaults(policy)
+        : { lifetimeMinutes: CLASS_TAP_DEFAULT_LIFETIME_MINUTES, isUsableOnce: true }),
     };
     draft.options.classTap = { ...current, on };
   }
@@ -769,12 +773,12 @@ export function useUserImport() {
     if (!ct?.on || !policy) return null;
     const byStartDate = ct.byStartDate && startDateMapped.value;
     if (!ct.time) return null;
-    const at = new Date(`${ct.date}T${ct.time}`);
-    if (!byStartDate && Number.isNaN(at.getTime())) return null;
+    const startsAt = fromLocalInputs(ct.date, ct.time);
+    if (!byStartDate && !startsAt) return null;
     return {
       start: byStartDate
         ? { kind: 'startDate', time: ct.time, timeZone }
-        : { kind: 'fixed', startsAt: at.toISOString() },
+        : { kind: 'fixed', startsAt: startsAt! },
       lifetimeMinutes: ct.lifetimeMinutes,
       isUsableOnce: policy.usableOnceOnly || ct.isUsableOnce,
     };

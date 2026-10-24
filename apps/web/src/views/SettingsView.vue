@@ -97,47 +97,6 @@ function selectTab(id: TabId): void {
   gap: 16px;
 }
 
-.ds-tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
-}
-
-.ds-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: transparent;
-  border: 0;
-  padding: 9px 14px;
-  color: var(--text-3);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-  border-radius: 6px 6px 0 0;
-  font-family: var(--font-sans);
-}
-
-.ds-tab:hover {
-  color: var(--text);
-}
-
-.ds-tab.active {
-  color: var(--text);
-}
-
-.ds-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-  border-radius: 2px;
-}
-
 .settings-content {
   display: flex;
   flex-direction: column;

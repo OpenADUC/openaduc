@@ -17,6 +17,7 @@ import {
   type ImportJobRow,
 } from '@openaduc/shared';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import ClassAlerts from './importJob/ClassAlerts.vue';
 import ImportJobTabs from './importJob/ImportJobTabs.vue';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
@@ -109,12 +110,7 @@ const downloadLabel = computed(() =>
         people
         roster
       />
-      <Message v-if="classTap?.unsyncedAlert" severity="warn" :closable="false" class="ij-msg">
-        {{ accounts(classTap.unsyncedAlert.count) }} the import created
-        {{ classTap.unsyncedAlert.count === 1 ? 'isn’t' : 'aren’t' }} in Microsoft Entra yet, and
-        class starts {{ fmtAbsolute(classTap.unsyncedAlert.startsAt) }}. Their Temporary Access
-        Passes are made as soon as Connect Sync brings them; check that it’s running.
-      </Message>
+      <ClassAlerts v-if="classTap" :alerts="classTap.alerts" />
       <BulkJobPanel
         :job="job"
         :failure="failure"

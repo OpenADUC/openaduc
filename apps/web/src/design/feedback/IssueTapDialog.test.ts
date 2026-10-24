@@ -61,7 +61,7 @@ describe('the Issue TAP dialog', () => {
     const dialog = open(ready);
     await flushPromises();
     expect(dialog.text()).toContain('The tenant allows 1 hour to 8 hours.');
-    expect(dialog.text()).toContain('The tenant allows only one-time passes.');
+    expect(dialog.text()).toContain('The tenant allows only single-use passes.');
     const once = dialog.find('input[type="checkbox"]').element as HTMLInputElement;
     expect(once.checked && once.disabled).toBe(true);
 

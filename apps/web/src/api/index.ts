@@ -5,6 +5,7 @@
 import type {
   ClassPassReissue,
   ClassPassReveal,
+  ClassReschedule,
   ClassRescheduleRequest,
   ClassRoster,
   ClassTapOptions,
@@ -499,10 +500,16 @@ export const api = {
           { method: 'POST', body: JSON.stringify({}) },
         );
       },
-      rescheduleClass(id: string, body: ClassRescheduleRequest): Promise<void> {
+      rescheduleClass(id: string, body: ClassRescheduleRequest): Promise<ClassReschedule> {
         return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/class-roster/reschedule`, {
           method: 'POST',
           body: JSON.stringify(body),
+        });
+      },
+      takeOverClass(id: string): Promise<void> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/class-roster/take-over`, {
+          method: 'POST',
+          body: JSON.stringify({}),
         });
       },
     },

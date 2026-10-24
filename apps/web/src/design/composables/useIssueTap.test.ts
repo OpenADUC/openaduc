@@ -81,11 +81,11 @@ describe('useIssueTap', () => {
     expect(tap.multiUseAllowed.value).toBe(true);
   });
 
-  it('allows only one-time passes when the tenant does', async () => {
+  it('allows only single-use passes when the tenant does', async () => {
     const { tap } = await setup({ ...ready, policy: { ...policy, usableOnceOnly: true } });
     expect(tap.multiUseAllowed.value).toBe(false);
     tap.isUsableOnce.value = false;
-    expect(tap.problem.value).toBe('The tenant’s policy allows only one-time passes.');
+    expect(tap.problem.value).toBe('The tenant’s policy allows only single-use passes.');
     tap.submit();
     await settled();
     expect(issueTap).not.toHaveBeenCalled();

@@ -4,13 +4,22 @@
 // onboarding class to hand the passes out. Revealing a pass, reissuing a
 // lost or burned one, and rescheduling class each take step-up and are
 // audited; a revealed pass is held only until it's hidden, reissued or
-// the page is left. Any operator who may issue a TAP can open it.
+// the page is left. Any operator who may issue a TAP can open it, and take
+// the class over when its passes can no longer be made on the authority
+// of whoever they're made for.
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
-import type { ClassPassReveal, ClassRoster, ClassRosterRow, ClassStart } from '@openaduc/shared';
+import type {
+  ClassPassReveal,
+  ClassReschedule,
+  ClassRoster,
+  ClassRosterRow,
+  ClassStart,
+} from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
+import { fromLocalInputs, toLocalInputs } from '../lib/localDateTime.js';
 
 /** Statuses come from Graph, a call per pass: refreshed gently. */
 export const ROSTER_REFRESH_MS = 60_000;
@@ -82,8 +91,8 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
     revealed.value = next;
   }
 
-  /** Make a write for a row after step-up, retrying after one if it lapsed meanwhile. */
-  function rowWrite(rowId: string, call: () => Promise<void>, reason: string): void {
+  /** Do something to a row's pass after step-up, retrying after one if it lapsed meanwhile. */
+  function rowAction(rowId: string, call: () => Promise<void>, reason: string): void {
     const attempt = async (): Promise<void> => {
       busyRow.value = rowId;
       note(rowId, 'ok', null);
@@ -108,7 +117,7 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
   /** Show a row's pass. Each reveal is audited. */
   function reveal(rowId: string): void {
     if (!id) return;
-    rowWrite(
+    rowAction(
       rowId,
       async () => {
         await fetchPass(rowId);
@@ -137,7 +146,7 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
       void write(shown);
       return;
     }
-    rowWrite(
+    rowAction(
       rowId,
       async () => write(await fetchPass(rowId)),
       'Revealing a Temporary Access Pass requires step-up authentication.',
@@ -157,7 +166,7 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
     confirmingReissue.value = null;
     if (!id || !rowId) return;
     const jobId = id;
-    rowWrite(
+    rowAction(
       rowId,
       async () => {
         const { outcome, message } = await api.users.import.reissueClassPass(jobId, rowId);
@@ -192,13 +201,9 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
     const start = roster.value?.class.start;
     if (!start) return;
     rescheduleError.value = null;
+    rescheduled.value = null;
     if (start.kind === 'startDate') newTime.value = start.time;
-    else {
-      const at = new Date(start.startsAt);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      newDate.value = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
-      newTime.value = `${pad(at.getHours())}:${pad(at.getMinutes())}`;
-    }
+    else ({ date: newDate.value, time: newTime.value } = toLocalInputs(start.startsAt));
     rescheduling.value = true;
   }
   function cancelReschedule(): void {
@@ -210,9 +215,12 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
     if (byStartDate.value) {
       return { kind: 'startDate', time: newTime.value, timeZone: timeZone.value };
     }
-    const at = new Date(`${newDate.value}T${newTime.value}`);
-    return Number.isNaN(at.getTime()) ? null : { kind: 'fixed', startsAt: at.toISOString() };
+    const startsAt = fromLocalInputs(newDate.value, newTime.value);
+    return startsAt ? { kind: 'fixed', startsAt } : null;
   });
+
+  /** What the last reschedule came to: who moved, and who was left as they were. */
+  const rescheduled = ref<ClassReschedule | null>(null);
 
   /** Move class: every pass is made again for the new start, and the ones handed out stop working. */
   function reschedule(): void {
@@ -223,7 +231,7 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
       rescheduleBusy.value = true;
       rescheduleError.value = null;
       try {
-        await api.users.import.rescheduleClass(jobId, { start });
+        rescheduled.value = await api.users.import.rescheduleClass(jobId, { start });
         rescheduling.value = false;
         revealed.value = {};
         rowNotes.value = {};
@@ -239,6 +247,31 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
   }
 
   const rows = computed(() => roster.value?.rows ?? []);
+
+  // ---- Take over ------------------------------------------------------------
+
+  const takingOver = ref(false);
+  const takeOverError = ref<string | null>(null);
+
+  /** Make this operator the one the class's passes are made on behalf of, resuming a paused class. */
+  function takeOver(): void {
+    if (!id || takingOver.value) return;
+    const jobId = id;
+    const attempt = async (): Promise<void> => {
+      takingOver.value = true;
+      takeOverError.value = null;
+      try {
+        await api.users.import.takeOverClass(jobId);
+        await load(false);
+      } catch (err) {
+        if (auth.retryAfterStepUp(err, attempt)) return;
+        takeOverError.value = errorMessage(err, 'Couldn’t take the class over');
+      } finally {
+        takingOver.value = false;
+      }
+    };
+    auth.requireStepUp(attempt, 'Taking a class over requires step-up authentication.');
+  }
 
   return {
     open,
@@ -269,5 +302,9 @@ export function useClassRoster(opts: { writeClipboard?: (text: string) => Promis
     startReschedule,
     cancelReschedule,
     reschedule,
+    rescheduled,
+    takeOver,
+    takingOver,
+    takeOverError,
   };
 }

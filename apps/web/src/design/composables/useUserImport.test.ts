@@ -638,7 +638,7 @@ describe('useUserImport', () => {
       });
     });
 
-    it('makes every pass one-time when the tenant allows nothing else', async () => {
+    it('makes every pass single-use when the tenant allows nothing else', async () => {
       classTaps.mockResolvedValueOnce({
         status: 'ready',
         policy: { ...TAP_POLICY, usableOnceOnly: true },
