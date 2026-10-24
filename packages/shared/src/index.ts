@@ -13,6 +13,7 @@ export * from './schemas/signin.js';
 export * from './schemas/mfa.js';
 export * from './rename.js';
 export * from './naming.js';
+export * from './dn.js';
 export * from './ldapTransport.js';
 export * from './csv.js';
 export * from './schemas/roles.js';
