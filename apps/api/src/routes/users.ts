@@ -311,7 +311,11 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               eb('account_expires_at', 'is not', null),
               eb('account_expires_at', '<=', horizon),
             ]),
-            eb('password_must_change', '=', true),
+            // AD holds must-change back while the password never expires.
+            eb.and([
+              eb('password_must_change', '=', true),
+              eb('password_never_expires', '=', false),
+            ]),
             // Password expiring or expired (excluding never-expires accounts).
             eb.and([
               eb('password_never_expires', '=', false),
@@ -453,7 +457,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                 when not password_never_expires and not password_must_change
                   and ${expiry} <= now() then 3
                 when account_expires_at <= now() then 4
-                when password_must_change then 5
+                when password_must_change and not password_never_expires then 5
                 when not password_never_expires
                   and ${expiry} <= now() + interval '14 days' then 6
                 else 7

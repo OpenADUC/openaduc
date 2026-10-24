@@ -1,22 +1,34 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <!--
   Whether a user can sign in: what stops them, most severe first, each with
-  its timing; or that nothing does, and when they last signed in.
+  its timing; or that nothing does, and when they last signed in. Then
+  what's set but doesn't stop them.
 -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { UserDetail } from '@openaduc/shared';
-import { describeBlocker, type SignInBlocker } from '../lib/signIn.js';
+import {
+  describeBlocker,
+  describeNote,
+  type SignInBlocker,
+  type SignInNote,
+} from '../lib/signIn.js';
 import { fmtAbsolute, fmtRelative } from '../lib/format.js';
 
-const props = defineProps<{
-  blockers: readonly SignInBlocker[];
-  lastLogonAt: UserDetail['lastLogonAt'];
-}>();
+const props = withDefaults(
+  defineProps<{
+    blockers: readonly SignInBlocker[];
+    notes?: readonly SignInNote[];
+    lastLogonAt: UserDetail['lastLogonAt'];
+  }>(),
+  { notes: () => [] },
+);
 
 const conditions = computed(() =>
   props.blockers.map((b) => ({ kind: b.kind, ...describeBlocker(b) })),
 );
+
+const shownNotes = computed(() => props.notes.map((n) => ({ kind: n.kind, ...describeNote(n) })));
 
 const lastSignIn = computed(() =>
   props.lastLogonAt
@@ -47,6 +59,11 @@ const lastSignIn = computed(() =>
         title="From lastLogonTimestamp, which AD updates only every 9 to 14 days"
         >{{ lastSignIn }}</span
       >
+    </div>
+    <div v-for="n in shownNotes" :key="n.kind" class="sign-in-condition is-note">
+      <i :class="['pi', n.icon]" aria-hidden="true" />
+      <span class="sign-in-condition-title">{{ n.title }}</span>
+      <span v-for="d in n.details" :key="d" class="sign-in-condition-detail">{{ d }}</span>
     </div>
   </div>
 </template>

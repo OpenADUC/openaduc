@@ -54,6 +54,23 @@ describe('password expiry', () => {
     const rows = res.json<{ rows: { samAccountName: string; passwordMustChange: boolean }[] }>()
       .rows;
     expect(rows.find((r) => r.samAccountName === 'erin.evans')?.passwordMustChange).toBe(true);
+
+    // AD holds must-change back while the password never expires.
+    const neverExpires = (value: boolean) =>
+      api.app.db
+        .updateTable('user_cache_records')
+        .set({ password_never_expires: value })
+        .where('sam_account_name', '=', 'erin.evans')
+        .execute();
+    await neverExpires(true);
+    try {
+      const held = (await operator.get('/api/users?issues=true&pageSize=100')).json<{
+        rows: { samAccountName: string }[];
+      }>().rows;
+      expect(held.map((r) => r.samAccountName)).not.toContain('erin.evans');
+    } finally {
+      await neverExpires(false);
+    }
   });
 
   it('sorts by expiry', async () => {
