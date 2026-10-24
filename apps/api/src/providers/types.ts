@@ -456,9 +456,14 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult>;
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
-  /** Make the user change their password at next sign-in: `pwdLastSet` 0. */
-  requirePasswordChange(
+  /**
+   * Make the user change their password at next sign-in (`pwdLastSet` 0),
+   * or stop asking them to (-1, which AD turns into now: the password's
+   * age restarts, as AD keeps no earlier value to go back to).
+   */
+  setPasswordMustChange(
     userId: DirectoryObjectIdentifier,
+    mustChange: boolean,
     ctx: WriteContext,
   ): Promise<MutationResult>;
   /** Set or clear "password never expires" (DONT_EXPIRE_PASSWORD in `userAccountControl`). */

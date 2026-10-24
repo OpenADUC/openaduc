@@ -830,8 +830,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
-  requirePasswordChange(
+  setPasswordMustChange(
     userId: DirectoryObjectIdentifier,
+    mustChange: boolean,
     ctx: WriteContext,
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
@@ -843,7 +844,10 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           before.distinguishedName,
           new Change({
             operation: 'replace',
-            modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
+            modification: new Attribute({
+              type: 'pwdLastSet',
+              values: [mustChange ? '0' : '-1'],
+            }),
           }),
         );
         const afterEntry = await this.findUserEntry(client, userId);
@@ -855,7 +859,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             passwordLastSetAt: before.passwordLastSetAt?.toISOString() ?? null,
           },
           after: {
-            passwordMustChange: after ? after.passwordMustChange : true,
+            passwordMustChange: after ? after.passwordMustChange : mustChange,
             passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null,
           },
         };

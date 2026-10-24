@@ -157,6 +157,9 @@ describe('bulk actions run as server-side jobs', () => {
               failed: 1,
               skipped: 0,
             },
+            revertsJobId: null,
+            revertible: true,
+            revertedBy: null,
           },
         }),
       ]);

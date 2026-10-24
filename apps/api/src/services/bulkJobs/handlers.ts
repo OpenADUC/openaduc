@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   BULK_ACCOUNT_ACTIONS,
   BULK_ACCOUNT_CAPABILITIES,
+  BULK_JOB_CAPABILITIES,
   bulkAccountChangeSchema,
   bulkAccountRequestSchema,
   bulkAttributeChangesSchema,
@@ -23,6 +24,7 @@ import { rawScalarValue } from '../../lib/rawAttributes.js';
 import {
   DirectoryUnavailableError,
   type DirectoryProvider,
+  type DirectoryUser,
   type WriteContext,
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
@@ -35,6 +37,7 @@ import {
   patchFor,
   resolveChanges,
   rowSnapshots,
+  type ResolvedChanges,
 } from '../bulkAttributes.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import {
@@ -143,11 +146,10 @@ export type BulkJobHandlers = Record<BulkJobAction, BulkJobHandler>;
 
 function userAccountHandler(
   account: AccountWrite & { action: BulkJobAction },
-  capability: Capability,
 ): BulkJobHandler<z.infer<typeof bulkJobCreateRequestSchema>, null> {
   return {
     action: account.action,
-    capability,
+    capability: BULK_JOB_CAPABILITIES[account.action],
     request: bulkJobCreateRequestSchema,
     rows: ({ ids }) => ids.map((id) => ({ targetId: id.toLowerCase(), input: null })),
     input: z.null(),
@@ -156,7 +158,7 @@ function userAccountHandler(
 }
 
 /** One user's account write, as the single-user route makes it, as the row's outcome. */
-async function accountRow(
+export async function accountRow(
   row: {
     targetId: string;
     before: Record<string, unknown> | null;
@@ -256,10 +258,9 @@ function groupMembershipHandler(
   op: BulkMembershipOp,
 ): BulkJobHandler<BulkGroupMembershipRequest, z.infer<typeof groupIdsInputSchema>> {
   const action = `user.group.${op}` as const;
-  const notDone = op === 'add' ? 'Not added to' : 'Not removed from';
   return {
     action,
-    capability: 'write:group.membership',
+    capability: BULK_JOB_CAPABILITIES[action],
     request: bulkGroupMembershipRequestSchema,
     rows: ({ ids, groupIds }) => {
       const input = { groupIds: groupIds.map((id) => id.toLowerCase()) };
@@ -302,135 +303,146 @@ function groupMembershipHandler(
     async run(row, ctx) {
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
-      const { user } = live;
-      const groups = await findCachedGroupsById(ctx.db, ctx.provider.id, row.input.groupIds);
-      const primaryGroupId = rawScalarValue(user.rawAttributes['primaryGroupID']);
-      // A retry keeps what earlier runs changed, so the row still says what a revert restores.
-      const changes = new Map(changedGroups(row.after).map((g) => [g.id, g]));
-      const changedNow: string[] = [];
-      const failures: { code: string; text: string }[] = [];
-
-      for (const groupId of row.input.groupIds) {
-        const group = groups.get(groupId);
-        if (!group) {
-          // Gone from the directory since the job started.
-          await ctx.services.audit.recordEvent({
-            ...ctx.audit,
-            action,
-            result: 'failure',
-            errorCode: 'not_found',
-            targetType: 'user',
-            targetId: user.objectGuid,
-            targetDn: user.distinguishedName,
-            metadata: { groupId },
-          });
-          failures.push({
-            code: 'not_found',
-            text: `${notDone} a group that’s no longer in the directory.`,
-          });
-          continue;
-        }
-        // AD keeps the primary group out of member and refuses to add it
-        // there, so an add records it as already done rather than failing.
-        if (
-          op === 'add' &&
-          membershipState(group, { primaryGroupId, direct: false }) === 'primary'
-        ) {
-          const snapshot = {
-            isMember: true,
-            group: group.distinguishedName,
-            member: user.distinguishedName,
-            memberKind: 'user',
-            primaryGroup: true,
-          };
-          await ctx.services.audit.recordEvent({
-            ...ctx.audit,
-            action,
-            result: 'success',
-            actorAuthMethod: 'ad-password',
-            targetType: 'user',
-            targetId: user.objectGuid,
-            targetDn: user.distinguishedName,
-            metadata: {
-              groupId: group.id,
-              groupDn: group.distinguishedName,
-              groupName: group.name,
-            },
-            before: snapshot,
-            after: snapshot,
-          });
-          continue;
-        }
-        // Whether the user is in the group is the directory's to say: the
-        // provider checks member live, by the group's GUID, so a group
-        // renamed or moved since the last sync is still found.
-        let result;
-        try {
-          result = await writeGroupMembership(
-            ctx.services.audit,
-            ctx.provider,
-            { kind: 'user', op, member: user, group },
-            ctx.writeCtx,
-            ctx.audit,
-          );
-        } catch (err) {
-          if (!(err instanceof DirectoryUnavailableError)) throw err;
-          failures.push({
-            code: 'directory_unavailable',
-            text: membershipFailure(op, group.name, 'directory_unavailable', null),
-          });
-          break;
-        }
-        if (!result.ok) {
-          const code = result.errorCode ?? 'directory_error';
-          failures.push({
-            code,
-            text: membershipFailure(op, group.name, code, result.errorMessage ?? null),
-          });
-          continue;
-        }
-        const state = membershipState(group, {
-          primaryGroupId,
-          direct: result.before?.['isMember'] === true,
-        });
-        if (alreadyAsAsked(op, state)) {
-          continue;
-        }
-        changes.set(group.id, { id: group.id, name: group.name, isMember: op === 'add' });
-        changedNow.push(group.name);
-      }
-
-      if (changedNow.length > 0) {
-        await refreshMembershipCache(
-          { db: ctx.db, userLiveRefresh: ctx.services.userLiveRefresh },
-          ctx.provider,
-          { kind: 'user', memberId: row.targetId },
-        ).catch((err: unknown) => {
-          // The writes are made and audited; the next sync brings the cache up to date.
-          if (!(err instanceof DirectoryUnavailableError)) throw err;
-        });
-      }
-      const merged = [...changes.values()];
-      const fields = {
-        before: merged.length
-          ? { groups: merged.map((g) => ({ ...g, isMember: !g.isMember })) }
-          : null,
-        after: merged.length ? { groups: merged } : null,
-        targetDn: user.distinguishedName,
-      };
-      if (failures.length === 0) return { ok: true, unchanged: merged.length === 0, ...fields };
-      const done = merged.length
-        ? `${op === 'add' ? 'Added to' : 'Removed from'} ${merged.map((g) => g.name).join(', ')}. `
-        : '';
-      return {
-        ok: false,
-        errorCode: failures[0]!.code,
-        message: done + failures.map((f) => f.text).join(' '),
-        partial: merged.length > 0,
-        audited: true,
-        ...fields,
-      };
+      return membershipRow(op, row, row.input.groupIds, live.user, ctx);
     },
+  };
+}
+
+/**
+ * Add the user, as just read live, to these groups or remove them, one
+ * audited change per group, as the row's outcome. A group the user is
+ * already as asked in is left alone.
+ */
+export async function membershipRow(
+  op: BulkMembershipOp,
+  row: { targetId: string; after: Record<string, unknown> | null },
+  groupIds: readonly string[],
+  user: DirectoryUser,
+  ctx: BulkRowContext,
+): Promise<BulkRowOutcome> {
+  const action = `user.group.${op}` as const;
+  const notDone = op === 'add' ? 'Not added to' : 'Not removed from';
+  const groups = await findCachedGroupsById(ctx.db, ctx.provider.id, groupIds);
+  const primaryGroupId = rawScalarValue(user.rawAttributes['primaryGroupID']);
+  // A retry keeps what earlier runs changed, so the row still says what a revert restores.
+  const changes = new Map(changedGroups(row.after).map((g) => [g.id, g]));
+  const changedNow: string[] = [];
+  const failures: { code: string; text: string }[] = [];
+
+  for (const groupId of groupIds) {
+    const group = groups.get(groupId);
+    if (!group) {
+      // Gone from the directory since the job started.
+      await ctx.services.audit.recordEvent({
+        ...ctx.audit,
+        action,
+        result: 'failure',
+        errorCode: 'not_found',
+        targetType: 'user',
+        targetId: user.objectGuid,
+        targetDn: user.distinguishedName,
+        metadata: { groupId },
+      });
+      failures.push({
+        code: 'not_found',
+        text: `${notDone} a group that’s no longer in the directory.`,
+      });
+      continue;
+    }
+    // AD keeps the primary group out of member and refuses to add it
+    // there, so an add records it as already done rather than failing.
+    if (op === 'add' && membershipState(group, { primaryGroupId, direct: false }) === 'primary') {
+      const snapshot = {
+        isMember: true,
+        group: group.distinguishedName,
+        member: user.distinguishedName,
+        memberKind: 'user',
+        primaryGroup: true,
+      };
+      await ctx.services.audit.recordEvent({
+        ...ctx.audit,
+        action,
+        result: 'success',
+        actorAuthMethod: 'ad-password',
+        targetType: 'user',
+        targetId: user.objectGuid,
+        targetDn: user.distinguishedName,
+        metadata: {
+          groupId: group.id,
+          groupDn: group.distinguishedName,
+          groupName: group.name,
+        },
+        before: snapshot,
+        after: snapshot,
+      });
+      continue;
+    }
+    // Whether the user is in the group is the directory's to say: the
+    // provider checks member live, by the group's GUID, so a group
+    // renamed or moved since the last sync is still found.
+    let result;
+    try {
+      result = await writeGroupMembership(
+        ctx.services.audit,
+        ctx.provider,
+        { kind: 'user', op, member: user, group },
+        ctx.writeCtx,
+        ctx.audit,
+      );
+    } catch (err) {
+      if (!(err instanceof DirectoryUnavailableError)) throw err;
+      failures.push({
+        code: 'directory_unavailable',
+        text: membershipFailure(op, group.name, 'directory_unavailable', null),
+      });
+      break;
+    }
+    if (!result.ok) {
+      const code = result.errorCode ?? 'directory_error';
+      failures.push({
+        code,
+        text: membershipFailure(op, group.name, code, result.errorMessage ?? null),
+      });
+      continue;
+    }
+    const state = membershipState(group, {
+      primaryGroupId,
+      direct: result.before?.['isMember'] === true,
+    });
+    if (alreadyAsAsked(op, state)) {
+      continue;
+    }
+    changes.set(group.id, { id: group.id, name: group.name, isMember: op === 'add' });
+    changedNow.push(group.name);
+  }
+
+  if (changedNow.length > 0) {
+    await refreshMembershipCache(
+      { db: ctx.db, userLiveRefresh: ctx.services.userLiveRefresh },
+      ctx.provider,
+      { kind: 'user', memberId: row.targetId },
+    ).catch((err: unknown) => {
+      // The writes are made and audited; the next sync brings the cache up to date.
+      if (!(err instanceof DirectoryUnavailableError)) throw err;
+    });
+  }
+  const merged = [...changes.values()];
+  const fields = {
+    before: merged.length ? { groups: merged.map((g) => ({ ...g, isMember: !g.isMember })) } : null,
+    after: merged.length ? { groups: merged } : null,
+    targetDn: user.distinguishedName,
+  };
+  if (failures.length === 0) return { ok: true, unchanged: merged.length === 0, ...fields };
+  const done = merged.length
+    ? `${op === 'add' ? 'Added to' : 'Removed from'} ${merged.map((g) => g.name).join(', ')}. `
+    : '';
+  return {
+    ok: false,
+    errorCode: failures[0]!.code,
+    message: done + failures.map((f) => f.text).join(' '),
+    partial: merged.length > 0,
+    audited: true,
+    ...fields,
   };
 }
 
@@ -481,7 +493,7 @@ function userAttributesHandler(): BulkJobHandler<
 > {
   return {
     action: 'user.update',
-    capability: 'write:user.attributes',
+    capability: BULK_JOB_CAPABILITIES['user.update'],
     request: bulkUserAttributesRequestSchema,
     rows: ({ ids, changes }) =>
       ids.map((id) => ({ targetId: id.toLowerCase(), input: { changes } })),
@@ -498,60 +510,74 @@ function userAttributesHandler(): BulkJobHandler<
     async run(row, ctx) {
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
-      const { user } = live;
-      const targetDn = user.distinguishedName;
-      const kept = { before: row.before, after: row.after, targetDn };
-      try {
-        // The manager's DN as it is now, should it have moved since the job started.
-        const resolved = await resolveChanges(ctx.db, ctx.provider.id, row.input.changes);
-        const { changes } = fieldChanges(liveValues(user), resolved);
-        const result = await writeUserAttributes(
-          ctx.services,
-          ctx.provider,
-          user,
-          patchFor(changes),
-          ctx.writeCtx,
-          ctx.audit,
-        );
-        if (!result.ok) {
-          return {
-            ok: false,
-            errorCode: result.errorCode ?? 'directory_error',
-            errorMessage: result.errorMessage ?? null,
-            audited: true,
-            targetDn,
-          };
-        }
-        if (changes.length === 0) return { ok: true, unchanged: true, ...kept };
-        return { ok: true, ...rowSnapshots(changes), targetDn };
-      } catch (err) {
-        if (err instanceof UserAttributeRefusal && err.code === 'self_manager') {
-          return {
-            ok: true,
-            unchanged: true,
-            reason: { code: err.code, message: err.message },
-            ...kept,
-          };
-        }
-        if (err instanceof UserAttributeRefusal || err instanceof BulkJobRequestError) {
-          return {
-            ok: false,
-            errorCode: err.code,
-            message: 'The manager is no longer a user in the directory.',
-            audited: false,
-            targetDn,
-          };
-        }
-        throw err;
-      }
+      // The manager's DN as it is now, should it have moved since the job started.
+      return attributesRow(row, live.user, ctx, () =>
+        resolveChanges(ctx.db, ctx.provider.id, row.input.changes),
+      );
     },
   };
 }
 
+/**
+ * Set the user's fields, as just read live, to what `target` resolves to,
+ * writing only those not already so, as the row's outcome. A user who'd
+ * become their own manager is skipped, and says so.
+ */
+export async function attributesRow(
+  row: { before: Record<string, unknown> | null; after: Record<string, unknown> | null },
+  user: DirectoryUser,
+  ctx: BulkRowContext,
+  target: () => Promise<ResolvedChanges>,
+): Promise<BulkRowOutcome> {
+  const targetDn = user.distinguishedName;
+  const kept = { before: row.before, after: row.after, targetDn };
+  try {
+    const { changes } = fieldChanges(liveValues(user), await target());
+    const result = await writeUserAttributes(
+      ctx.services,
+      ctx.provider,
+      user,
+      patchFor(changes),
+      ctx.writeCtx,
+      ctx.audit,
+    );
+    if (!result.ok) {
+      return {
+        ok: false,
+        errorCode: result.errorCode ?? 'directory_error',
+        errorMessage: result.errorMessage ?? null,
+        audited: true,
+        targetDn,
+      };
+    }
+    if (changes.length === 0) return { ok: true, unchanged: true, ...kept };
+    return { ok: true, ...rowSnapshots(changes), targetDn };
+  } catch (err) {
+    if (err instanceof UserAttributeRefusal && err.code === 'self_manager') {
+      return {
+        ok: true,
+        unchanged: true,
+        reason: { code: err.code, message: err.message },
+        ...kept,
+      };
+    }
+    if (err instanceof UserAttributeRefusal || err instanceof BulkJobRequestError) {
+      return {
+        ok: false,
+        errorCode: err.code,
+        message: 'The manager is no longer a user in the directory.',
+        audited: false,
+        targetDn,
+      };
+    }
+    throw err;
+  }
+}
+
 export const BULK_JOB_HANDLERS: BulkJobHandlers = {
-  'user.disable': userAccountHandler(DISABLE_USER, 'write:user.enableDisable'),
-  'user.enable': userAccountHandler(ENABLE_USER, 'write:user.enableDisable'),
-  'user.unlock': userAccountHandler(UNLOCK_USER, 'write:user.unlock'),
+  'user.disable': userAccountHandler(DISABLE_USER),
+  'user.enable': userAccountHandler(ENABLE_USER),
+  'user.unlock': userAccountHandler(UNLOCK_USER),
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
   'user.update': userAttributesHandler(),

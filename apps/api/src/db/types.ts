@@ -216,6 +216,8 @@ export interface BulkJobsTable {
   pause_reason: BulkJobPauseReason | null;
   run_token: string | null;
   subject_json: JSONColumnType<BulkJobSubject> | null;
+  /** The job this one reverts; see migrations/20261024000004_bulk_job_reverts.ts. */
+  reverts_job_id: ColumnType<string | null, string | null | undefined, never>;
   actor_user_id: string;
   actor_display_name: string | null;
   actor_username: string;

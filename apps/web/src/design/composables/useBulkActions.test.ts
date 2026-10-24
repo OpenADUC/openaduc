@@ -45,6 +45,7 @@ function aJob(
     subject: null,
     status,
     pauseReason: null,
+    revertsJobId: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: status === 'finished' || status === 'cancelled' ? new Date().toISOString() : null,

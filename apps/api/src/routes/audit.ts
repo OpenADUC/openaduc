@@ -132,15 +132,19 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
           action?: unknown;
           total?: unknown;
           subject?: unknown;
+          revertsJobId?: unknown;
         };
         const job = summaries.get(String(r.bulk_job_id));
         return auditBulkSummarySchema.parse({
           action: metadata.action,
           subject: metadata.subject ?? null,
           total: metadata.total,
+          revertsJobId: metadata.revertsJobId ?? null,
           status: job?.status ?? null,
           pauseReason: job?.pauseReason ?? null,
           counts: job?.counts ?? null,
+          revertible: job?.revertible ?? false,
+          revertedBy: job?.revertedBy ?? null,
         });
       };
 
