@@ -33,7 +33,7 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
-import { lockoutEnd, signInBlockers, type SignInFix } from '../design/lib/signIn.js';
+import { lockoutEnd, signInBlockers, signInNotes, type SignInFix } from '../design/lib/signIn.js';
 import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
@@ -550,6 +550,7 @@ function showExpiryFor(u: UserDetail): void {
 // ---- Sign-in status --------------------------------------------------------
 
 const blockers = computed(() => (user.value ? signInBlockers(user.value) : []));
+const signInNoteList = computed(() => (user.value ? signInNotes(user.value) : []));
 
 const fixes = useSignInFixes<UserDetail>({
   actions: accountActions,
@@ -984,7 +985,11 @@ watch(user, (u) => {
       </template>
 
       <template v-if="user" #status>
-        <SignInStatus :blockers="blockers" :last-logon-at="user.lastLogonAt" />
+        <SignInStatus
+          :blockers="blockers"
+          :notes="signInNoteList"
+          :last-logon-at="user.lastLogonAt"
+        />
       </template>
 
       <template v-if="primaryFix" #primary="{ compact }">

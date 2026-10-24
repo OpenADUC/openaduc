@@ -77,9 +77,32 @@ export function signInBlockers(u: SignInInput, now: Date = new Date()): SignInBl
   if (past(u.accountExpiresAt, now)) {
     blockers.push({ kind: 'account-expired', since: u.accountExpiresAt });
   }
-  if (u.passwordMustChange) blockers.push({ kind: 'must-change-password' });
+  if (mustChange(u)) blockers.push({ kind: 'must-change-password' });
   return blockers;
 }
+
+/**
+ * Must-change as AD applies it: pwdLastSet 0 asks for a new password only
+ * while the password can expire (MS-ADTS computes no expiry otherwise).
+ */
+const mustChange = (u: SignInInput): boolean => !!u.passwordMustChange && !u.passwordNeverExpires;
+
+/** What's set on the account but doesn't stop sign-in, worth saying beside what does. */
+export type SignInNote = { kind: 'must-change-held-back' };
+
+export function signInNotes(u: SignInInput): SignInNote[] {
+  return u.passwordMustChange && u.passwordNeverExpires ? [{ kind: 'must-change-held-back' }] : [];
+}
+
+const NOTES: Record<SignInNote['kind'], { title: string; icon: string; details: string[] }> = {
+  'must-change-held-back': {
+    title: 'Must change password is set',
+    icon: 'pi-info-circle',
+    details: ['AD won’t ask for it because the password never expires'],
+  },
+};
+
+export const describeNote = (n: SignInNote) => NOTES[n.kind];
 
 const when = (iso: string, now: Date) => `${fmtAbsolute(iso)} (${fmtRelative(iso, now)})`;
 
