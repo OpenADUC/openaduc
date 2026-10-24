@@ -9,6 +9,8 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import type { AccountKind } from '../../design/composables/useAccountActions.js';
+import { useOuTree } from '../../design/composables/useOuTree.js';
+import { buildConsoleTree } from '../consoleTree.js';
 
 export type SelectedKind = 'root' | 'savedQueries' | 'domain' | 'ou' | 'container' | 'builtin';
 
@@ -52,7 +54,7 @@ export interface DialogWindow {
 }
 
 export interface SelectedRow {
-  kind: 'user' | 'group' | 'computer' | 'gpo';
+  kind: 'user' | 'group' | 'computer' | 'gpo' | 'container';
   id: string;
   /** Friendly label used by status bar / context menu headers. */
   label: string;
@@ -107,6 +109,10 @@ export const useOldSchool = defineStore('oldSchool', () => {
   });
 
   const selectedRows = ref<SelectedRow[]>([]);
+
+  // The console tree, shared by the tree pane and the contents list.
+  const { ous, loading: treeLoading, error: treeError, load: loadTree } = useOuTree();
+  const consoleTree = computed(() => buildConsoleTree(ous.value));
 
   // Every open dialog renders as a free-floating window. The topmost
   // (highest z) is the focused one; clicking on any window raises it.
@@ -216,6 +222,10 @@ export const useOldSchool = defineStore('oldSchool', () => {
   return {
     selectedNode,
     selectedRows,
+    consoleTree,
+    treeLoading,
+    treeError,
+    loadTree,
     windows,
     anyDialog,
     dataVersion,
