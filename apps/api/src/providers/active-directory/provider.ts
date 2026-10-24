@@ -940,7 +940,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const target = await this.findUserEntry(client, userId);
+        // The full read, so the audit snapshot holds attributes outside the curated set.
+        const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
         const before = normalizeUser(target);
 
@@ -953,7 +954,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.modify(before.distinguishedName, changes);
 
         // Re-read so the route can return the actual post-write state.
-        const afterEntry = await this.findUserEntry(client, userId);
+        const afterEntry = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         const after = afterEntry ? normalizeUser(afterEntry) : null;
         return {
           ok: true,
