@@ -9,13 +9,17 @@ import {
   bulkAccountRequestSchema,
   bulkAttributeChangesSchema,
   bulkGroupMembershipRequestSchema,
+  IMPORT_JOB_ACTION,
   bulkJobCreateRequestSchema,
+  bulkPasswordResetRequestSchema,
   bulkUserAttributesRequestSchema,
   type BulkAccountOp,
   type BulkGroupMembershipRequest,
   type BulkJobAction,
+  type BulkJobHandledAction,
   type BulkJobSubject,
   type BulkMembershipOp,
+  type BulkPasswordResetRequest,
   type Capability,
 } from '@openaduc/shared';
 import type { DB } from '../../db/types.js';
@@ -39,9 +43,11 @@ import {
   rowSnapshots,
   type ResolvedChanges,
 } from '../bulkAttributes.js';
+import { withAudit } from '../auditContext.js';
 import { findCachedGroupsById } from '../groupCache.js';
+import { handedOutPassword, holdPassword, passwordsHoldable } from '../heldPasswords.js';
 import {
-  membershipRequirement,
+  membershipRequirements,
   refreshMembershipCache,
   writeGroupMembership,
   type MembershipCacheDeps,
@@ -61,6 +67,7 @@ import {
 
 export interface BulkRowContext {
   db: Kysely<DB>;
+  jobId: string;
   provider: DirectoryProvider;
   writeCtx: WriteContext;
   /** The row's audit fields, the bulk id included. */
@@ -81,6 +88,8 @@ export type BulkRowOutcome =
       before: Record<string, unknown> | null;
       after: Record<string, unknown> | null;
       targetDn?: string;
+      /** For a row that created its target: the new object's id. */
+      targetId?: string;
     }
   | {
       ok: false;
@@ -89,6 +98,7 @@ export type BulkRowOutcome =
       before?: Record<string, unknown> | null;
       after?: Record<string, unknown> | null;
       targetDn?: string;
+      targetId?: string;
       /** What the row says to the operator, in place of the message for its code. */
       message?: string;
       /** Some of the row's changes were made: the row is partial rather than failed. */
@@ -98,9 +108,14 @@ export type BulkRowOutcome =
     };
 
 export interface BulkJobRowInput<Input> {
-  targetId: string;
+  /** Null for a row that creates its target. */
+  targetId: string | null;
+  /** How the row is named before its target exists, when the cache can't say. */
+  targetName?: string;
   /** Stored in the row's input_json, and handed back to `run`. */
   input: Input;
+  /** The row, by its index among the job's rows, that must finish first. */
+  after?: number;
 }
 
 /**
@@ -113,25 +128,37 @@ export interface BulkJobRowInput<Input> {
  * with more than its rows, checks the request against the directory
  * (throwing BulkJobRequestError when it can't start) and names what the
  * job acts with, so its progress and its audit entry can say it.
+ * `secret`, for a job whose rows all use one secret (an import's shared
+ * password), names it: it's held encrypted for the job, never stored with
+ * its rows. A handler whose rows create their targets takes rows without
+ * one (`Target`).
  */
-export interface BulkJobHandler<Request = unknown, Input = unknown> {
-  action: BulkJobAction;
+export interface BulkJobHandler<Request = unknown, Input = unknown, Target = string> {
+  action: BulkJobHandledAction;
   capability: Capability;
   request: z.ZodType<Request>;
-  rows(request: Request): BulkJobRowInput<Input>[];
+  /** The job's rows; `lookup` for a job whose rows come from the directory or another job. */
+  rows(
+    request: Request,
+    lookup: { db: Kysely<DB>; directoryId: number; actorUserId: string },
+  ): BulkJobRowInput<Input>[] | Promise<BulkJobRowInput<Input>[]>;
+  secret?(request: Request): string | null;
   prepare?(
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },
   ): Promise<BulkJobSubject | null>;
-  /** A capability the job's subject takes beyond `capability`, checked at start, continue and retry. */
+  /** Capabilities the job's subject takes beyond `capability`, checked at start, continue and retry. */
   requires?(
     subject: BulkJobSubject | null,
     roleGroups: readonly RoleGroup[],
-  ): MembershipRequirement | null;
+  ): MembershipRequirement[];
   input: z.ZodType<Input>;
   run(
     row: {
-      targetId: string;
+      id: string;
+      /** How many times the row has been claimed, this run included. */
+      attempts: number;
+      targetId: Target;
       targetDn: string | null;
       input: Input;
       /** What an earlier run of this row recorded, for a retry to keep. */
@@ -142,7 +169,10 @@ export interface BulkJobHandler<Request = unknown, Input = unknown> {
   ): Promise<BulkRowOutcome>;
 }
 
-export type BulkJobHandlers = Record<BulkJobAction, BulkJobHandler>;
+export type BulkJobHandlers = Record<
+  BulkJobHandledAction,
+  BulkJobHandler<unknown, unknown, string | null>
+>;
 
 function userAccountHandler(
   account: AccountWrite & { action: BulkJobAction },
@@ -313,7 +343,8 @@ function groupMembershipHandler(
         })),
       };
     },
-    requires: (subject, roleGroups) => membershipRequirement(op, subject?.groups ?? [], roleGroups),
+    requires: (subject, roleGroups) =>
+      membershipRequirements(op, subject?.groups ?? [], roleGroups),
     async run(row, ctx) {
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
@@ -604,7 +635,101 @@ export async function attributesRow(
   }
 }
 
-export const BULK_JOB_HANDLERS: BulkJobHandlers = {
+/**
+ * Give each account an import of the operator's created a new password,
+ * which they must change at sign-in, for when nobody has the import's:
+ * the rows are the import's created accounts, never ids from the request.
+ * Each password is made to the domain's policy and held for the job's
+ * results CSV before it's set, so it's known once set; a retry after the
+ * CSV was downloaded refuses, as its passwords could reach nobody.
+ */
+function passwordResetHandler(): BulkJobHandler<BulkPasswordResetRequest, null> {
+  return {
+    action: 'user.password.reset',
+    capability: BULK_JOB_CAPABILITIES['user.password.reset'],
+    request: bulkPasswordResetRequestSchema,
+    async rows({ importJobId }, { db, directoryId, actorUserId }) {
+      const created = await db
+        .selectFrom('bulk_job_rows as r')
+        .innerJoin('bulk_jobs as j', 'j.id', 'r.job_id')
+        .select('r.target_id')
+        .where('j.id', '=', importJobId)
+        .where('j.provider_id', '=', directoryId)
+        .where('j.actor_user_id', '=', actorUserId)
+        .where('j.action', '=', IMPORT_JOB_ACTION)
+        .where('r.target_id', 'is not', null)
+        .orderBy('r.ordinal')
+        .execute();
+      if (created.length === 0) {
+        throw new BulkJobRequestError(
+          'nothing_to_reset',
+          'That import is not yours, or created no accounts.',
+        );
+      }
+      return created.map((r) => ({ targetId: r.target_id!, input: null }));
+    },
+    prepare: async ({ importJobId }) => ({ importJobId }),
+    input: z.null(),
+    async run(row, ctx) {
+      const job = await ctx.db
+        .selectFrom('bulk_jobs')
+        .select('results_downloaded_at')
+        .where('id', '=', ctx.jobId)
+        .executeTakeFirstOrThrow();
+      if (!passwordsHoldable(job)) {
+        return {
+          ok: false,
+          errorCode: 'results_downloaded',
+          message: 'This reset’s passwords have been downloaded already: start another reset.',
+          audited: false,
+        };
+      }
+      const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
+      if (!live) return { ok: false, errorCode: 'not_found', audited: false };
+      const { user } = live;
+      const password = await handedOutPassword(ctx.provider, user);
+      await holdPassword(ctx.db, ctx.jobId, row.id, password);
+      const result = await withAudit(
+        ctx.services.audit,
+        {
+          ...ctx.audit,
+          action: 'user.password.reset',
+          actorAuthMethod: 'ad-password',
+          providerId: ctx.provider.id,
+          targetType: 'user',
+          targetId: user.objectGuid,
+          targetDn: user.distinguishedName,
+          metadata: { forceChangeAtNextLogin: true, unlock: false },
+        },
+        async () => {
+          const r = await ctx.provider.resetPassword(
+            { kind: 'objectGuid', value: user.objectGuid },
+            { newPassword: password, forceChangeAtNextLogin: true, unlock: false },
+            ctx.writeCtx,
+          );
+          return { ok: r.ok, errorCode: r.reason ?? null, errorMessage: r.errorMessage ?? null };
+        },
+      );
+      if (!result.ok) {
+        return {
+          ok: false,
+          errorCode: result.errorCode ?? 'directory_error',
+          errorMessage: result.errorMessage ?? null,
+          audited: true,
+          targetDn: user.distinguishedName,
+        };
+      }
+      await ctx.services.userLiveRefresh.refresh(ctx.provider, user.objectGuid);
+      return { ok: true, before: null, after: null, targetDn: user.distinguishedName };
+    },
+  };
+}
+
+/** The bulk actions' handlers; an import's is in importRows.ts. */
+export const BULK_ACTION_HANDLERS: Record<
+  BulkJobAction,
+  BulkJobHandler<unknown, unknown, string | null>
+> = {
   'user.disable': userAccountHandler(DISABLE_USER),
   'user.enable': userAccountHandler(ENABLE_USER),
   'user.unlock': userAccountHandler(UNLOCK_USER),
@@ -615,4 +740,5 @@ export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.accountExpiry.set': accountChangeHandler('accountExpiry'),
   'user.passwordMustChange.set': accountChangeHandler('mustChangePassword'),
   'user.passwordNeverExpires.clear': accountChangeHandler('clearPasswordNeverExpires'),
+  'user.password.reset': passwordResetHandler(),
 };

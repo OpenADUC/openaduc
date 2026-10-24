@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  IMPORT_JOB_ACTION,
   revertedAction,
   type AuditBulkSummary,
   type BulkJob,
@@ -36,6 +37,12 @@ export const BULK_VERBS: Record<BulkJobKind, { verb: string; ing: string; ed: st
     ing: 'Clearing “password never expires” for',
     ed: 'Cleared “password never expires” for',
   },
+  'user.password.reset': {
+    verb: 'Reset password',
+    ing: 'Resetting the password of',
+    ed: 'Reset the password of',
+  },
+  'user.create': { verb: 'Import', ing: 'Creating', ed: 'Created' },
   'user.passwordMustChange.clear': {
     verb: 'Stop requiring a password change',
     ing: 'Stopping requiring a password change for',
@@ -88,6 +95,10 @@ export function bulkJobWords(job: Pick<BulkJob, 'action' | 'subject' | 'revertsJ
   const { ing, ed } = BULK_VERBS[job.action];
   return { ing, ed, target: bulkJobTarget(job.action, job.subject) };
 }
+
+/** An import, or a reset of its passwords: its results are on the import's own page. */
+export const onImportPage = (job: Pick<BulkJob, 'action'>): boolean =>
+  job.action === IMPORT_JOB_ACTION || job.action === 'user.password.reset';
 
 /** Rows got through, whatever their outcome. */
 const done = (c: BulkJobCounts): number => c.succeeded + c.partial + c.failed + c.skipped;
@@ -159,14 +170,17 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
         ]
           .filter(Boolean)
           .join(' and ')}. ${
-          job.revertsJobId === null
-            ? `${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`
-            : 'The revert’s entry below lists why.'
+          onImportPage(job)
+            ? 'The results below say what failed.'
+            : job.revertsJobId === null
+              ? `${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`
+              : 'The revert’s entry below lists why.'
         }`;
+  // An import's results stay on its own page.
   const afterwards: BulkJobControl[] = [
     ...(problems > 0 ? (['retry'] as const) : []),
     ...(job.revertible ? (['revert'] as const) : []),
-    'dismiss',
+    ...(onImportPage(job) ? [] : (['dismiss'] as const)),
   ];
 
   if (job.status === 'paused') {
@@ -222,14 +236,17 @@ function revertedNote(revert: NonNullable<AuditBulkSummary['revertedBy']>): stri
 
 /**
  * A job's heading, e.g. "Bulk disable by Jane Doe: 42 users", "Bulk add to
- * Sales by Jane Doe: 42 users", or "Revert of bulk disable by Jane Doe: 40
- * users".
+ * Sales by Jane Doe: 42 users", "Revert of bulk disable by Jane Doe: 40
+ * users", or "Import by Jane Doe: 23 users".
  */
 export function bulkJobTitle(
   job: { action: BulkJobKind; subject: BulkJobSubject | null; revertsJobId: string | null },
   total: number,
   actor: string | null,
 ): string {
+  if (job.action === IMPORT_JOB_ACTION) {
+    return `Import${actor ? ` by ${actor}` : ''}: ${total === 1 ? '1 user' : `${total} users`}`;
+  }
   const action = job.revertsJobId === null ? job.action : revertedAction(job.action);
   const verb = BULK_VERBS[action].verb.toLowerCase();
   const users = total === 1 ? '1 user' : `${total} users`;

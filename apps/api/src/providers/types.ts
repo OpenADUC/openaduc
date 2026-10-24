@@ -738,6 +738,10 @@ export interface UserCreateInput {
   organisation: Partial<Record<NewUserOrganisationField, string>>;
   /** The manager's DN. */
   manager: string | null;
+  /** What an import also writes; the create form doesn't. */
+  initials?: string | null;
+  employeeId?: string | null;
+  description?: string | null;
 }
 
 /** What the steps after the add need. */

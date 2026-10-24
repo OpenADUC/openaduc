@@ -5,15 +5,19 @@ import { AppError, Conflict, NotFound } from '../../plugins/errorHandler.js';
 export class BulkJobRequestError extends Error {
   constructor(
     readonly code:
+      | 'check_failed'
       | 'group_not_found'
       | 'job_running'
       | 'manager_not_found'
       | 'nothing_to_revert'
       | 'not_revertible'
+      | 'nothing_to_reset'
       | 'ou_not_found'
       | 'ou_refused'
       | 'preview_mismatch'
+      | 'passwords_expired'
       | 'protected_unacknowledged'
+      | 'results_downloaded'
       | 'revert_running',
     message: string,
   ) {
@@ -32,8 +36,13 @@ export function refuseBulkRequest(err: unknown): never {
         throw NotFound(err.message);
       case 'job_running':
       case 'preview_mismatch':
+      case 'results_downloaded':
       case 'revert_running':
         throw Conflict(err.message);
+      case 'passwords_expired':
+        throw new AppError({ statusCode: 410, code: 'gone', message: err.message });
+      case 'check_failed':
+      case 'nothing_to_reset':
       case 'nothing_to_revert':
       case 'not_revertible':
       case 'ou_refused':

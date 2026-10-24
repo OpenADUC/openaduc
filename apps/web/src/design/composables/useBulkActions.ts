@@ -10,17 +10,18 @@
 // done, the failed accounts stay selected, each with its error, so the
 // operator can see why and retry them.
 
-import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
+import { computed, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type {
-  BulkAccountRequest,
-  BulkJob,
-  BulkJobRevertRequest,
-  BulkUserAttributesRequest,
+import {
+  type BulkAccountRequest,
+  type BulkJob,
+  type BulkJobRevertRequest,
+  type BulkUserAttributesRequest,
 } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
-import { accounts, BULK_VERBS, bulkJobActive, bulkJobWords } from '../lib/bulkJob.js';
+import { accounts, BULK_VERBS, bulkJobActive, bulkJobWords, onImportPage } from '../lib/bulkJob.js';
+import { useJobPolling } from './useJobPolling.js';
 import type { GroupChange } from './useBulkGroupMembership.js';
 
 /** The bulk actions that change the accounts themselves. */
@@ -39,12 +40,7 @@ const SELECTED_KEY = 'openaduc.bulkJob.selected';
 /** A finished job older than this isn't shown on coming back. */
 const RESULT_SHOWN_FOR_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Polling a running job starts at a second and slows to five, to stay well
- * inside the API's rate limit; a paused job changes only when someone
- * continues it, so it's checked rarely. A stopped one isn't polled.
- */
-export const POLL = { firstMs: 1000, factor: 1.5, maxMs: 5000, pausedMs: 15_000 } as const;
+export { POLL } from './useJobPolling.js';
 
 function stored(key: string): string | null {
   try {
@@ -101,31 +97,9 @@ export function useBulkActions(opts: {
     };
   });
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let delay: number = POLL.firstMs;
-  let disposed = false;
   // Bumped by detach, so an answer to a request made before isn't shown.
   let attachment = 0;
-  // A poll that came due while the page was hidden, made once it's shown.
-  let dueWhileHidden: string | null = null;
-  const hidden = () => typeof document !== 'undefined' && document.hidden;
-  const onVisible = () => {
-    const id = dueWhileHidden;
-    if (id && !hidden()) {
-      dueWhileHidden = null;
-      void poll(id);
-    }
-  };
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
-  if (getCurrentScope()) {
-    onScopeDispose(() => {
-      disposed = true;
-      clearTimeout(timer);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisible);
-      }
-    });
-  }
+  const polling = useJobPolling(poll);
 
   /**
    * Show `next`, then poll it while it may change and settle it once it
@@ -136,33 +110,17 @@ export function useBulkActions(opts: {
   async function show(next: BulkJob, announce = true): Promise<void> {
     const wasActive = job.value?.id === next.id && bulkJobActive(job.value);
     job.value = next;
-    clearTimeout(timer);
-    if (bulkJobActive(next)) {
-      delay = wasActive ? Math.min(delay * POLL.factor, POLL.maxMs) : POLL.firstMs;
-      timer = setTimeout(() => void poll(next.id), delay);
-      return;
-    }
-    if (next.status === 'paused') {
-      timer = setTimeout(() => void poll(next.id), POLL.pausedMs);
-      return;
-    }
+    if (polling.follow(next.id, next, wasActive)) return;
     await settle(next, announce);
   }
 
   async function poll(id: string): Promise<void> {
-    if (disposed || job.value?.id !== id) return;
-    if (hidden()) {
-      dueWhileHidden = id;
-      return;
-    }
+    if (polling.disposed || job.value?.id !== id) return;
     try {
       const { job: latest } = await api.bulkJobs.get(id, { background: true });
       if (job.value?.id === id) await show(latest);
     } catch {
-      // A missed poll is retried; the job runs regardless.
-      if (!disposed && job.value?.id === id) {
-        timer = setTimeout(() => void poll(id), POLL.maxMs);
-      }
+      if (job.value?.id === id) polling.retryLater(id);
     }
   }
 
@@ -175,11 +133,12 @@ export function useBulkActions(opts: {
       )
     ).flat();
     if (job.value?.id !== done.id) return;
+    const failed = failures.flatMap((f) => (f.targetId === null ? [] : [{ ...f, id: f.targetId }]));
     bulkErrors.value = new Map(
-      failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
+      failed.map((f) => [f.id, f.errorMessage ?? f.errorCode ?? 'Failed']),
     );
     if (announce || stored(SELECTED_KEY) !== done.id) {
-      opts.selectedIds.value = new Set(failures.map((f) => f.targetId));
+      opts.selectedIds.value = new Set(failed.map((f) => f.id));
       store(SELECTED_KEY, done.id);
     }
     if (failures.length === 0 && done.status === 'finished' && announce) {
@@ -294,7 +253,7 @@ export function useBulkActions(opts: {
 
   function dismissJob(): void {
     if (job.value) store(DISMISSED_KEY, job.value.id);
-    clearTimeout(timer);
+    polling.stop();
     job.value = null;
     jobFailure.value = null;
     bulkErrors.value = new Map();
@@ -306,7 +265,7 @@ export function useBulkActions(opts: {
    */
   function detach(): void {
     attachment++;
-    clearTimeout(timer);
+    polling.stop();
     job.value = null;
     jobFailure.value = null;
     busy.value = false;
@@ -322,7 +281,10 @@ export function useBulkActions(opts: {
     try {
       const latest = id ? (await api.bulkJobs.get(id)).job : (await api.bulkJobs.list(1)).jobs[0];
       if (attached !== attachment) return;
-      if (!latest || latest.id === stored(DISMISSED_KEY)) return;
+      // An import's results are on its own page.
+      if (!latest || latest.id === stored(DISMISSED_KEY) || onImportPage(latest)) {
+        return;
+      }
       const stoppedAt = latest.finishedAt ? new Date(latest.finishedAt).getTime() : null;
       if (stoppedAt !== null && Date.now() - stoppedAt > RESULT_SHOWN_FOR_MS) return;
       await show(latest, false);

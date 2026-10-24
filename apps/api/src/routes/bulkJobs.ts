@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   BULK_JOB_ACTIONS,
+  IMPORT_JOB_ACTION,
+  bulkJobResultsDownloadSchema,
   bulkJobListResponseSchema,
   bulkJobPath,
   bulkJobResponseSchema,
@@ -10,12 +12,14 @@ import {
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
   canRevert,
-  type BulkJobSubject,
 } from '@openaduc/shared';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { NotFound } from '../plugins/errorHandler.js';
+import { auditContextFromRequest } from '../services/auditContext.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
-import { revertRunner, type BulkRevertRunner } from '../services/bulkJobs/reverts.js';
-import type { JobActor, JobRecord } from '../services/bulkJobs/service.js';
+import { downloadResults, handsOutPasswords } from '../services/importResults.js';
+import { actorFrom, requireFor } from '../services/bulkJobs/requestContext.js';
+import { revertRunner } from '../services/bulkJobs/reverts.js';
+import type { JobRecord } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
 const listQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) });
@@ -48,7 +52,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       handler: async (req, reply) => {
         const id = await jobs
           .create(actorFrom(req), action, req.body, (subject) =>
-            requireFor(req, jobs.handlers[action], subject),
+            requireFor(app, req, jobs.handlers[action], subject),
           )
           .catch(refuseBulkRequest);
         return reply
@@ -92,7 +96,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await requireFor(req, jobs.runner(job), job.subject_json);
+      await requireFor(app, req, jobs.runner(job), job.subject_json);
       if (!(await jobs.resume(job, actorFrom(req)))) {
         throw app.httpErrors.conflict('only a paused job can be continued');
       }
@@ -104,11 +108,34 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await requireFor(req, jobs.runner(job), job.subject_json);
+      await requireFor(app, req, jobs.runner(job), job.subject_json);
       if (!(await jobs.retry(job, actorFrom(req)).catch(refuseBulkRequest))) {
         throw app.httpErrors.conflict('the job is still running, or has no failed rows');
       }
       return bulkJobResponseSchema.parse({ job: await jobs.describeOne(job.id) });
+    },
+  });
+
+  // The results CSV of a job that hands out passwords, or of an import:
+  // it takes the job's capability and step-up, as it can hold credentials.
+  // With passwords it's downloadable once (services/importResults.ts).
+  app.post('/api/bulk-jobs/:id/results', {
+    config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
+    handler: async (req, reply) => {
+      const job = await ownJob(req);
+      if (job.action !== IMPORT_JOB_ACTION && !handsOutPasswords(job)) {
+        throw NotFound('this job has no results to download');
+      }
+      await app.requireCapability(req, jobs.runner(job).capability);
+      const download = await downloadResults(
+        { db: app.db, audit: app.services.audit },
+        job,
+        await jobs.describeOne(job.id),
+        auditContextFromRequest(req),
+      ).catch(refuseBulkRequest);
+      // It can hold credentials: not for any cache between here and the browser.
+      reply.header('Cache-Control', 'no-store');
+      return bulkJobResultsDownloadSchema.parse(download);
     },
   });
 
@@ -154,20 +181,9 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       await app.requireCapability(req, 'view:audit');
     }
     if (job.reverts_job_id === null && canRevert(job.action)) {
-      await requireFor(req, revertRunner(job.action), job.subject_json);
+      await requireFor(app, req, revertRunner(job.action), job.subject_json);
     }
     return job;
-  }
-
-  /** The job's capability, and what its subject takes beyond it, such as handing out a role. */
-  async function requireFor(
-    req: FastifyRequest,
-    runner: Pick<BulkRevertRunner, 'capability' | 'requires'>,
-    subject: BulkJobSubject | null,
-  ): Promise<void> {
-    await app.requireCapability(req, runner.capability);
-    const needs = runner.requires?.(subject, await app.services.authorization.roleGroups());
-    if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 
   async function ownJob(req: FastifyRequest) {
@@ -176,19 +192,4 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     if (!job) throw NotFound('bulk job not found');
     return job;
   }
-}
-
-function actorFrom(req: FastifyRequest): JobActor {
-  const { session } = req.actor!;
-  if (!session.actorUsername) throw Unauthorized('session has no bind identity');
-  return {
-    directoryId: req.directoryId!,
-    adminSessionId: session.id,
-    actorUserId: session.actorUserId,
-    actorDisplayName: session.actorDisplayName,
-    actorUsername: session.actorUsername,
-    sourceIp: req.ip,
-    userAgent: req.headers['user-agent'] ?? null,
-    correlationId: req.correlationId,
-  };
 }

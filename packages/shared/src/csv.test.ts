@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { csvCell, csvRow, parseTable } from './csv.js';
+import { csvCell, csvExactCell, csvRow, parseTable } from './csv.js';
+
+describe('csvExactCell', () => {
+  it('writes the value exactly, quoted, so reading it back gives it whole', () => {
+    const password = 'aB3!"x,y#';
+    expect(csvExactCell(password)).toBe('"aB3!""x,y#"');
+    expect(parseTable(`P,Q\r\n${csvRow([{ exact: password }, 'q'])}`).rows[0]).toEqual([
+      password,
+      'q',
+    ]);
+  });
+
+  it('refuses a value a spreadsheet would run, rather than change it', () => {
+    expect(() => csvExactCell('=1+1')).toThrow();
+  });
+});
 
 describe('csvCell', () => {
   it.each(['=HYPERLINK("http://evil","x")', '+1+1', '-2+3', '@SUM(A1)', '\t=1', '\r=1'])(

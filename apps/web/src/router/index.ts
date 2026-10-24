@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/UserImportView.vue'),
   },
   {
+    path: '/users/import/jobs/:id',
+    name: 'user-import-job',
+    component: () => import('../views/ImportJobView.vue'),
+    props: true,
+  },
+  {
     path: '/users/:id',
     name: 'user-detail',
     component: () => import('../views/UserDetailView.vue'),

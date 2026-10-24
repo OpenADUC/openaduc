@@ -129,14 +129,15 @@ export class AuditService {
   /**
    * Insert an audit event. Throws on DB failure — high-risk-write callers
    * (Phase 5's withAudit wrapper) should propagate this so the corresponding
-   * write fails closed.
+   * write fails closed. `db`, a transaction, records it with the write it
+   * describes, so neither happens without the other.
    */
-  async recordEvent(input: AuditEventInput): Promise<void> {
+  async recordEvent(input: AuditEventInput, db: Kysely<DB> = this.db): Promise<void> {
     const before = input.before ? (redact(input.before) as Record<string, unknown>) : null;
     const after = input.after ? (redact(input.after) as Record<string, unknown>) : null;
     const metadata = input.metadata ? (redact(input.metadata) as Record<string, unknown>) : {};
 
-    await this.db
+    await db
       .insertInto('audit_events')
       .values({
         action: input.action,

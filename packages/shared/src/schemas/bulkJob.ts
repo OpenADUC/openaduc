@@ -5,7 +5,7 @@ import type { Capability } from '../capabilities.js';
 import { moveRequestSchema, ouRefSchema } from './ou.js';
 import { accountExpiryRequestSchema, CONTROL_CHARS } from './user.js';
 import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
-import { groupPrivilegeSchema } from './userCreate.js';
+import { groupPrivilegeSchema, PASSWORD_MODES } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
 export const BULK_JOB_ACTIONS = [
@@ -19,6 +19,7 @@ export const BULK_JOB_ACTIONS = [
   'user.accountExpiry.set',
   'user.passwordMustChange.set',
   'user.passwordNeverExpires.clear',
+  'user.password.reset',
 ] as const;
 export type BulkJobAction = (typeof BULK_JOB_ACTIONS)[number];
 
@@ -40,9 +41,20 @@ export const BULK_REVERT_ACTIONS = {
 } as const satisfies Partial<Record<BulkJobAction, string>>;
 export type BulkRevertableAction = keyof typeof BULK_REVERT_ACTIONS;
 
-/** Every action a job has: a bulk action's, or a revert's, which only reverts start. */
+/**
+ * An import is a job too, creating its rows' accounts; it starts from the
+ * import's own route, after the final check, rather than at bulkJobPath.
+ */
+export const IMPORT_JOB_ACTION = 'user.create';
+export type ImportJobAction = typeof IMPORT_JOB_ACTION;
+
+/** The jobs a handler runs: a bulk action's, or an import's. */
+export type BulkJobHandledAction = BulkJobAction | ImportJobAction;
+
+/** Every action a job has: a bulk action's, an import's, or a revert's, which only reverts start. */
 export const BULK_JOB_KINDS = [
   ...BULK_JOB_ACTIONS,
+  IMPORT_JOB_ACTION,
   'user.passwordMustChange.clear',
   'user.passwordNeverExpires.set',
 ] as const;
@@ -71,6 +83,7 @@ const BULK_JOB_PATHS: Record<BulkJobAction, string> = {
   'user.accountExpiry.set': '/users/bulk-account-expiry',
   'user.passwordMustChange.set': '/users/bulk-require-password-change',
   'user.passwordNeverExpires.clear': '/users/bulk-clear-password-never-expires',
+  'user.password.reset': '/users/bulk-reset-passwords',
 };
 
 /** The route, under /api, that starts a job of this action. */
@@ -122,6 +135,16 @@ const uniqueGuids = (max: number, what: string) =>
     .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
       message: `${what} must be unique`,
     });
+
+/**
+ * Resetting the passwords of the accounts an import of the operator's
+ * created, which nobody has the passwords of any more: by the import, not
+ * by user id. Each gets a new password the operator downloads once.
+ */
+export const bulkPasswordResetRequestSchema = z
+  .object({ importJobId: z.string().regex(/^\d+$/) })
+  .strict();
+export type BulkPasswordResetRequest = z.infer<typeof bulkPasswordResetRequestSchema>;
 
 /** Starting a job that acts on users by id. */
 export const bulkJobCreateRequestSchema = z.object({
@@ -403,6 +426,8 @@ export const BULK_JOB_CAPABILITIES = {
   'user.accountExpiry.set': BULK_ACCOUNT_CAPABILITIES.accountExpiry,
   'user.passwordMustChange.set': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
   'user.passwordNeverExpires.clear': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
+  'user.password.reset': 'write:user.resetPassword',
+  'user.create': 'write:user.create',
   'user.passwordMustChange.clear': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
   'user.passwordNeverExpires.set': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
 } as const satisfies Record<BulkJobKind, Capability>;
@@ -518,6 +543,16 @@ export const bulkJobSubjectSchema = z.object({
     .optional(),
   ou: ouRefSchema.optional(),
   expiresAt: z.string().nullable().optional(),
+  /** The import whose accounts a password reset job resets. */
+  importJobId: z.string().optional(),
+  /** How an import sets its accounts up; never the password itself. */
+  import: z
+    .object({
+      passwordMode: z.enum(PASSWORD_MODES),
+      mustChange: z.boolean(),
+      enabled: z.boolean(),
+    })
+    .optional(),
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 
@@ -549,10 +584,39 @@ export const bulkJobSchema = z.object({
 export type BulkJob = z.infer<typeof bulkJobSchema>;
 
 export const bulkJobResponseSchema = z.object({ job: bulkJobSchema });
+
+/**
+ * How long a job that hands out passwords (an import in generate or set
+ * mode, a password reset) holds each one for its results CSV: from when
+ * it's stored, or the job last finished, unless the CSV is downloaded
+ * first.
+ */
+export const HELD_PASSWORD_HOURS = 24;
+
+/**
+ * Whether a job's results CSV holds passwords: `none` when it hands none
+ * out (an import in random mode); `held` until the operator downloads it,
+ * once; `expired` once they were purged unseen.
+ */
+export const HELD_PASSWORDS_STATES = ['none', 'held', 'downloaded', 'expired'] as const;
+export type HeldPasswordsState = (typeof HELD_PASSWORDS_STATES)[number];
+
+export const heldPasswordsSchema = z.object({
+  passwords: z.enum(HELD_PASSWORDS_STATES),
+  downloadedAt: z.string().nullable(),
+  /** When the first of the held passwords is purged; null when none are held. */
+  expiresAt: z.string().nullable(),
+});
+export type HeldPasswords = z.infer<typeof heldPasswordsSchema>;
+
+/** A job's results CSV, as the browser saves it. */
+export const bulkJobResultsDownloadSchema = z.object({ fileName: z.string(), csv: z.string() });
+export type BulkJobResultsDownload = z.infer<typeof bulkJobResultsDownloadSchema>;
 export const bulkJobListResponseSchema = z.object({ jobs: z.array(bulkJobSchema) });
 
 export const bulkJobRowSchema = z.object({
-  targetId: z.string(),
+  /** Null for an import's row until its account is created. */
+  targetId: z.string().nullable(),
   targetName: z.string().nullable(),
   status: z.enum(BULK_JOB_ROW_STATUSES),
   errorCode: z.string().nullable(),
@@ -585,6 +649,22 @@ export const auditBulkSummarySchema = z.object({
 });
 export type AuditBulkSummary = z.infer<typeof auditBulkSummarySchema>;
 
+const NOT_REVERTIBLE: Partial<Record<BulkJobKind, string>> = {
+  'user.unlock': 'An unlock can’t be reverted: AD can’t lock an account again.',
+  [IMPORT_JOB_ACTION]:
+    'An import can’t be reverted: it created the accounts. Disable or delete them instead.',
+  'user.password.reset':
+    'A password reset can’t be reverted: AD keeps no old password to put back.',
+};
+
+/** Whether the job has stopped writing: finished or cancelled, its last rows done. */
+export function bulkJobStopped(job: {
+  status: BulkJobStatus;
+  counts: Pick<BulkJobCounts, 'running'>;
+}): boolean {
+  return (job.status === 'finished' || job.status === 'cancelled') && job.counts.running === 0;
+}
+
 /**
  * Why a job can't be reverted now, or null: its action can't be undone,
  * it's a revert itself, it hasn't stopped (rows still running count, as
@@ -611,15 +691,10 @@ export function revertRefusal(
   if (!canRevert(job.action)) {
     return {
       code: 'not_revertible',
-      message: 'An unlock can’t be reverted: AD can’t lock an account again.',
+      message: NOT_REVERTIBLE[job.action] ?? 'This job can’t be reverted.',
     };
   }
-  if (
-    job.status === 'queued' ||
-    job.status === 'running' ||
-    job.status === 'paused' ||
-    job.counts.running > 0
-  ) {
+  if (!bulkJobStopped(job)) {
     return {
       code: 'job_running',
       message: 'The job hasn’t stopped. Let it finish, or stop it, then revert it.',

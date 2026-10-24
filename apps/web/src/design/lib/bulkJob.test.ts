@@ -48,6 +48,22 @@ describe('a bulk job in the audit log', () => {
     });
   });
 
+  it('heads an import with its operator and how many people it creates', () => {
+    expect(
+      describeBulkEntry(
+        summary({
+          action: 'user.create',
+          total: 23,
+          counts: counts({ total: 23, succeeded: 22, partial: 1 }),
+        }),
+        'Jane Doe',
+      ),
+    ).toMatchObject({
+      title: 'Import by Jane Doe: 23 users',
+      outcome: '22 succeeded · 1 partly · 0 failed',
+    });
+  });
+
   it('says when it is still running, paused or was stopped', () => {
     const running = counts({ succeeded: 10, failed: 1, pending: 31 });
     expect(describeBulkEntry(summary({ status: 'running', counts: running }), 'J').outcome).toBe(

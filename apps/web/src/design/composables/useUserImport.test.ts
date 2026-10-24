@@ -8,6 +8,7 @@ import {
   type ImportCheckResponse,
   type ImportLookupRequest,
   type ImportPerson,
+  type ImportRunRequest,
   type NamingCheckRequest,
   type PlacementRule,
   type PlacementRulesSave,
@@ -38,6 +39,7 @@ const check = vi.fn(async (_id: number, body: NamingCheckRequest) => ({
 }));
 const lookup = vi.fn(async (_body: ImportLookupRequest) => ({ people }));
 const finalCheck = vi.fn(async () => PASSED);
+const runImport = vi.fn(async (_body: ImportRunRequest) => ({ job: { id: '42' } }));
 // Answers with every rule, as the API does.
 const saveRules = vi.fn(async (_id: number, body: PlacementRulesSave) => ({
   rules: [...rules, ...body.rules].map((r) => ({
@@ -62,13 +64,14 @@ vi.mock('../../api/index.js', () => ({
       policy: async () => ({ policy: { minPwdLength: 8, complexityRequired: true } }),
       placementRules: { get: async () => ({ rules }), save: saveRules },
     },
-    users: { import: { lookup, check: finalCheck } },
+    users: { import: { lookup, check: finalCheck, run: runImport } },
     auth: { logout: async () => ({ ok: true }) },
     groups: { search: async () => ({ rows: [], total: 0 }) },
   },
 }));
 
 const { useUserImport } = await import('./useUserImport.js');
+const { ApiError } = await import('../../api/client.js');
 const { useAuthStore } = await import('../../stores/auth.js');
 
 const SHEET = [
@@ -121,6 +124,7 @@ describe('useUserImport', () => {
     check.mockClear();
     lookup.mockClear();
     finalCheck.mockReset().mockResolvedValue(PASSED);
+    runImport.mockReset().mockResolvedValue({ job: { id: '42' } });
     saveRules.mockClear();
   });
   afterEach(() => {
@@ -424,15 +428,50 @@ describe('useUserImport', () => {
       expect(wizard.ready.value).toBe(true);
     });
 
-    it('remembers where each bucket went when the run asks it to', async () => {
+    it('runs the checked import, remembers where each bucket went, and is done with the draft', async () => {
       const wizard = await checkable();
-      await wizard.rememberPlacements();
+      wizard.run();
+      await settled();
+      expect(runImport).not.toHaveBeenCalled();
+
+      wizard.runCheck();
+      await settled();
+      wizard.run();
+      await settled();
+
+      expect(runImport).toHaveBeenCalledWith({
+        import: wizard.importRequest.value,
+        acknowledgeProtected: false,
+      });
       expect(saveRules).toHaveBeenCalledWith(1, {
         rules: [
           { column: 'department', value: 'Sales', ouDn: SALES, groupIds: [] },
           { column: 'department', value: '', ouDn: STAFF, groupIds: [] },
         ],
       });
+      expect(wizard.startedJobId.value).toBe('42');
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+    });
+
+    it('checks again when the run finds the directory changed, and saves no rules', async () => {
+      const wizard = await checkable();
+      wizard.runCheck();
+      await settled();
+      runImport.mockRejectedValue(
+        new ApiError(422, 'unprocessable_entity', 'The import has changed since the final check'),
+      );
+      finalCheck.mockResolvedValue({
+        ...PASSED,
+        problems: [{ row: 1, kind: 'taken', message: 'The UPN is now used.' }],
+      });
+      wizard.run();
+      await settled();
+
+      expect(wizard.runError.value).toMatch(/changed since the final check/);
+      expect(wizard.checkProblems.value).toEqual([expect.objectContaining({ line: 3 })]);
+      expect(wizard.ready.value).toBe(false);
+      expect(saveRules).not.toHaveBeenCalled();
+      expect(wizard.startedJobId.value).toBeNull();
     });
 
     it('asks the directory again after a failing check, and any row can be left out', async () => {
@@ -506,6 +545,8 @@ describe('useUserImport', () => {
       const wizard = await checkable();
       wizard.back();
       wizard.setPasswordMode('set');
+      expect(wizard.canContinue.value).toBe(false);
+      wizard.password.value = '=Brand-new-Start9';
       expect(wizard.canContinue.value).toBe(false);
       wizard.password.value = 'Brand-new-Start9';
       expect(wizard.canContinue.value).toBe(true);

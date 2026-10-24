@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch, watchEffect } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import DataTable, {
   type DataTablePageEvent,
   type DataTableRowClickEvent,
@@ -27,7 +27,12 @@ import { useBulkActions } from '../design/composables/useBulkActions.js';
 import { useBulkJobRevert } from '../design/composables/useBulkJobRevert.js';
 import { describeBulkEntry } from '../design/lib/bulkJob.js';
 import { resultBadge } from '../design/lib/auditResult.js';
-import type { MfaRegistrationRow, MfaRegistrationStatus, SignInEventApp } from '@openaduc/shared';
+import {
+  IMPORT_JOB_ACTION,
+  type MfaRegistrationRow,
+  type MfaRegistrationStatus,
+  type SignInEventApp,
+} from '@openaduc/shared';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 
 // Three tabs: 'log' (local audit trail of admin/operator actions),
@@ -346,6 +351,13 @@ function openDetail(ev: DataTableRowClickEvent): void {
 }
 
 const bulkEntry = (row: AuditEventRow) => describeBulkEntry(row.bulk!, row.actorDisplayName);
+/** An import's results page, which only the operator who ran it can open. */
+const importResults = (row: AuditEventRow) =>
+  row.bulk?.action === IMPORT_JOB_ACTION &&
+  row.bulkJobId !== null &&
+  row.actorUserId === auth.actor?.actorId
+    ? { name: 'user-import-job', params: { id: row.bulkJobId } }
+    : null;
 
 const revertBulk = useBulkActions({ selectedIds: ref(new Set()), toast: useToast(), reload: load });
 const { job: revertJob, busy: revertBusy, jobFailure: revertFailure } = revertBulk;
@@ -540,6 +552,13 @@ onMounted(() => {
               <span v-if="bulkEntry(data).reverted" class="bulk-reverted">
                 {{ bulkEntry(data).reverted }}
               </span>
+              <RouterLink
+                v-if="importResults(data)"
+                :to="importResults(data)!"
+                class="bulk-results"
+                @click.stop
+                >Results</RouterLink
+              >
               <Button
                 v-if="revert.canRevert(data.bulk)"
                 label="Revert"
@@ -1056,6 +1075,10 @@ onMounted(() => {
 .bulk-reverted {
   font-size: 12px;
   color: var(--text-3);
+}
+
+.bulk-results {
+  font-size: 12px;
 }
 
 .bulk-revert {
