@@ -29,3 +29,4 @@ export * from './schemas/userImport.js';
 export * from './userImport.js';
 export * from './schemas/temporaryAccessPass.js';
 export * from './temporaryAccessPass.js';
+export * from './schemas/entra.js';

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TapPreflight } from '@openaduc/shared';
-import { configureDirectory, startApi, type TestApi, type TestClient } from './harness.js';
+import { ActiveDirectoryProvider } from '../../src/providers/active-directory/provider.js';
+import { configureDirectory, DC, startApi, type TestApi, type TestClient } from './harness.js';
 
 // Issue TAP against the dev DC, with Microsoft Graph played by a fake
 // behind fetch: the API's own Graph client, token and all, talks to it.
@@ -12,6 +13,7 @@ const ALL_PERMISSIONS = [
   'UserAuthMethod-TAP.ReadWrite.All',
   'Policy.Read.AuthenticationMethod',
   'User.Read.All',
+  'RoleManagement.Read.Directory',
   'Organization.Read.All',
 ];
 
@@ -33,7 +35,12 @@ class FakeGraph {
     minimumLifetimeInMinutes: 60,
     maximumLifetimeInMinutes: 480,
     isUsableOnce: false,
+    includeTargets: [{ targetType: 'group', id: 'all_users' }],
   };
+  /** Principals holding an Entra role. */
+  roleHolders: string[] = [];
+  /** Graph's answer to the next pass created, instead of creating it. */
+  rejectNextPass: string | null = null;
   /** AD objectSid → Entra object id, for the users Connect Sync has synced. */
   synced = new Map<string, string>();
   passes = new Map<string, FakeTap[]>();
@@ -66,6 +73,11 @@ class FakeGraph {
     if (passes) {
       const id = decodeURIComponent(passes[1]!);
       if (method === 'GET') return json({ value: this.passes.get(id) ?? [] });
+      if (this.rejectNextPass) {
+        const message = this.rejectNextPass;
+        this.rejectNextPass = null;
+        return json({ error: { code: 'badRequest', message } }, 400);
+      }
       const body = JSON.parse(String(init.body)) as {
         startDateTime?: string;
         lifetimeInMinutes: number;
@@ -81,6 +93,9 @@ class FakeGraph {
       };
       this.passes.set(id, [created]);
       return json({ id: 'tap', temporaryAccessPass: PASS, ...created }, 201);
+    }
+    if (path.startsWith('/roleManagement/directory/')) {
+      return json({ value: this.roleHolders.map((principalId) => ({ principalId })) });
     }
     if (/^\/users\/[^/]+\/transitiveMemberOf$/.test(path)) {
       return json({ value: [{ '@odata.type': '#microsoft.graph.group', id: 'g1' }] });
@@ -173,6 +188,7 @@ describe('Issue TAP', () => {
         usableOnceOnly: false,
       },
       existing: null,
+      inPolicyScope: true,
     });
   });
 
@@ -281,6 +297,64 @@ describe('Issue TAP', () => {
     }
   });
 
+  it('refuses a user who holds an Entra role', async () => {
+    graph.roleHolders = [entraIdOf('alice.anders')];
+    const { body } = await preflight(operator, 'alice.anders');
+    expect(body).toMatchObject({ status: 'refused', reason: 'entraAdminRole' });
+  });
+
+  it('passes on in Entra’s words a pass Entra refuses', async () => {
+    await operator.stepUp();
+    graph.rejectNextPass = 'The user is not targeted by the Temporary Access Pass policy.';
+    const res = await issue(operator, 'alice.anders');
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'entra_rejected',
+        message:
+          'Microsoft Entra refused: The user is not targeted by the Temporary Access Pass policy.',
+      },
+    });
+  });
+
+  it('finds Domain Admins and Builtin groups with a base DN that’s an OU', async () => {
+    const provider = new ActiveDirectoryProvider({
+      id: api.directoryId!,
+      name: 'ou-base',
+      baseDn: 'OU=OpenADUC Test,DC=openaduc,DC=test',
+      ldapUrls: [DC.ldapsUrl],
+      tlsMode: 'ldaps',
+      tlsRejectUnauthorized: true,
+      tlsCaPath: DC.caPath,
+      operationTimeoutMs: 10_000,
+      serviceAccountUpn: `${DC.serviceAccount}@${DC.domain}`,
+      serviceAccountPassword: DC.password,
+    });
+    const token = await provider.getUserTokenGroups({
+      kind: 'objectGuid',
+      value: users['oa.admin']!.id,
+    });
+    expect(token!.groups.map((g) => g.name)).toEqual(
+      expect.arrayContaining(['Domain Admins', 'Administrators', 'Domain Users']),
+    );
+    expect(token!.sids.every((sid) => token!.groups.some((g) => g.sid === sid))).toBe(true);
+  });
+
+  it('never writes a pass’s value to the audit log, whatever a caller passes it', async () => {
+    await api.app.services.audit.recordEvent({
+      action: 'test.redaction',
+      result: 'success',
+      targetType: 'system',
+      metadata: { temporaryAccessPass: PASS, nested: { temporaryAccessPass: PASS } },
+    });
+    const row = await api.app.db
+      .selectFrom('audit_events')
+      .select('metadata_json')
+      .where('action', '=', 'test.redaction')
+      .executeTakeFirstOrThrow();
+    expect(JSON.stringify(row)).not.toContain(PASS);
+  });
+
   it('says an unsynced user is waiting for sync, with the last sync', async () => {
     const { body } = await preflight(operator, 'bob.baker');
     expect(body).toEqual({ status: 'unsynced', lastSyncAt: '2026-10-24T11:30:00.000Z' });
@@ -314,7 +388,11 @@ describe('Issue TAP', () => {
     const res = await admin.post(`/api/directories/${api.directoryId}/entra/test`);
     expect(res.json()).toMatchObject({
       ok: false,
-      missingPermissions: ['UserAuthMethod-TAP.ReadWrite.All', 'Policy.Read.AuthenticationMethod'],
+      missingPermissions: [
+        'UserAuthMethod-TAP.ReadWrite.All',
+        'Policy.Read.AuthenticationMethod',
+        'RoleManagement.Read.Directory',
+      ],
     });
 
     graph.roles = [...ALL_PERMISSIONS];

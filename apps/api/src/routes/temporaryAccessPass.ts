@@ -9,6 +9,7 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { AppError, NotFound } from '../plugins/errorHandler.js';
+import { rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { GraphPermissionError } from '../services/graphClient.js';
@@ -17,6 +18,7 @@ import {
   tapPreflight,
   type TapDeps,
   type TapIssueOutcome,
+  type TapUser,
 } from '../services/temporaryAccessPass.js';
 
 // Issue TAP on a user's page. Both routes take write:user.issueTap: the
@@ -35,7 +37,9 @@ const NotEnabled = () =>
   });
 
 export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): Promise<void> {
-  async function prepare(req: FastifyRequest): Promise<{ user: DirectoryUser; deps: TapDeps }> {
+  async function prepare(
+    req: FastifyRequest,
+  ): Promise<{ user: DirectoryUser; tapUser: TapUser; deps: TapDeps }> {
     const { id } = idParamSchema.parse(req.params);
     const directoryId = req.directoryId!;
     if (
@@ -50,9 +54,16 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
     if (!user) throw NotFound('user not found');
     return {
       user,
+      tapUser: {
+        sid: user.sid,
+        displayName: user.displayName,
+        samAccountName: user.samAccountName,
+        protectedAccount: rawScalarValue(user.rawAttributes['adminCount']) === '1',
+      },
       deps: {
         graph,
-        groups: () => provider.getUserTokenGroups({ kind: 'objectGuid', value: user.objectGuid }),
+        tokenGroups: () =>
+          provider.getUserTokenGroups({ kind: 'objectGuid', value: user.objectGuid }),
         roleGroups: await app.services.authorization.roleGroups(),
       },
     };
@@ -61,11 +72,14 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
   // ---- GET /api/users/:id/temporary-access-pass --------------------------
   app.get('/api/users/:id/temporary-access-pass', {
     config: {
+      // Each preflight makes several Graph calls, some listing the tenant's
+      // role assignments.
+      rateLimit: { max: 30, timeWindow: '1 minute' },
       policy: { capability: 'write:user.issueTap', stepUp: false, directory: 'caller' },
     },
     handler: async (req): Promise<TapPreflight> => {
-      const { user, deps } = await prepare(req);
-      const { preflight } = await tapPreflight(deps, user).catch(graphFailure);
+      const { tapUser, deps } = await prepare(req);
+      const { preflight } = await tapPreflight(deps, tapUser).catch(graphFailure);
       return tapPreflightSchema.parse(preflight);
     },
   });
@@ -78,7 +92,7 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
     },
     handler: async (req, reply): Promise<TapIssueResponse> => {
       const body = tapIssueRequestSchema.parse(req.body);
-      const { user, deps } = await prepare(req);
+      const { user, tapUser, deps } = await prepare(req);
 
       const { outcome } = await withAudit(
         app.services.audit,
@@ -97,7 +111,7 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
           },
         },
         async () => {
-          const outcome: TapIssueOutcome = await issueTap(deps, user, body);
+          const outcome: TapIssueOutcome = await issueTap(deps, tapUser, body);
           if (!outcome.ok) {
             return { ok: false, errorCode: outcome.code, errorMessage: outcome.message, outcome };
           }
@@ -120,8 +134,18 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
   });
 }
 
-/** Graph refusing or failing, with the permission it most likely wants. */
+/**
+ * Graph refusing or failing: a request it rejects (400) in its own words,
+ * anything else with the permission it most likely wants.
+ */
 function graphFailure(err: unknown): never {
+  if (err instanceof GraphPermissionError && err.statusCode === 400) {
+    throw new AppError({
+      statusCode: 422,
+      code: 'entra_rejected',
+      message: `Microsoft Entra refused: ${err.graphMessage ?? err.message}`,
+    });
+  }
   if (err instanceof GraphPermissionError) {
     throw new AppError({
       statusCode: 502,

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
+import {
+  ENTRA_FEATURE_KEYS,
+  ENTRA_FEATURE_PERMISSIONS,
+  type EntraFeatureKey,
+} from '@openaduc/shared';
 import { decryptSecret, encryptSecret } from '../lib/encryption.js';
 
 // Per-directory Microsoft Entra (Graph) integration. Sibling to
@@ -13,30 +18,7 @@ import { decryptSecret, encryptSecret } from '../lib/encryption.js';
 // path, which the GraphClient and the test-connection route consume. The
 // public summary type intentionally omits secret material.
 
-export const ENTRA_FEATURE_KEYS = [
-  'photos',
-  'signInActivity',
-  'signInEvents',
-  'mfaRegistration',
-  'teamsAdminWebhook',
-  'passwordExpiryNotifications',
-  'temporaryAccessPass',
-] as const;
-export type EntraFeatureKey = (typeof ENTRA_FEATURE_KEYS)[number];
-
 export type EntraFeatureFlags = Partial<Record<EntraFeatureKey, boolean>>;
-
-/**
- * The application permissions a feature needs that the connection test
- * checks, each met by any one of its names (the first is the narrowest).
- */
-const FEATURE_PERMISSIONS: Partial<Record<EntraFeatureKey, readonly (readonly string[])[]>> = {
-  temporaryAccessPass: [
-    ['UserAuthMethod-TAP.ReadWrite.All', 'UserAuthenticationMethod.ReadWrite.All'],
-    ['Policy.Read.AuthenticationMethod', 'Policy.ReadWrite.AuthenticationMethod'],
-    ['User.Read.All', 'User.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
-  ],
-};
 
 /** The narrowest permission for each need of the turned-on features that isn't granted. */
 export function missingPermissions(
@@ -47,8 +29,8 @@ export function missingPermissions(
   const missing = new Set<string>();
   for (const key of ENTRA_FEATURE_KEYS) {
     if (!features[key]) continue;
-    for (const anyOf of FEATURE_PERMISSIONS[key] ?? []) {
-      if (!anyOf.some((p) => have.has(p))) missing.add(anyOf[0]!);
+    for (const p of ENTRA_FEATURE_PERMISSIONS[key] ?? []) {
+      if (!have.has(p.name) && !p.alsoMetBy.some((alt) => have.has(alt))) missing.add(p.name);
     }
   }
   return [...missing];

@@ -43,6 +43,7 @@ import type {
   DirectoryProvider,
   DirectoryGroupSearchQuery,
   DirectoryUser,
+  UserTokenGroups,
   DirectoryUserSearchQuery,
   GroupCreateInput,
   MutationResult,
@@ -491,7 +492,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
-  async getUserTokenGroups(userId: DirectoryObjectIdentifier): Promise<DirectoryGroup[] | null> {
+  async getUserTokenGroups(userId: DirectoryObjectIdentifier): Promise<UserTokenGroups | null> {
     return this.withServiceBind(async (client) => {
       const entry = await this.findUserEntry(client, userId, ['distinguishedName']);
       if (!entry) return null;
@@ -507,15 +508,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         .filter((v): v is Buffer => Buffer.isBuffer(v))
         .map(sidToString);
       if (sids.length === 0) return null;
-      // The string form, which AD and Samba both take; Samba doesn't match
-      // a domain SID written as escaped bytes.
-      const { searchEntries: groups } = await client.search(this.config.baseDn, {
+      // From the domain's root, not the base DN: Domain Admins and
+      // CN=Builtin sit outside an OU base. The string form of the SID is
+      // what AD and Samba both take; Samba doesn't match a domain SID
+      // written as escaped bytes.
+      const { searchEntries: groups } = await client.search(await this.domainRoot(client), {
         scope: 'sub',
         filter: `(&${GROUP_FILTER_BASE}(|${sids.map((sid) => `(objectSid=${sid})`).join('')}))`,
         attributes: GROUP_ATTRS.filter((a) => a !== 'member' && a !== 'memberOf'),
         explicitBufferAttributes: BINARY_ATTRS,
       });
-      return groups.map(normalizeGroup);
+      return { sids, groups: groups.map(normalizeGroup) };
     });
   }
 
