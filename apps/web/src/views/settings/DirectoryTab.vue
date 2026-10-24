@@ -29,6 +29,7 @@ import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
 import EmptyState from '../../design/primitives/EmptyState.vue';
 import StepUpDialog from '../../design/feedback/StepUpDialog.vue';
+import NamingPatternDialog from './NamingPatternDialog.vue';
 import { fmtRelative } from '../../design/lib/format.js';
 
 const route = useRoute();
@@ -412,6 +413,22 @@ async function runSyncBindTest(): Promise<void> {
   }
 }
 
+// ---- Naming pattern ----
+// Edited for the directory the operator is signed in to: its UPN suffixes
+// are read with that directory's service account.
+const namingTarget = ref<number | null>(null);
+const namingOpen = ref(false);
+
+function openNamingDialog(id: number): void {
+  namingTarget.value = id;
+  namingOpen.value = true;
+}
+
+async function onNamingSaved(): Promise<void> {
+  toast.add({ severity: 'success', summary: 'Naming pattern saved', life: 3000 });
+  await load();
+}
+
 // ---- Load directories ----
 async function load(): Promise<void> {
   loading.value = true;
@@ -517,6 +534,18 @@ onMounted(load);
             {{ d.transportProblem }} Edit the domain controllers to fix it.
           </dd>
         </template>
+        <dt class="fld-label">Naming pattern</dt>
+        <dd class="naming-row">
+          <span class="mono">{{ d.naming.pattern }} · @{{ d.naming.upnSuffix }}</span>
+          <Button
+            v-if="canEdit && d.id === auth.actor?.directoryId"
+            label="Change"
+            size="small"
+            text
+            :aria-label="`Change the naming pattern for ${d.displayName ?? d.domain}`"
+            @click="openNamingDialog(d.id)"
+          />
+        </dd>
         <dt class="fld-label">Domain controllers</dt>
         <dd>
           <ul class="dc-list">
@@ -780,6 +809,13 @@ onMounted(load);
   </Dialog>
 
   <StepUpDialog v-model:visible="editStepUpOpen" @ok="submitEdit" />
+
+  <NamingPatternDialog
+    v-if="namingOpen && namingTarget !== null"
+    v-model:visible="namingOpen"
+    :directory-id="namingTarget"
+    @saved="onNamingSaved"
+  />
 </template>
 
 <style scoped>
@@ -803,6 +839,18 @@ onMounted(load);
 .dir-grid dd {
   margin: 0;
   color: var(--text);
+}
+
+.naming-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Inline with the value, so the row keeps the others' height. */
+.naming-row :deep(.p-button) {
+  padding-block: 0;
 }
 
 .dc-list {

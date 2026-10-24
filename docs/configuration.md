@@ -85,6 +85,8 @@ A handful of settings live in the **app_settings** Postgres table and are manage
 - Notification thresholds for failing sync tasks.
 - Branding overrides (display name, accent color).
 
+Each domain's **naming pattern** (how a new account's username is built from the person's name, `{first}.{last}` by default) and UPN suffix are set on its card in Configuration → Domains and stored with the domain. The preview there shows what the pattern makes of sample names. A change applies to accounts created afterwards; existing accounts keep their names.
+
 Env defaults in this file are the floor; the database wins where both exist.
 
 ## Rotation guidance
