@@ -35,9 +35,10 @@ const response: UserMatchResponse = {
   ],
 };
 
-function setup(selected: string[] = []) {
+function setup(selected: string[] = [], loaded = ['jdoe', 'bbaker', 'jsmith', 'jsmith2']) {
   const selectedIds = ref(new Set(selected));
-  return { selectedIds, paste: usePastedListSelection({ selectedIds }) };
+  const isLoaded = (id: string) => loaded.includes(id);
+  return { selectedIds, paste: usePastedListSelection({ selectedIds, isLoaded }) };
 }
 
 describe('selecting users from a pasted list', () => {
@@ -90,6 +91,31 @@ describe('selecting users from a pasted list', () => {
     paste.pick('John Smith', null);
     expect(paste.selection.value).toEqual(['jdoe', 'bbaker']);
     expect(paste.unresolved.value).toBe(1);
+  });
+
+  it('counts the disabled users among the matches', async () => {
+    match.mockResolvedValueOnce({
+      results: [
+        ...response.results,
+        { entry: 'old.account', status: 'matched', user: person('old', { enabled: false }) },
+      ],
+    } satisfies UserMatchResponse);
+    const { paste } = setup([], ['jdoe', 'bbaker', 'old']);
+    paste.text.value = 'anything';
+    await paste.match();
+
+    expect(paste.disabled.value).toBe(1);
+  });
+
+  it("leaves out users the list hasn't loaded, and says how many", async () => {
+    const { paste, selectedIds } = setup([], ['jdoe', 'jsmith']);
+    paste.text.value = 'anything';
+    await paste.match();
+    paste.pick('John Smith', 'jsmith');
+
+    expect(paste.notLoaded.value).toBe(1);
+    paste.apply('replace');
+    expect([...selectedIds.value]).toEqual(['jdoe', 'jsmith']);
   });
 
   it('makes the matched users the selection, replacing what was selected', async () => {

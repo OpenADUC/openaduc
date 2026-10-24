@@ -1,9 +1,4 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
-<!--
-  Select users from a pasted list. Parsing, matching and the selection
-  live in usePastedListSelection; this renders the paste, then what
-  matched, what could mean several people and what matched nobody.
--->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import Dialog from 'primevue/dialog';
@@ -16,6 +11,7 @@ import { dnPath, rdns } from '../lib/dn.js';
 
 const visible = defineModel<boolean>('visible', { required: true });
 const selected = defineModel<Set<string>>('selected', { required: true });
+const props = defineProps<{ isLoaded: (id: string) => boolean }>();
 
 const {
   text,
@@ -30,12 +26,14 @@ const {
   unresolved,
   picks,
   selection,
+  notLoaded,
+  disabled,
   match,
   pick,
   edit,
   reset,
   apply,
-} = usePastedListSelection({ selectedIds: selected });
+} = usePastedListSelection({ selectedIds: selected, isLoaded: (id) => props.isLoaded(id) });
 
 watch(visible, (open) => {
   if (open) reset();
@@ -46,18 +44,28 @@ const plural = (n: number, one: string, many: string) =>
 
 const users = (n: number) => plural(n, 'user', 'users');
 
-const countNote = computed(() => {
-  const n = entries.value.length;
-  if (tooMany.value) {
-    return `That's ${n.toLocaleString()} entries. Match up to ${MAX_USER_MATCH_ENTRIES.toLocaleString()} at a time.`;
-  }
-  return n === 0 ? '' : plural(n, 'entry', 'entries');
-});
+const tooManyNote = computed(
+  () =>
+    `That's ${entries.value.length.toLocaleString()} entries. Match up to ${MAX_USER_MATCH_ENTRIES.toLocaleString()} at a time.`,
+);
 
 const summary = computed(() => {
-  const found = `${users(selection.value.length)} found from ${plural(results.value.length, 'entry', 'entries')}.`;
-  if (unresolved.value === 0) return found;
-  return `${found} Pick who you mean for ${plural(unresolved.value, 'entry', 'entries')} below, or ${unresolved.value === 1 ? 'it' : 'they'}'ll be skipped.`;
+  const n = selection.value.length;
+  const parts = [
+    `${users(n)} found from ${plural(results.value.length, 'entry', 'entries')}` +
+      (disabled.value > 0 ? `, ${disabled.value.toLocaleString()} of them disabled.` : '.'),
+  ];
+  if (notLoaded.value > 0) {
+    parts.push(
+      `${plural(notLoaded.value, 'more user isn’t', 'more users aren’t')} in the loaded list. Refresh the list to include them.`,
+    );
+  }
+  if (unresolved.value > 0) {
+    parts.push(
+      `Pick who you mean for ${plural(unresolved.value, 'entry', 'entries')} below, or ${unresolved.value === 1 ? 'it' : 'they'}'ll be skipped.`,
+    );
+  }
+  return parts.join(' ');
 });
 
 function name(u: UserMatchCandidate): string {
@@ -111,9 +119,7 @@ function finish(mode: 'replace' | 'add'): void {
         placeholder="jane.doe@example.com&#10;CORP\bsmith&#10;Carol Chen"
         @keydown="onKeydown"
       />
-      <p class="pl-note" :class="{ 'pl-note-error': tooMany }" aria-live="polite">
-        {{ countNote }}
-      </p>
+      <p v-if="tooMany" class="pl-note pl-note-error" role="alert">{{ tooManyNote }}</p>
       <Message v-if="error" severity="error" :closable="false">{{ error }}</Message>
     </template>
 
@@ -218,7 +224,6 @@ function finish(mode: 'replace' | 'add'): void {
 }
 
 .pl-note {
-  min-height: 1.4em;
   margin: 6px 0 0;
   font-size: 12px;
   color: var(--text-3);
