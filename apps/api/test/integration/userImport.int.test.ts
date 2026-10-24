@@ -262,6 +262,40 @@ describe('importing users', () => {
       ]);
     });
 
+    it('catches an email someone holds, and one row’s email that is another’s UPN', async () => {
+      const result = await check(
+        request([
+          // Its employee ID is no one's, so the email is someone else's.
+          row('pat.imported', { employeeId: 'E-9', email: `bob.baker@${DC.domain}` }),
+          row('quin.imported', { line: 3 }),
+          row('ray.imported', { line: 4, email: `quin.imported@${DC.domain}` }),
+        ]),
+      );
+      expect(result.problems).toEqual([
+        {
+          row: 0,
+          kind: 'taken',
+          message: `The email “bob.baker@${DC.domain}” is already Bob Baker’s in the directory.`,
+        },
+        {
+          row: 2,
+          kind: 'taken',
+          message: `The email “quin.imported@${DC.domain}” is row 3’s UPN too.`,
+        },
+      ]);
+    });
+
+    it('refuses managers that go round in a loop', async () => {
+      const res = await operator.post(
+        '/api/users/import/check',
+        request([
+          row('sue.imported', { managerRow: 1 }),
+          row('tom.imported', { line: 3, managerRow: 0 }),
+        ]),
+      );
+      expect(res.statusCode).toBe(400);
+    });
+
     it('takes step-up', async () => {
       const fresh = api.client();
       await fresh.signIn(api, 'oa.operator');

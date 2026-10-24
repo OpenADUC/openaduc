@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  type ImportPerson,
   type LdapTlsMode,
   type NamingLookups,
   type OuName,
@@ -14,6 +15,7 @@ import {
   ConstraintViolationError,
   AlreadyExistsError,
   EqualityFilter,
+  OrFilter,
   InsufficientAccessError,
   NotAllowedOnNonLeafError,
   UnwillingToPerformError,
@@ -38,7 +40,6 @@ import type {
   DirectoryObjectIdentifier,
   DirectoryObjectRef,
   DirectoryOu,
-  DirectoryPerson,
   DirectoryProvider,
   DirectoryGroupSearchQuery,
   DirectoryUser,
@@ -1523,7 +1524,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
-  async findPeople(lookups: PeopleLookups): Promise<DirectoryPerson[]> {
+  async findPeople(lookups: PeopleLookups): Promise<ImportPerson[]> {
     return this.withServiceBind(async (client) => {
       const clauses = [
         ...lookups.employeeIds.map((v) => `(employeeID=${escapeLdapFilter(v)})`),
@@ -1549,12 +1550,12 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         ],
         USER_FILTER_BASE,
       );
-      const people = new Map<string, DirectoryPerson>();
+      const people = new Map<string, ImportPerson>();
       for (const entry of entries) {
         const ref = normalizeObjectRef(entry);
         if (!ref) continue;
         people.set(ref.objectGuid, {
-          objectGuid: ref.objectGuid,
+          id: ref.objectGuid,
           distinguishedName: ref.distinguishedName,
           samAccountName: asString(entry.sAMAccountName) ?? null,
           userPrincipalName: asString(entry.userPrincipalName) ?? null,
@@ -1569,6 +1570,41 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         });
       }
       return [...people.values()];
+    });
+  }
+
+  async findObjects(refs: {
+    dns: readonly string[];
+    guids: readonly string[];
+  }): Promise<DirectoryObjectRef[]> {
+    return this.withServiceBind(async (client) => {
+      const entries = await this.searchAny(
+        client,
+        this.config.baseDn,
+        'sub',
+        refs.dns.map((dn) => `(distinguishedName=${escapeLdapFilter(dn)})`),
+        OBJECT_REF_ATTRS,
+      );
+      // A binary objectGUID only matches as a filter object, not in a string filter.
+      for (let i = 0; i < refs.guids.length; i += 50) {
+        const { searchEntries } = await client.search(this.config.baseDn, {
+          scope: 'sub',
+          filter: new OrFilter({
+            filters: refs.guids.slice(i, i + 50).map(
+              (guid) =>
+                new EqualityFilter({
+                  attribute: 'objectGUID',
+                  value: objectGuidFromString(guid),
+                }),
+            ),
+          }),
+          attributes: OBJECT_REF_ATTRS,
+          explicitBufferAttributes: BINARY_ATTRS,
+          paged: { pageSize: 500 },
+        });
+        entries.push(...searchEntries);
+      }
+      return entries.flatMap((e) => normalizeObjectRef(e) ?? []);
     });
   }
 
