@@ -44,6 +44,16 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
     iconClass: 'pi pi-calendar',
     tone: 'tone-blue',
   },
+  'user.passwordMustChange.set': {
+    title: 'Must change password at next sign-in',
+    iconClass: 'pi pi-key',
+    tone: 'tone-amber',
+  },
+  'user.passwordNeverExpires.clear': {
+    title: 'Password set to expire',
+    iconClass: 'pi pi-key',
+    tone: 'tone-blue',
+  },
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },
   'user.move': { title: 'Moved to OU', iconClass: 'pi pi-folder', tone: 'tone-blue' },
@@ -88,8 +98,7 @@ const items = computed<FeedItem[]>(() =>
 
 function detailFor(e: AuditEventRow): string {
   const md = (e.metadata ?? {}) as Record<string, unknown>;
-  if (e.action === 'user.update' && md.unchanged === true)
-    return 'Already as asked; nothing changed';
+  if (md.unchanged === true) return 'Already as asked; nothing changed';
   if (e.action === 'user.update' || e.action === 'user.rename') {
     const fields = Array.isArray(md.fields) ? md.fields : md.fields ? [md.fields] : [];
     if (fields.length > 0) return `Fields: ${fields.map(String).join(', ')}`;

@@ -8,6 +8,7 @@ import type {
   BulkJobStatus,
   BulkJobSubject,
 } from '@openaduc/shared';
+import { expiryMoment } from './accountExpiry.js';
 import { fieldNames } from './bulkAttributes.js';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
@@ -17,6 +18,22 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
   'user.group.add': { verb: 'Add', ing: 'Adding', ed: 'Added' },
   'user.group.remove': { verb: 'Remove', ing: 'Removing', ed: 'Removed' },
   'user.update': { verb: 'Edit', ing: 'Editing', ed: 'Edited' },
+  'user.move': { verb: 'Move', ing: 'Moving', ed: 'Moved' },
+  'user.accountExpiry.set': {
+    verb: 'Set expiry',
+    ing: 'Setting the expiry of',
+    ed: 'Set the expiry of',
+  },
+  'user.passwordMustChange.set': {
+    verb: 'Require password change',
+    ing: 'Requiring a password change for',
+    ed: 'Required a password change for',
+  },
+  'user.passwordNeverExpires.clear': {
+    verb: 'Clear “password never expires”',
+    ing: 'Clearing “password never expires” for',
+    ed: 'Cleared “password never expires” for',
+  },
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
@@ -29,11 +46,16 @@ export function groupNames(groups: readonly { name: string }[]): string {
 
 /**
  * Where a job's change goes, said after what it changes: " to Sales",
- * " (department and title)" for an edit, or nothing.
+ * " (department and title)" for an edit, " to the end of 3/1/2031" for
+ * an expiry, or nothing.
  */
 export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | null): string {
   if (action === 'user.update' && subject?.attributes?.length) {
     return ` (${fieldNames(subject.attributes.map((a) => a.field))})`;
+  }
+  if (action === 'user.move' && subject?.ou) return ` to ${subject.ou.name}`;
+  if (action === 'user.accountExpiry.set' && subject && subject.expiresAt !== undefined) {
+    return subject.expiresAt === null ? ' to never' : ` to ${expiryMoment(subject.expiresAt)}`;
   }
   if (!subject?.groups?.length) return '';
   if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
