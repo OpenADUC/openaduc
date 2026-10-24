@@ -47,6 +47,7 @@ import type {
   SignInEventsResponse,
   StepUpRequest,
   UserDeletePreflightResponse,
+  UserMatchResponse,
   UserDeleteRequest,
   UserDetail,
   UserRenameRequest,
@@ -475,6 +476,12 @@ export const api = {
       return apiFetch(`/users/${encodeURIComponent(id)}/rename`, {
         method: 'POST',
         body: JSON.stringify(body),
+      });
+    },
+    match(entries: string[]): Promise<UserMatchResponse> {
+      return apiFetch('/users/match', {
+        method: 'POST',
+        body: JSON.stringify({ entries }),
       });
     },
     deletePreflight(ids: string[]): Promise<UserDeletePreflightResponse> {
