@@ -291,6 +291,81 @@ describe('moving users and changing their account settings in bulk', () => {
       }
     });
 
+    it('flags users whose name is taken in the OU, and refuses a system or stale OU', async () => {
+      const cn = leaf(await dnOf(SAM.alice));
+      const providerId = api.directoryId!;
+      // A group in Contractors with Alice's name, and a user elsewhere with Bob's.
+      const group = randomUUID();
+      const twin = randomUUID();
+      const bobCn = leaf(await dnOf(SAM.bob));
+      await api.app.db
+        .insertInto('group_cache_records')
+        .values({
+          provider_id: providerId,
+          object_guid: group,
+          distinguished_name: `${cn},${CONTRACTORS}`,
+          raw_attributes_json: JSON.stringify({}),
+        })
+        .execute();
+      await api.app.db
+        .insertInto('user_cache_records')
+        .values({
+          provider_id: providerId,
+          object_guid: twin,
+          distinguished_name: `${bobCn},OU=Elsewhere,${ROOT}`,
+          display_name: 'Bob’s twin',
+          raw_attributes_json: JSON.stringify({}),
+        })
+        .execute();
+      try {
+        const result = await preview([users.alice, users.bob, twin, users.carol], {
+          op: 'move',
+          targetOuDn: CONTRACTORS,
+        });
+        expect(result.notes).toEqual([
+          {
+            kind: 'name_taken',
+            count: 3,
+            users: expect.arrayContaining([
+              { id: users.alice, name: expect.any(String) },
+              { id: users.bob, name: expect.any(String) },
+              { id: twin, name: 'Bob’s twin' },
+            ]),
+          },
+        ]);
+      } finally {
+        await api.app.db
+          .deleteFrom('group_cache_records')
+          .where('object_guid', '=', group)
+          .execute();
+        await api.app.db.deleteFrom('user_cache_records').where('object_guid', '=', twin).execute();
+      }
+
+      const dcs = await operator.post('/api/users/bulk-account/preview', {
+        ids: [users.alice],
+        change: { op: 'move', targetOuDn: 'OU=Domain Controllers,DC=openaduc,DC=test' },
+      });
+      expect(dcs.statusCode).toBe(422);
+      expect(dcs.json()).toMatchObject({ error: { message: expect.stringMatching(/system OU/) } });
+
+      const markStale = (stale: Date | null) =>
+        api.app.db
+          .updateTable('directory_ous')
+          .set({ stale_at: stale })
+          .where('distinguished_name', '=', CONTRACTORS)
+          .execute();
+      await markStale(new Date());
+      try {
+        const stale = await operator.post('/api/users/bulk-account/preview', {
+          ids: [users.alice],
+          change: { op: 'move', targetOuDn: CONTRACTORS },
+        });
+        expect(stale.statusCode).toBe(404);
+      } finally {
+        await markStale(null);
+      }
+    });
+
     it('is a read anyone with read:user may make, and writes nothing', async () => {
       const read = await preview([users.alice], { op: 'mustChangePassword' }, auditor);
       expect(read.changed.count).toBe(1);
@@ -418,6 +493,43 @@ describe('moving users and changing their account settings in bulk', () => {
         await putIn(SAM.alice, STAFF);
         await putIn(SAM.bob, STAFF);
         await refresh(users.alice, users.bob);
+      }
+    });
+
+    it('fails a move whose name is taken in the OU, saying so, and the single move too', async () => {
+      const dn = await dnOf(SAM.alice);
+      const name = dn.slice(3, dn.indexOf(','));
+      const contact = `${leaf(dn)},${CONTRACTORS}`;
+      await asAdministrator((client) =>
+        client.add(contact, { objectClass: ['top', 'person', 'organizationalPerson', 'contact'] }),
+      );
+      try {
+        const job = await finished(
+          (
+            await start(
+              [users.alice],
+              { op: 'move', targetOuDn: CONTRACTORS },
+              '/api/users/bulk-move',
+            )
+          ).id,
+        );
+        expect(await rowsWith(job.id, 'failed')).toEqual([
+          expect.objectContaining({
+            errorCode: 'conflict',
+            errorMessage: `An object named ${name} already exists in Contractors.`,
+          }),
+        ]);
+
+        const single = await operator.post(`/api/users/${users.alice}/move`, {
+          targetOuDn: CONTRACTORS,
+        });
+        expect(single.statusCode).toBe(409);
+        expect(single.json()).toMatchObject({
+          error: { message: `An object named ${name} already exists in Contractors.` },
+        });
+        expect(await dnOf(SAM.alice)).toBe(dn);
+      } finally {
+        await asAdministrator((client) => client.del(contact));
       }
     });
 
@@ -598,6 +710,21 @@ describe('moving users and changing their account settings in bulk', () => {
       const res = await unelevated.post(path, { ids, change, previewToken });
       expect(res.json()).toMatchObject({ error: { code: 'step_up_required' } });
     });
+  });
+
+  it('refuses a single-user move to a system OU, and says a missing user is missing first', async () => {
+    const dcs = await operator.post(`/api/users/${users.alice}/move`, {
+      targetOuDn: 'OU=Domain Controllers,DC=openaduc,DC=test',
+    });
+    expect(dcs.statusCode).toBe(422);
+    const missing = await operator.post(`/api/users/${randomUUID()}/move`, {
+      targetOuDn: `OU=Nowhere,${ROOT}`,
+    });
+    expect(missing.statusCode).toBe(404);
+    const nowhere = await operator.post(`/api/users/${users.alice}/move`, {
+      targetOuDn: `OU=Nowhere,${ROOT}`,
+    });
+    expect(nowhere.statusCode).toBe(400);
   });
 
   it('audits a single-user move to the OU the user is in as a no-op, without writing', async () => {

@@ -179,15 +179,17 @@ async function accountRow(
   // A no-op keeps what an earlier run changed, if one did, for a revert to restore.
   if (unchanged) return { ok: true, unchanged, before: row.before, after: row.after, targetDn };
   const fields = { before: result.before ?? null, after: result.after ?? null, targetDn };
-  return result.ok
-    ? { ok: true, ...fields }
-    : {
-        ok: false,
-        errorCode: result.errorCode ?? 'directory_error',
-        errorMessage: result.errorMessage ?? null,
-        audited: true,
-        ...fields,
-      };
+  if (result.ok) return { ok: true, ...fields };
+  const errorCode = result.errorCode ?? 'directory_error';
+  const message = account.refused?.(errorCode, user);
+  return {
+    ok: false,
+    errorCode,
+    errorMessage: result.errorMessage ?? null,
+    ...(message ? { message } : {}),
+    audited: true,
+    ...fields,
+  };
 }
 
 const accountChangeInputSchema = z.object({ change: bulkAccountChangeSchema });

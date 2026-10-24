@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { rawScalarValue } from '../lib/rawAttributes.js';
-import { parentDn } from '../providers/active-directory/normalize.js';
+import { leafRdnValue, parentDn } from '../providers/active-directory/normalize.js';
 import type {
   DirectoryObjectIdentifier,
   DirectoryProvider,
@@ -36,6 +36,8 @@ export interface AccountWrite {
    * make.
    */
   asAsked?: (user: AccountState) => Record<string, unknown> | null;
+  /** What to tell the operator when the DC refuses with `code`, if more than the code says. */
+  refused?: (code: string, user: DirectoryUser) => string | null;
   write: (
     provider: DirectoryProvider,
     user: DirectoryObjectIdentifier,
@@ -116,7 +118,7 @@ export const UNLOCK_USER = {
 const sameDn = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
 /** Move the user into this OU, which must be one the cache knows. */
-export function moveUserTo(ou: { distinguished_name: string; name: string }): AccountWrite {
+export function moveUserTo(ou: { distinguished_name: string; name: string }) {
   return {
     action: 'user.move',
     metadata: { targetOuDn: ou.distinguished_name, targetOuName: ou.name },
@@ -126,8 +128,12 @@ export function moveUserTo(ou: { distinguished_name: string; name: string }): Ac
         ? { distinguishedName: user.distinguishedName, parentDn: parent }
         : null;
     },
+    refused: (code, user) =>
+      code === 'conflict'
+        ? `An object named ${leafRdnValue(user.distinguishedName) ?? user.distinguishedName} already exists in ${ou.name}.`
+        : null,
     write: (p, user, ctx) => p.moveUser(user, ou.distinguished_name, ctx),
-  };
+  } satisfies AccountWrite;
 }
 
 /** Make the account expire at `expiresAt`, or never (null). */

@@ -931,13 +931,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           },
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz = err instanceof InsufficientAccessError || /no write|insuff/i.test(message);
-        return {
-          ok: false,
-          reason: isAuthz ? 'permission_denied' : 'directory_error',
-          errorMessage: message,
-        };
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -1218,14 +1212,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           },
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz =
-          err instanceof InsufficientAccessError || /no write|insuff|access/i.test(message);
-        return {
-          ok: false,
-          reason: isAuthz ? 'permission_denied' : 'directory_error',
-          errorMessage: message,
-        };
+        // A same-named object in the OU comes back as `conflict`.
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }

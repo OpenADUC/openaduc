@@ -89,6 +89,7 @@ describe('useBulkAccountChange', () => {
           ['Ben', 'CN=Users,DC=corp'],
         ]),
         unchanged: listed(['Cat']),
+        notes: [{ kind: 'name_taken', ...listed(['Ben']) }],
         ou: { distinguishedName: LEAVERS.distinguishedName, name: 'Leavers' },
       }),
     );
@@ -100,6 +101,9 @@ describe('useBulkAccountChange', () => {
     });
     expect(flow.title.value).toBe('Move 3 accounts to Leavers?');
     expect(flow.summary.value).toBe('2 will be moved · 1 is already in Leavers');
+    expect(flow.notes.value.map((n) => n.text)).toEqual([
+      '1 user has a name already taken in Leavers, or shared with another user being moved, so that move will fail. Rename them first.',
+    ]);
     expect(flow.effect.value).toMatch(/group memberships and GUIDs stay the same/);
     expect(flow.confirmLabel.value).toBe('Move 2 accounts');
     expect(start).not.toHaveBeenCalled();

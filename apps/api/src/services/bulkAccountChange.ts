@@ -10,9 +10,9 @@ import type {
   PreviewUser,
 } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
-import { parentDn } from '../providers/active-directory/normalize.js';
+import { leafRdn, parentDn } from '../providers/active-directory/normalize.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
-import { findCachedOu, type CachedOu } from './ouCache.js';
+import { findCachedOu, userMoveRefusal, type CachedOu } from './ouCache.js';
 import { previewList } from './previewList.js';
 import { previewToken } from './previewToken.js';
 import {
@@ -61,13 +61,18 @@ const OPS: { [K in BulkAccountOp]: AccountOp<K, never> } = {
     async resolve(db, providerId, { targetOuDn }) {
       const ou = await findCachedOu(db, providerId, targetOuDn);
       if (!ou) throw new BulkJobRequestError('ou_not_found', 'OU not found');
+      const refused = userMoveRefusal(ou);
+      if (refused) throw new BulkJobRequestError('ou_refused', refused);
       return ou;
     },
     write: moveUserTo,
     subject: (ou) => ({ ou: { distinguishedName: ou.distinguished_name, name: ou.name } }),
     token: ({ targetOuDn }) => targetOuDn.toLowerCase(),
     from: (user) => parentDn(user.distinguishedName),
-    notes: async () => NO_NOTES,
+    async notes(db, providerId, ou, users) {
+      const taken = await namesTaken(db, providerId, ou, users);
+      return (user) => (taken.has(user.id) ? ['name_taken'] : []);
+    },
   }),
   accountExpiry: accountOp<'accountExpiry', Date | null>({
     resolve: async (_db, _providerId, { expiresAt }) =>
@@ -208,6 +213,42 @@ export async function previewAccountChange(
     unknownCount: ids.filter((id) => !knownIds.has(id)).length,
     previewToken: accountPreviewToken(request.ids, request.change),
   };
+}
+
+/**
+ * The users whose name (RDN) a move to `ou` would clash on: an object in
+ * the cache holds it there already, or another of the users moved has it.
+ */
+async function namesTaken(
+  db: Kysely<DB>,
+  providerId: number,
+  ou: CachedOu,
+  users: PreviewCandidate[],
+): Promise<Set<string>> {
+  const newDn = (u: PreviewCandidate) =>
+    `${leafRdn(u.state.distinguishedName)},${ou.distinguished_name}`.toLowerCase();
+  const dns = [...new Set(users.map(newDn))];
+  if (dns.length === 0) return new Set();
+  const { rows } = await sql<{ dn: string }>`
+    SELECT lower(distinguished_name) AS dn FROM user_cache_records
+     WHERE provider_id = ${providerId} AND deleted_at IS NULL
+       AND lower(distinguished_name) = ANY(${dns}::text[])
+    UNION SELECT lower(distinguished_name) FROM group_cache_records
+     WHERE provider_id = ${providerId} AND deleted_at IS NULL
+       AND lower(distinguished_name) = ANY(${dns}::text[])
+    UNION SELECT lower(distinguished_name) FROM computer_cache_records
+     WHERE provider_id = ${providerId} AND deleted_at IS NULL
+       AND lower(distinguished_name) = ANY(${dns}::text[])
+    UNION SELECT lower(distinguished_name) FROM directory_ous
+     WHERE provider_id = ${providerId} AND deleted_at IS NULL
+       AND lower(distinguished_name) = ANY(${dns}::text[])
+  `.execute(db);
+  const held = new Set(rows.map((r) => r.dn));
+  const counts = new Map<string, number>();
+  for (const u of users) counts.set(newDn(u), (counts.get(newDn(u)) ?? 0) + 1);
+  return new Set(
+    users.filter((u) => held.has(newDn(u)) || counts.get(newDn(u))! > 1).map((u) => u.id),
+  );
 }
 
 /** How far the DC's clock may run ahead of ours when it stamps pwdLastSet. */
