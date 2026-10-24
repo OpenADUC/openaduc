@@ -220,10 +220,6 @@ function close(): void {
 
 /* Thumb-sized at phone width, where the dialog is a sheet. */
 @media (max-width: 767.98px) {
-  .rp-input :deep(.p-inputtext) {
-    min-height: 44px;
-  }
-
   .rp-input :deep(.p-button),
   .rp-tools :deep(.p-button) {
     min-width: 44px;
