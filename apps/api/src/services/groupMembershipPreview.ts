@@ -31,11 +31,11 @@ export function previewToken(
 }
 
 /** Users counted in full, and listed up to the preview's limit (they come sorted by name). */
-function listed() {
-  const list = { count: 0, users: [] as BulkGroupPreviewUser[] };
+export function listed<T = BulkGroupPreviewUser>() {
+  const list = { count: 0, users: [] as T[] };
   return {
     list,
-    add(user: BulkGroupPreviewUser): void {
+    add(user: T): void {
       list.count++;
       if (list.users.length < PREVIEW_LIST_LIMIT) list.users.push(user);
     },
