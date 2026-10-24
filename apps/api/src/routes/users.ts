@@ -9,6 +9,8 @@ import {
   userDetailSchema,
   userDeletePreflightRequestSchema,
   userDeleteRequestSchema,
+  userMatchRequestSchema,
+  userMatchResponseSchema,
   userRenameRequestSchema,
   userSearchQuerySchema,
   userSearchResponseSchema,
@@ -16,11 +18,13 @@ import {
   type RecycleBinStatus,
   type UserDeletePreflightResponse,
   type UserDetail,
+  type UserMatchResponse,
   type UserSearchResponse,
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
 import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
+import { matchEntries, matchKey } from '../lib/userMatch.js';
 import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
@@ -511,6 +515,97 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       }
 
       return userSearchResponseSchema.parse(result);
+    },
+  });
+
+  // ---- POST /api/users/match -------------------------------------------
+  // A pasted list of people, matched against the cache in one go. A read:
+  // POST only because a list of 1,000 entries doesn't fit a query string.
+  app.post('/api/users/match', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<UserMatchResponse> => {
+      const body = userMatchRequestSchema.parse(req.body);
+      const provider = await app.services.providers.buildForRequest(req);
+      const keys = [...new Set(body.entries.map(matchKey).filter((k) => k !== null))];
+      const smtpKeys = keys.filter((k) => k.includes('@')).map((k) => `smtp:${k}`);
+
+      const proxies = sql`raw_attributes_json -> 'proxyAddresses'`;
+      const rows =
+        keys.length === 0
+          ? []
+          : await app.db
+              .selectFrom('user_cache_records')
+              .where('provider_id', '=', provider.id)
+              .where('deleted_at', 'is', null)
+              .where((eb) =>
+                eb.or([
+                  eb(sql`lower(sam_account_name)`, '=', sql<string>`any(${keys}::text[])`),
+                  eb(sql`lower(user_principal_name)`, '=', sql<string>`any(${keys}::text[])`),
+                  eb(sql`lower(email)`, '=', sql<string>`any(${keys}::text[])`),
+                  eb(sql`lower(display_name)`, '=', sql<string>`any(${keys}::text[])`),
+                  sql<boolean>`exists (
+                    select 1 from jsonb_array_elements_text(
+                      case jsonb_typeof(${proxies})
+                        when 'array' then ${proxies}
+                        when 'string' then jsonb_build_array(${proxies})
+                        else '[]'::jsonb
+                      end
+                    ) as p(address)
+                    where lower(p.address) = any(${smtpKeys}::text[])
+                  )`,
+                ]),
+              )
+              .select([
+                'object_guid',
+                'sam_account_name',
+                'user_principal_name',
+                'display_name',
+                'email',
+                'department',
+                'title',
+                'enabled',
+                'distinguished_name',
+                sql<unknown>`${proxies}`.as('proxy_addresses'),
+              ])
+              .execute();
+
+      const results = matchEntries(
+        body.entries,
+        rows.map((r) => ({
+          id: r.object_guid,
+          samAccountName: r.sam_account_name ?? '',
+          userPrincipalName: r.user_principal_name,
+          displayName: r.display_name,
+          email: r.email,
+          department: r.department,
+          title: r.title,
+          enabled: r.enabled,
+          distinguishedName: r.distinguished_name,
+          proxyAddresses: rawArrayValues(r.proxy_addresses),
+        })),
+      );
+
+      if (await app.services.settings.get<boolean>('audit.search_enabled', false)) {
+        const count = (status: string) => results.filter((r) => r.status === status).length;
+        await app.services.audit
+          .recordEvent({
+            ...auditContextFromRequest(req),
+            action: 'user.search',
+            result: 'success',
+            actorAuthMethod: 'ad-password',
+            providerId: provider.id,
+            targetType: 'user',
+            metadata: {
+              pastedList: results.map((r) => r.entry),
+              matched: count('matched'),
+              ambiguous: count('ambiguous'),
+              unmatched: count('unmatched'),
+            },
+          })
+          .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
+      }
+
+      return userMatchResponseSchema.parse({ results });
     },
   });
 
