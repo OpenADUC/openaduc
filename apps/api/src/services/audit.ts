@@ -45,6 +45,7 @@ const SENSITIVE_KEYS = new Set([
   'actorpassword',
   'elevatedpassword',
   'clientsecret',
+  'temporaryaccesspass',
   'pass',
   'pwd',
   'unicodepwd',
