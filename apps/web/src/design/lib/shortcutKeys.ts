@@ -7,7 +7,7 @@ export const SHORTCUT_KEYS = {
   list: { search: '/', next: 'j', previous: 'k', open: 'Enter' },
   tabs: ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
   // Enable and Disable share a key: only one of them fits an account.
-  user: { unlock: 'u', resetPassword: 'r', enableDisable: 'e', move: 'm' },
+  user: { unlock: 'u', resetPassword: 'r', enableDisable: 'e', move: 'm', issueTap: 't' },
   computer: { enableDisable: 'e', resetAccount: 'r', move: 'm' },
   group: { addMember: 'a' },
 } as const;

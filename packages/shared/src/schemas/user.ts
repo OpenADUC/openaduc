@@ -197,6 +197,8 @@ export const userDetailSchema = userSummarySchema.extend({
           status: z.enum(['success', 'p1_required', 'forbidden', 'not_found']).nullable(),
         })
         .nullable(),
+      /** The integration's Temporary Access Pass feature is on, so Issue TAP is offered. */
+      temporaryAccessPass: z.boolean(),
     })
     .nullable(),
   // Every populated LDAP attribute on the user entry, with binary blobs

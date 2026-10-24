@@ -30,6 +30,7 @@ import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
+import IssueTapDialog from '../design/feedback/IssueTapDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import ReassignReportsDialog from '../design/feedback/ReassignReportsDialog.vue';
@@ -514,6 +515,14 @@ function openResetDialog(): void {
   resetDialogOpen.value = true;
 }
 
+// ---- Issue Temporary Access Pass -------------------------------------------
+
+const tapDialogOpen = ref(false);
+
+function onTapIssued(): void {
+  void loadActivity();
+}
+
 async function onPasswordReset(outcome: ResetOutcome): Promise<void> {
   toast.add(passwordResetToast(outcome));
   await load();
@@ -808,6 +817,20 @@ const actions = computed<ObjectAction[]>(() => {
     ...USER_ACTION_ORDER.map((a) =>
       userAction(a, a === 'reset-password' ? openResetDialog : () => runOnUser(a)),
     ),
+    ...(u?.entra?.temporaryAccessPass
+      ? [
+          {
+            label: 'Issue Temporary Access Pass…',
+            icon: 'pi-ticket',
+            capability: 'write:user.issueTap',
+            shortcut: SHORTCUT_KEYS.user.issueTap,
+            unavailable: u.enabled ? null : 'the account is disabled',
+            run: () => {
+              tapDialogOpen.value = true;
+            },
+          } satisfies ObjectAction,
+        ]
+      : []),
     {
       label: expirySubmitting.value ? 'Saving expiry…' : 'Account expiry…',
       icon: 'pi-calendar',
@@ -1919,6 +1942,7 @@ watch(user, (u) => {
     <ConfirmDialog v-bind="leaveDialog" />
 
     <ResetPasswordDialog v-model:visible="resetDialogOpen" :user="user" @reset="onPasswordReset" />
+    <IssueTapDialog v-model:visible="tapDialogOpen" :user="user" @issued="onTapIssued" />
     <RenameUserDialog v-model:visible="renameDialogOpen" :user="user" @renamed="onRenamed" />
     <NewUserDialog
       v-if="copyDialogOpen"

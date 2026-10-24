@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
+import {
+  ENTRA_FEATURE_KEYS,
+  ENTRA_FEATURE_PERMISSIONS,
+  type EntraFeatureKey,
+} from '@openaduc/shared';
 import { decryptSecret, encryptSecret } from '../lib/encryption.js';
 
 // Per-directory Microsoft Entra (Graph) integration. Sibling to
@@ -13,17 +18,23 @@ import { decryptSecret, encryptSecret } from '../lib/encryption.js';
 // path, which the GraphClient and the test-connection route consume. The
 // public summary type intentionally omits secret material.
 
-export const ENTRA_FEATURE_KEYS = [
-  'photos',
-  'signInActivity',
-  'signInEvents',
-  'mfaRegistration',
-  'teamsAdminWebhook',
-  'passwordExpiryNotifications',
-] as const;
-export type EntraFeatureKey = (typeof ENTRA_FEATURE_KEYS)[number];
-
 export type EntraFeatureFlags = Partial<Record<EntraFeatureKey, boolean>>;
+
+/** The narrowest permission for each need of the turned-on features that isn't granted. */
+export function missingPermissions(
+  features: EntraFeatureFlags,
+  granted: readonly string[],
+): string[] {
+  const have = new Set(granted);
+  const missing = new Set<string>();
+  for (const key of ENTRA_FEATURE_KEYS) {
+    if (!features[key]) continue;
+    for (const p of ENTRA_FEATURE_PERMISSIONS[key] ?? []) {
+      if (!have.has(p.name) && !p.alsoMetBy.some((alt) => have.has(alt))) missing.add(p.name);
+    }
+  }
+  return [...missing];
+}
 
 export interface EntraIntegrationSummary {
   id: number;

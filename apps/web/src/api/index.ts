@@ -62,6 +62,11 @@ import type {
   OuListResponse,
   OuUpdateRequest,
   ResetPasswordRequest,
+  EntraFeatureKey,
+  EntraTestResponse,
+  TapIssueRequest,
+  TapIssueResponse,
+  TapPreflight,
   RestoreUserRequest,
   MfaRegistrationResponse,
   MfaRegistrationStatus,
@@ -188,14 +193,6 @@ export type SyncTaskKey =
   | 'entra.signins.events'
   | 'entra.mfa.registration'
   | 'entra.password-expiry.notify';
-
-export type EntraFeatureKey =
-  | 'photos'
-  | 'signInActivity'
-  | 'signInEvents'
-  | 'mfaRegistration'
-  | 'teamsAdminWebhook'
-  | 'passwordExpiryNotifications';
 
 export interface EntraIntegrationSummary {
   id: number;
@@ -521,6 +518,16 @@ export const api = {
     },
     resetPassword(id: string, body: ResetPasswordRequest): Promise<{ ok: boolean }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    /** Whether a Temporary Access Pass can be issued to the user, and within what limits. */
+    tapPreflight(id: string): Promise<TapPreflight> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`);
+    },
+    issueTap(id: string, body: TapIssueRequest): Promise<TapIssueResponse> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`, {
         method: 'POST',
         body: JSON.stringify(body),
       });
@@ -933,9 +940,7 @@ export const api = {
       remove(id: number): Promise<{ ok: boolean }> {
         return apiFetch(`/directories/${id}/entra`, { method: 'DELETE' });
       },
-      test(
-        id: number,
-      ): Promise<{ ok: boolean; message: string; tenantDisplayName: string | null }> {
+      test(id: number): Promise<EntraTestResponse> {
         return apiFetch(`/directories/${id}/entra/test`, { method: 'POST' });
       },
       /**

@@ -15,6 +15,7 @@ export function buildLoggerOptions(env: Env): LoggerOptions {
           'actorPassword',
           'elevatedPassword',
           'clientSecret',
+          'temporaryAccessPass',
         ].flatMap((key) => [key, `*.${key}`, `*.*.${key}`]),
         'unicodePwd',
         '*.unicodePwd',

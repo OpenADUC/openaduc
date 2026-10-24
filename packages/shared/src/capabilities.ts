@@ -10,6 +10,7 @@ export const CAPABILITIES = [
   'write:user.create',
   'write:user.unlock',
   'write:user.resetPassword',
+  'write:user.issueTap',
   'write:user.enableDisable',
   'write:user.attributes',
   'write:user.move',
@@ -46,6 +47,10 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     'write:user.create',
     'write:user.unlock',
     'write:user.resetPassword',
+    // Walk-ins and reissues are helpdesk work. A pass does nothing until the
+    // directory's Entra integration has the feature turned on, which takes
+    // configure:directory, and privileged accounts are refused.
+    'write:user.issueTap',
     'write:user.enableDisable',
     'write:user.attributes',
     'write:user.move',
