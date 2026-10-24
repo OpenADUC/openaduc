@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { LDAP_TLS_MODES, type LdapTlsMode, ldapTransportProblem } from '@openaduc/shared';
-import type { Kysely } from 'kysely';
+import {
+  DEFAULT_NAMING_PATTERN,
+  LDAP_TLS_MODES,
+  type LdapTlsMode,
+  type NamingSettings,
+  ldapTransportProblem,
+} from '@openaduc/shared';
+import { type Kysely, sql } from 'kysely';
 import type { Env } from '../config/env.js';
 import type { DB } from '../db/types.js';
 import { decryptSecret, encryptSecret } from '../lib/encryption.js';
@@ -45,6 +51,8 @@ export interface DirectoryProviderSummary {
   syncBindUpn: string | null;
   /** Whether a sync bind password is stored. Never returns the password. */
   hasSyncBindPassword: boolean;
+  /** How new accounts are named: the defaults until changed with configure:directory. */
+  naming: NamingSettings;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -198,16 +206,7 @@ export class DirectoryConfigService {
     id: number,
     patch: Partial<DirectoryProviderInput>,
   ): Promise<DirectoryProviderSummary> {
-    const row = await this.db
-      .selectFrom('directory_providers')
-      .selectAll()
-      .where('id', '=', id)
-      .executeTakeFirst();
-    if (!row) throw new Error(`directory provider ${id} not found`);
-
-    const existingConfig = (row.config_json as Record<string, unknown> | null) ?? {};
-    const nextConfig = {
-      ...existingConfig,
+    const configPatch = {
       ...(patch.tlsRejectUnauthorized !== undefined
         ? { tlsRejectUnauthorized: patch.tlsRejectUnauthorized }
         : {}),
@@ -216,9 +215,10 @@ export class DirectoryConfigService {
         : {}),
     };
 
+    // Merged in the database, so a concurrent updateNaming isn't overwritten.
     const setClause: Record<string, unknown> = {
       updated_at: new Date(),
-      config_json: JSON.stringify(nextConfig),
+      config_json: sql`config_json || ${JSON.stringify(configPatch)}::jsonb`,
     };
     if (patch.name !== undefined) setClause.name = patch.name;
     if (patch.displayName !== undefined) setClause.display_name = patch.displayName;
@@ -241,8 +241,22 @@ export class DirectoryConfigService {
       .set(setClause)
       .where('id', '=', id)
       .returningAll()
-      .executeTakeFirstOrThrow();
+      .executeTakeFirst();
+    if (!updated) throw new Error(`directory provider ${id} not found`);
+    return rowToSummary(updated, this.env);
+  }
 
+  /** Replace the naming pattern and UPN suffix. Existing accounts keep their names. */
+  async updateNaming(id: number, naming: NamingSettings): Promise<DirectoryProviderSummary> {
+    const updated = await this.db
+      .updateTable('directory_providers')
+      .set({
+        updated_at: new Date(),
+        config_json: sql`config_json || ${JSON.stringify({ naming })}::jsonb`,
+      })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
     return rowToSummary(updated, this.env);
   }
 
@@ -261,6 +275,14 @@ function parseTlsRejectUnauthorized(config: unknown): boolean | null {
   if (!config || typeof config !== 'object') return null;
   const v = (config as { tlsRejectUnauthorized?: unknown }).tlsRejectUnauthorized;
   return typeof v === 'boolean' ? v : null;
+}
+
+function parseNaming(config: unknown, domain: string): NamingSettings {
+  const stored = (config as { naming?: Partial<NamingSettings> } | null)?.naming;
+  return {
+    pattern: typeof stored?.pattern === 'string' ? stored.pattern : DEFAULT_NAMING_PATTERN,
+    upnSuffix: typeof stored?.upnSuffix === 'string' ? stored.upnSuffix : domain.toLowerCase(),
+  };
 }
 
 function rowToSummary(
@@ -298,6 +320,7 @@ function rowToSummary(
     configured: row.configured,
     syncBindUpn: row.sync_bind_upn ?? null,
     hasSyncBindPassword: !!row.sync_bind_secret_encrypted,
+    naming: parseNaming(row.config_json, row.domain_name),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };

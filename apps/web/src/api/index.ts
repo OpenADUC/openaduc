@@ -30,6 +30,8 @@ import type {
   LoginRequest,
   MeResponse,
   MoveRequest,
+  NamingSettings,
+  NamingSettingsResponse,
   OuContentsResponse,
   OuCreateRequest,
   OuDeleteRequest,
@@ -99,6 +101,7 @@ export interface DirectorySummary {
   // endpoint, not here.
   syncBindUpn: string | null;
   hasSyncBindPassword: boolean;
+  naming: NamingSettings;
   createdAt: string;
   updatedAt: string;
 }
@@ -650,6 +653,14 @@ export const api = {
     },
     update(id: number, body: DirectoryPatch): Promise<{ directory: DirectorySummary }> {
       return apiFetch(`/directories/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    },
+    naming: {
+      get(id: number): Promise<NamingSettingsResponse> {
+        return apiFetch(`/directories/${id}/naming`);
+      },
+      update(id: number, body: NamingSettings): Promise<NamingSettingsResponse> {
+        return apiFetch(`/directories/${id}/naming`, { method: 'PUT', body: JSON.stringify(body) });
+      },
     },
     sync(id: number): Promise<{ started: boolean; reason?: string }> {
       return apiFetch(`/directories/${id}/sync`, { method: 'POST' });
