@@ -185,6 +185,21 @@ export function rowSnapshots(changes: readonly FieldChange[]): {
   return { before, after };
 }
 
+/** The user's values for the fields an edit names, by attribute: a no-op row's before and after. */
+export function askedSnapshot(
+  values: AttributeValues,
+  changes: ResolvedChanges,
+): Record<string, string | null> {
+  const out: Record<string, string | null> = {};
+  for (const field of BULK_ATTRIBUTE_FIELDS) {
+    if (changes[field] === undefined) continue;
+    if (field === 'manager') out['managerDn'] = values.managerDn;
+    else if (field === 'country') Object.assign(out, values.country);
+    else out[field] = values[field];
+  }
+  return out;
+}
+
 /**
  * Names this edit of these users, whatever their order or case, so the
  * job can check it runs on what the operator previewed. Not a secret: it

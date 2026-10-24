@@ -22,6 +22,7 @@ import {
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
 import {
+  askedSnapshot,
   attributesPreviewToken,
   changesSubject,
   fieldChanges,
@@ -401,7 +402,7 @@ const attributesInputSchema = z.object({ changes: bulkAttributeChangesSchema });
  * Edit each user's attributes, one row per user. A row reads the user
  * live and writes only the fields not already as asked, in one change
  * audited as the single-user edit is; a user with none to change is
- * skipped, and nothing is written or audited for them.
+ * skipped, and nothing is written for them.
  */
 function userAttributesHandler(): BulkJobHandler<
   z.infer<typeof bulkUserAttributesRequestSchema>,
@@ -428,16 +429,10 @@ function userAttributesHandler(): BulkJobHandler<
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
       const { user } = live;
       const targetDn = user.distinguishedName;
-      let changes;
+      let resolved;
       try {
         // The manager's DN as it is now, should it have moved since the job started.
-        const resolved = await resolveChanges(
-          ctx.db,
-          ctx.provider.id,
-          [row.targetId],
-          row.input.changes,
-        );
-        changes = fieldChanges(liveValues(user), resolved);
+        resolved = await resolveChanges(ctx.db, ctx.provider.id, [row.targetId], row.input.changes);
       } catch (err) {
         if (!(err instanceof BulkJobRequestError)) throw err;
         return {
@@ -451,7 +446,24 @@ function userAttributesHandler(): BulkJobHandler<
           targetDn,
         };
       }
+      const values = liveValues(user);
+      const changes = fieldChanges(values, resolved);
       if (changes.length === 0) {
+        // Audited as a no-op, before and after alike, so the job's events
+        // account for every user it counted.
+        const snapshot = askedSnapshot(values, resolved);
+        await ctx.services.audit.recordEvent({
+          ...ctx.audit,
+          action: 'user.update',
+          result: 'success',
+          actorAuthMethod: 'ad-password',
+          targetType: 'user',
+          targetId: user.objectGuid,
+          targetDn,
+          metadata: { fields: [] },
+          before: snapshot,
+          after: snapshot,
+        });
         return { ok: true, unchanged: true, before: row.before, after: row.after, targetDn };
       }
       const result = await writeUserAttributes(

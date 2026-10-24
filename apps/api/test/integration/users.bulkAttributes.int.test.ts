@@ -55,20 +55,21 @@ interface AuditRow {
 async function setAttributes(sam: string, values: Record<string, string[]>): Promise<void> {
   const dn = String((await readDirectoryUser(sam, ['distinguishedName']))!.dn);
   const { Attribute, Change } = await import('ldapts');
-  await asAdministrator((client) =>
-    client.modify(
-      dn,
-      Object.entries(values).map(
-        ([type, vals]) =>
+  await asAdministrator(async (client) => {
+    // One at a time: deleting one the user lacks fails the whole modify.
+    for (const [type, vals] of Object.entries(values)) {
+      await client
+        .modify(
+          dn,
           new Change({
             operation: vals.length ? 'replace' : 'delete',
             modification: new Attribute({ type, values: vals }),
           }),
-      ),
-    ),
-  ).catch((err: Error) => {
-    // Deleting an attribute the user doesn't have.
-    if (err.name !== 'NoSuchAttributeError') throw err;
+        )
+        .catch((err: Error) => {
+          if (err.name !== 'NoSuchAttributeError') throw err;
+        });
+    }
   });
 }
 
@@ -85,18 +86,26 @@ describe('editing users’ attributes in bulk', () => {
   let operator: TestClient;
   let auditor: TestClient;
   let users: Record<Fixture, string>;
-  const original = new Map<string, Record<string, string[]>>();
+
+  /** The edited fixtures' seeded values (dev/samba-dc/seed.sh), for afterAll to put back. */
+  const SEEDED: Record<string, string[]> = {
+    company: [],
+    physicalDeliveryOfficeName: [],
+    manager: [],
+    l: [],
+    c: [],
+    co: [],
+    countryCode: ['0'],
+  };
+  const seededDepartment = { alice: 'Engineering', bob: 'Engineering', dave: 'Sales' };
 
   beforeAll(async () => {
     reseedDirectory();
-    for (const sam of Object.values(SAM)) original.set(sam, await directoryValues(sam));
     // A known start: Alice in Engineering, Bob and Dave in Sales, all at Initech.
+    for (const sam of [SAM.alice, SAM.bob, SAM.dave, SAM.admin]) await setAttributes(sam, SEEDED);
     await setAttributes(SAM.alice, { department: ['Engineering'], company: ['Initech'] });
     await setAttributes(SAM.bob, { department: ['Sales'], company: ['Initech'] });
     await setAttributes(SAM.dave, { department: ['Sales'], company: ['Initech'] });
-    for (const sam of [SAM.alice, SAM.bob, SAM.dave, SAM.admin]) {
-      await setAttributes(sam, { physicalDeliveryOfficeName: [], manager: [], l: [] });
-    }
 
     api = await startApi();
     await configureDirectory(api);
@@ -118,12 +127,8 @@ describe('editing users’ attributes in bulk', () => {
 
   afterAll(async () => {
     await api?.close();
-    for (const [sam, values] of original) {
-      const { countryCode, ...rest } = values;
-      await setAttributes(sam, {
-        ...rest,
-        countryCode: countryCode!.length ? countryCode! : ['0'],
-      });
+    for (const [key, department] of Object.entries(seededDepartment)) {
+      await setAttributes(SAM[key as Fixture], { ...SEEDED, department: [department] });
     }
   });
 
@@ -370,14 +375,22 @@ describe('editing users’ attributes in bulk', () => {
       ]);
     });
 
-    it('skips users already as asked, writing nothing for them', async () => {
+    it('skips users already as asked, writing nothing for them but auditing them', async () => {
       const job = await finished(
         (await start([users.alice, users.bob], { department: 'Sales', company: null })).id,
       );
 
       expect(job.counts).toMatchObject({ total: 2, succeeded: 0, skipped: 2 });
       const events = (await jobEvents(job.id)).filter((e) => e.action === 'user.update');
-      expect(events).toEqual([]);
+      expect(events).toHaveLength(2);
+      for (const event of events) {
+        expect(event).toMatchObject({
+          result: 'success',
+          metadata: { fields: [] },
+          before: { department: 'Sales', company: null },
+          after: { department: 'Sales', company: null },
+        });
+      }
     });
 
     it('writes only the fields a user isn’t already as asked in', async () => {
@@ -388,8 +401,13 @@ describe('editing users’ attributes in bulk', () => {
       );
 
       expect(job.counts).toMatchObject({ succeeded: 1, skipped: 1 });
-      const [event] = (await jobEvents(job.id)).filter((e) => e.action === 'user.update');
-      expect(event).toMatchObject({ targetId: users.alice, metadata: { fields: ['l'] } });
+      const events = (await jobEvents(job.id)).filter((e) => e.action === 'user.update');
+      expect(events.map((e) => [nameOf(e.targetId!), e.metadata.fields])).toEqual(
+        expect.arrayContaining([
+          ['alice', ['l']],
+          ['bob', []],
+        ]),
+      );
       expect((await directoryValues(SAM.alice)).l).toEqual(['York']);
     });
 
