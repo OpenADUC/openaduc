@@ -4,7 +4,7 @@ import { watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
-import { LICENSE_ERROR_TEXT, type LicenseAssignment } from '@openaduc/shared';
+import { licenseProblem } from '@openaduc/shared';
 import { useUserLicenses } from '../composables/useLicenses.js';
 import { LICENSE_ICON, plansOffText } from '../lib/licenses.js';
 import EmptyState from './EmptyState.vue';
@@ -19,9 +19,6 @@ watch(
   (id) => void load(id),
   { immediate: true },
 );
-
-const problem = (a: LicenseAssignment) =>
-  a.error || a.state === 'error' ? LICENSE_ERROR_TEXT[a.error ?? 'Other'] : null;
 </script>
 
 <template>
@@ -76,12 +73,12 @@ const problem = (a: LicenseAssignment) =>
               >· {{ plansOffText(a.disabledPlanCount) }}</span
             >
             <p
-              v-if="problem(a)"
+              v-if="licenseProblem(a)"
               class="lic-error"
               :class="{ 'lic-error-partial': a.state === 'activeWithError' }"
             >
               <i class="pi pi-exclamation-triangle" aria-hidden="true" />
-              {{ problem(a) }}
+              {{ licenseProblem(a) }}
             </p>
           </li>
         </ul>

@@ -208,7 +208,7 @@ describe('an import’s results', () => {
   });
 
   it('reads the job again every half minute while licenses wait to settle in Entra', async () => {
-    const licensed = (status: 'waiting' | 'settled'): ImportJobRow => ({
+    const licensed = (status: 'waiting' | 'settled' | 'stopped'): ImportJobRow => ({
       ...ROWS[0]!,
       licenses: {
         status,
@@ -246,6 +246,15 @@ describe('an import’s results', () => {
     await vi.advanceTimersByTimeAsync(POLL.afterStopMs * 2);
     expect(imports.job).toHaveBeenCalledTimes(2);
     scope.stop();
+
+    // Nor once a check has stopped.
+    imports.job.mockReset().mockResolvedValue({ ...answer(finished), rows: [licensed('stopped')] });
+    const again = setup();
+    await again.imp.open('9');
+    expect(again.imp.licensesWaiting.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(POLL.afterStopMs * 2);
+    expect(imports.job).toHaveBeenCalledTimes(1);
+    again.scope.stop();
   });
 
   it('waits for the page to be shown again before polling', async () => {

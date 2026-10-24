@@ -260,7 +260,7 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
         return jobs.create(
           actorFrom(req),
           IMPORT_JOB_ACTION,
-          importPlan(body.import, directory.newUsers.phoneCountry, checkLicenses),
+          importPlan(body.import, directory.newUsers.phoneCountry, { checkLicenses }),
           (subject) => requireFor(app, req, jobs.handlers[IMPORT_JOB_ACTION], subject),
         );
       })().catch(refuseBulkRequest);

@@ -79,7 +79,6 @@ export const importPlanRowSchema = z.object({
   groupIds: z.array(z.string()),
   /** Written to msExchUsageLocation when the schema has it. */
   usageLocation: text,
-  /** When the onboarding class's passes start, if by each person's start date. */
   startDate: text,
 });
 export type ImportPlanRow = z.infer<typeof importPlanRowSchema>;

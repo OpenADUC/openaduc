@@ -245,7 +245,7 @@ export async function checkImport(
 export function importPlan(
   body: CheckedImportRequest,
   phoneCountry: string | null,
-  checkLicenses = false,
+  { checkLicenses = false }: { checkLicenses?: boolean } = {},
 ): ImportPlan {
   return {
     password: body.password,

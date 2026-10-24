@@ -107,9 +107,11 @@ describe('an import’s page', () => {
     expect(cells[0]).toContain('Not assigned');
     expect(cells[0]).toContain('From All Staff');
     expect(cells[0]).toContain('Not enough licenses');
-    expect(cells[1]).toContain('Waiting');
+    expect(cells[1]).toContain('Not assigned yet');
     expect(cells[1]).toContain('Waiting for Connect Sync to bring them to Microsoft Entra.');
     expect(cells[2]).toBe('');
-    expect(page.text()).toContain('again every half minute');
+    expect(page.text()).toContain(
+      'then again after a minute, two, four and eight, and every quarter of an hour after that',
+    );
   });
 });

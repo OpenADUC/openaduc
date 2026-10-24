@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 // An import's job, as its results page shows it: its progress while it
-// runs, then each row's result, the retry of what failed, and the results
-// CSV, and, once each person has synced, how the licenses their groups
-// grant stand in Entra (read again every half minute while any is still
-// settling, after the job has stopped). In generate and set modes the
-// CSV holds the passwords and can be
-// downloaded once; after that, or once they're purged, the page says so
-// and offers to reset the new accounts' passwords, a job of its own whose
-// CSV hands the new passwords out the same way.
+// runs, then each row's result, the retry of what failed, the results
+// CSV, and how the licenses each person's groups grant stand in Entra
+// once they've synced (the job is read again every half minute, after it
+// has stopped, while any is still waiting). In generate and set modes the
+// CSV holds the passwords and can be downloaded once; after that, or once
+// they're purged, the page says so and offers to reset the new accounts'
+// passwords, a job of its own whose CSV hands the new passwords out the
+// same way.
 
 import { computed, ref, shallowRef } from 'vue';
 import {
@@ -67,7 +67,6 @@ export function useImportJob(opts: {
   /** The import issues TAPs for class: whether anyone is still unsynced close to it. */
   const classTap = computed(() => data.value?.classTap ?? null);
   const stopped = computed(() => !!job.value && bulkJobStopped(job.value));
-  /** Some rows' licenses are still settling in Entra. */
   const licensesWaiting = computed(() => rows.value.some((r) => r.licenses?.status === 'waiting'));
 
   /** Whichever of the import and its reset may still change, for polling. */
@@ -86,9 +85,7 @@ export function useImportJob(opts: {
       data.value = next;
       loadError.value = null;
       const following = polling.follow(current, followed(next), wasActive);
-      if (!following && next.rows.some((r) => r.licenses?.status === 'waiting')) {
-        polling.after(current, POLL.afterStopMs);
-      }
+      if (!following && licensesWaiting.value) polling.after(current, POLL.afterStopMs);
     } catch (err) {
       if (current !== id || polling.disposed) return;
       if (background) polling.retryLater(current);

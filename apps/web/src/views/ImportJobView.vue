@@ -13,11 +13,12 @@ import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import {
+  IMPORT_LICENSE_STATE_LABEL,
   IMPORT_ROW_STATUS_LABEL,
-  LICENSE_ERROR_TEXT,
+  licenseProblem,
   type BulkJobResultsDownload,
   type ImportJobRow,
-  type ImportRowLicenses,
+  type ImportLicenseState,
 } from '@openaduc/shared';
 import LicenseName from '../design/primitives/LicenseName.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
@@ -90,16 +91,13 @@ const problemsOf = (row: ImportJobRow): string[] =>
       ? [row.errorMessage]
       : [];
 
-type RowLicense = ImportRowLicenses['licenses'][number];
-const LICENSE_STATE: Record<RowLicense['state'], { label: string; tone: string }> = {
-  pending: { label: 'Waiting', tone: 'muted' },
-  active: { label: 'Assigned', tone: 'green' },
-  activeWithError: { label: 'Assigned, with an error', tone: 'amber' },
-  disabled: { label: 'Disabled', tone: 'muted' },
-  error: { label: 'Not assigned', tone: 'red' },
+const LICENSE_TONE: Record<ImportLicenseState, string> = {
+  pending: 'muted',
+  active: 'green',
+  activeWithError: 'amber',
+  disabled: 'muted',
+  error: 'red',
 };
-const licenseProblem = (l: RowLicense) =>
-  l.error || l.state === 'error' ? LICENSE_ERROR_TEXT[l.error ?? 'Other'] : null;
 const showLicenses = computed(() => rows.value.some((r) => r.licenses));
 
 const downloadLabel = computed(() =>
@@ -216,8 +214,10 @@ const downloadLabel = computed(() =>
       <section class="ij-section" aria-labelledby="ij-rows">
         <h2 id="ij-rows" class="ij-title">People</h2>
         <p v-if="imp.licensesWaiting.value" class="ij-note">
-          Licenses are read from Microsoft Entra once each person has synced, and again every half
-          minute until each one is assigned or Entra says why not.
+          OpenADUC reads each person’s licenses from Microsoft Entra once they’ve synced, then again
+          after a minute, two, four and eight, and every quarter of an hour after that, until each
+          license is assigned or Entra says why not. It stops waiting a day after the import for
+          sync, and two hours after sync for the licenses.
         </p>
         <div class="ij-table-wrap">
           <table class="ij-table">
@@ -259,8 +259,8 @@ const downloadLabel = computed(() =>
                       <li v-for="l in row.licenses.licenses" :key="`${l.skuId}:${l.group}`">
                         <span class="ij-license-head">
                           <LicenseName :license="l" />
-                          <span class="badge" :class="`badge-${LICENSE_STATE[l.state].tone}`">
-                            <span class="badge-dot" />{{ LICENSE_STATE[l.state].label }}
+                          <span class="badge" :class="`badge-${LICENSE_TONE[l.state]}`">
+                            <span class="badge-dot" />{{ IMPORT_LICENSE_STATE_LABEL[l.state] }}
                           </span>
                         </span>
                         <span class="hint">From {{ l.group }}</span>
