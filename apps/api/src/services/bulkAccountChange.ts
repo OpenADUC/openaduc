@@ -210,10 +210,14 @@ export async function previewAccountChange(
   };
 }
 
+/** How far the DC's clock may run ahead of ours when it stamps pwdLastSet. */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+
 /**
- * The users whose password was last set here in random mode (a create
- * nobody saw the password of), not reset since: they set their own in
- * Entra.
+ * The users whose password was last set here in random mode (a create,
+ * or the finish of one, that nobody saw the password of), and not since:
+ * not reset by an operator, nor changed by them (pwdLastSet no later than
+ * that create). They set their own in Entra.
  */
 async function randomPasswordUsers(
   db: Kysely<DB>,
@@ -221,16 +225,27 @@ async function randomPasswordUsers(
   users: PreviewCandidate[],
 ): Promise<Set<string>> {
   if (users.length === 0) return new Set();
-  const ids = users.map((u) => u.id);
-  const { rows } = await sql<{ user_id: string; mode: string | null }>`
-    SELECT DISTINCT ON (target_id) lower(target_id) AS user_id, metadata_json->>'passwordMode' AS mode
+  const { rows } = await sql<{ target_id: string; timestamp: Date; mode: string | null }>`
+    SELECT DISTINCT ON (target_id) target_id, timestamp, metadata_json->>'passwordMode' AS mode
       FROM audit_events
      WHERE provider_id = ${providerId}
-       AND result = 'success'
-       AND target_id = ANY(${ids}::text[])
-       AND (action = 'user.password.reset'
+       AND target_type = 'user'
+       AND target_id = ANY(${users.map((u) => u.id)}::text[])
+       AND ((action = 'user.password.reset' AND result = 'success')
             OR (action IN ('user.create', 'user.create.finish') AND metadata_json ? 'passwordMode'))
-     ORDER BY target_id, id DESC
+     ORDER BY target_id, timestamp DESC, id DESC
   `.execute(db);
-  return new Set(rows.filter((r) => r.mode === 'random').map((r) => r.user_id));
+  const setAt = new Map(users.map((u) => [u.id, u.state.passwordLastSetAt]));
+  return new Set(
+    rows
+      .filter((r) => {
+        const last = setAt.get(r.target_id.toLowerCase());
+        return (
+          r.mode === 'random' &&
+          !!last &&
+          last.getTime() <= new Date(r.timestamp).getTime() + CLOCK_SKEW_MS
+        );
+      })
+      .map((r) => r.target_id.toLowerCase()),
+  );
 }
