@@ -5,6 +5,7 @@
 // remember where each bucket went.
 import { z } from 'zod';
 import { directoryCountry } from '../country.js';
+import type { BulkJob, BulkJobRowStatus } from './bulkJob.js';
 import {
   CONTROL_CHARS,
   RESET_PASSWORD_MIN_LENGTH,
@@ -222,6 +223,69 @@ export const importRequestSchema = z
   });
 export type ImportRequest = z.input<typeof importRequestSchema>;
 export type CheckedImportRequest = z.output<typeof importRequestSchema>;
+
+// ---- The run ------------------------------------------------------------
+
+/**
+ * What an import does for each row, in this order: create the account
+ * disabled, set its password, enable it if asked, add it to its bucket's
+ * groups, set its manager. Follow-ups that need the account (a Temporary
+ * Access Pass) come after.
+ */
+export const IMPORT_STEPS = ['create', 'password', 'enable', 'groups', 'manager'] as const;
+export type ImportStep = (typeof IMPORT_STEPS)[number];
+
+/** Running an import: the request the final check passed. */
+export const importRunRequestSchema = z
+  .object({
+    import: importRequestSchema,
+    /** The operator ticked that rows going in groups AD protects gain admin rights. */
+    acknowledgeProtected: z.boolean().default(false),
+  })
+  .strict();
+export type ImportRunRequest = z.input<typeof importRunRequestSchema>;
+
+/** How long an import holds its passwords for the results CSV, unless downloaded first. */
+export const IMPORT_PASSWORDS_HELD_HOURS = 24;
+
+/** One row of an import's job, as its results show it. */
+export interface ImportJobRow {
+  /** Its row in the spreadsheet. */
+  line: number;
+  displayName: string;
+  samAccountName: string;
+  userPrincipalName: string;
+  status: BulkJobRowStatus;
+  /** The account's objectGUID, once it's created. */
+  id: string | null;
+  completed: ImportStep[];
+  /** The steps that failed, each saying why (a group step names the groups). */
+  failed: { step: ImportStep; message: string }[];
+  errorMessage: string | null;
+}
+
+/**
+ * Whether the results CSV holds the passwords: `none` in random mode;
+ * `held` until the operator downloads it (once), or until it expires.
+ */
+export type ImportPasswordsState = 'none' | 'held' | 'downloaded' | 'expired';
+
+export interface ImportJobResponse {
+  job: BulkJob;
+  rows: ImportJobRow[];
+  results: {
+    passwords: ImportPasswordsState;
+    downloadedAt: string | null;
+    /** When held passwords are purged; null in random mode. */
+    expiresAt: string | null;
+  };
+}
+
+/** The results CSV, as the browser saves it. */
+export interface ImportResultsDownload {
+  fileName: string;
+  csv: string;
+}
 
 export type ImportCheckIssueKind =
   | 'unusable'

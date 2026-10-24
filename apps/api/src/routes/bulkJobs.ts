@@ -48,7 +48,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       handler: async (req, reply) => {
         const id = await jobs
           .create(actorFrom(req), action, req.body, (subject) =>
-            requireFor(req, jobs.handlers[action], subject),
+            requireFor(app, req, jobs.handlers[action], subject),
           )
           .catch(refuseBulkRequest);
         return reply
@@ -92,7 +92,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await requireFor(req, jobs.runner(job), job.subject_json);
+      await requireFor(app, req, jobs.runner(job), job.subject_json);
       if (!(await jobs.resume(job, actorFrom(req)))) {
         throw app.httpErrors.conflict('only a paused job can be continued');
       }
@@ -104,7 +104,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await requireFor(req, jobs.runner(job), job.subject_json);
+      await requireFor(app, req, jobs.runner(job), job.subject_json);
       if (!(await jobs.retry(job, actorFrom(req)).catch(refuseBulkRequest))) {
         throw app.httpErrors.conflict('the job is still running, or has no failed rows');
       }
@@ -154,20 +154,9 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       await app.requireCapability(req, 'view:audit');
     }
     if (job.reverts_job_id === null && canRevert(job.action)) {
-      await requireFor(req, revertRunner(job.action), job.subject_json);
+      await requireFor(app, req, revertRunner(job.action), job.subject_json);
     }
     return job;
-  }
-
-  /** The job's capability, and what its subject takes beyond it, such as handing out a role. */
-  async function requireFor(
-    req: FastifyRequest,
-    runner: Pick<BulkRevertRunner, 'capability' | 'requires'>,
-    subject: BulkJobSubject | null,
-  ): Promise<void> {
-    await app.requireCapability(req, runner.capability);
-    const needs = runner.requires?.(subject, await app.services.authorization.roleGroups());
-    if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 
   async function ownJob(req: FastifyRequest) {
@@ -178,7 +167,22 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
   }
 }
 
-function actorFrom(req: FastifyRequest): JobActor {
+/** The job's capability, and what its subject takes beyond it, such as handing out a role. */
+export async function requireFor(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  runner: Pick<BulkRevertRunner, 'capability' | 'requires'>,
+  subject: BulkJobSubject | null,
+): Promise<void> {
+  await app.requireCapability(req, runner.capability);
+  const roleGroups = await app.services.authorization.roleGroups();
+  for (const needs of runner.requires?.(subject, roleGroups) ?? []) {
+    await app.requireCapability(req, needs.capability, needs.reason);
+  }
+}
+
+/** The operator a job writes as, from the request that starts or continues it. */
+export function actorFrom(req: FastifyRequest): JobActor {
   const { session } = req.actor!;
   if (!session.actorUsername) throw Unauthorized('session has no bind identity');
   return {

@@ -229,13 +229,18 @@ export interface BulkJobsTable {
   created_at: TimestampDefault;
   heartbeat_at: TimestampDefault;
   finished_at: Timestamp | null;
+  /** When an import's results CSV was downloaded, its passwords with it. */
+  results_downloaded_at: Timestamp | null;
 }
 
 export interface BulkJobRowsTable {
   id: Generated<string>;
   job_id: string;
   ordinal: number;
-  target_id: string;
+  /** Null for an import's row until its account is created. */
+  target_id: string | null;
+  /** The row that must run first: the one creating this row's manager. */
+  after_ordinal: number | null;
   target_dn: string | null;
   target_name: string | null;
   status: ColumnType<BulkJobRowStatus, BulkJobRowStatus | undefined, BulkJobRowStatus>;
@@ -450,6 +455,17 @@ export interface ImportPlacementRulesTable {
   updated_at: TimestampDefault;
 }
 
+/** See migrations/20261025000001_bulk_job_creates.ts. */
+export interface ImportPasswordsTable {
+  id: Generated<string>;
+  job_id: string;
+  /** Null for the one password every row of the job gets. */
+  row_id: string | null;
+  password_enc: string;
+  expires_at: Timestamp;
+  created_at: TimestampDefault;
+}
+
 export interface DB {
   directory_providers: DirectoryProvidersTable;
   directory_entra_integrations: DirectoryEntraIntegrationsTable;
@@ -468,6 +484,7 @@ export interface DB {
   bulk_jobs: BulkJobsTable;
   bulk_job_rows: BulkJobRowsTable;
   import_placement_rules: ImportPlacementRulesTable;
+  import_passwords: ImportPasswordsTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;
   app_settings: AppSettingsTable;
