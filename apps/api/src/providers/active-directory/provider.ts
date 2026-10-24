@@ -2831,6 +2831,11 @@ const PATCH_ATTRIBUTE_MAP: Record<string, string> = {
   l: 'l',
   st: 'st',
   postalCode: 'postalCode',
+  postOfficeBox: 'postOfficeBox',
+  countryCode: 'countryCode',
+  physicalDeliveryOfficeName: 'physicalDeliveryOfficeName',
+  // The caller checks the manager is a user it knows, and not the user itself.
+  managerDn: 'manager',
 };
 
 /** Map our multi-valued patch field name → the AD attribute name. */
@@ -2909,8 +2914,6 @@ function buildAttributeChanges(patch: UserAttributePatch): Change[] {
       );
     }
   }
-  // managerDn is typed on UserAttributePatch but not in the MVP edit
-  // allowlist: it needs a cycle check. Excluded here intentionally.
   return changes;
 }
 
@@ -2939,6 +2942,10 @@ function snapshotForAudit(user: DirectoryUser): Record<string, unknown> {
     l: rawAuditScalar(raw['l']),
     st: rawAuditScalar(raw['st']),
     postalCode: rawAuditScalar(raw['postalCode']),
+    postOfficeBox: rawAuditScalar(raw['postOfficeBox']),
+    countryCode: rawAuditScalar(raw['countryCode']),
+    physicalDeliveryOfficeName: user.office ?? null,
+    managerDn: user.managerDn,
     otherMailbox: rawAuditArray(raw['otherMailbox']),
     otherHomePhone: rawAuditArray(raw['otherHomePhone']),
     otherMobile: rawAuditArray(raw['otherMobile']),

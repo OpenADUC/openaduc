@@ -5,6 +5,8 @@ import {
   accountExpiryRequestSchema,
   bulkGroupMembershipPreviewRequestSchema,
   bulkGroupMembershipPreviewSchema,
+  bulkUserAttributesPreviewRequestSchema,
+  bulkUserAttributesPreviewSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -18,6 +20,7 @@ import {
   userSearchResponseSchema,
   userUpdateRequestSchema,
   type BulkGroupMembershipPreview,
+  type BulkUserAttributesPreview,
   type RecycleBinStatus,
   type UserDeletePreflightResponse,
   type UserDetail,
@@ -32,6 +35,7 @@ import { lookupsFor, matchEntries } from '../lib/userMatch.js';
 import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
+import { previewAttributes } from '../services/bulkAttributes.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
@@ -45,6 +49,7 @@ import {
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import type { UserCacheRecordsTable } from '../db/types.js';
+import { refuseBulkRequest } from './bulkJobs.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
@@ -1070,6 +1075,20 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       );
       if (!preview) throw NotFound('group not found');
       return bulkGroupMembershipPreviewSchema.parse(preview);
+    },
+  });
+
+  // ---- POST /api/users/bulk-update/preview ------------------------------
+  // What editing the selected users' attributes would change, and each
+  // field's values across them, from the cache, before the job starts.
+  app.post('/api/users/bulk-update/preview', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<BulkUserAttributesPreview> => {
+      const body = bulkUserAttributesPreviewRequestSchema.parse(req.body);
+      const preview = await previewAttributes(app.db, req.directoryId!, body).catch(
+        (err: unknown) => refuseBulkRequest(app, err),
+      );
+      return bulkUserAttributesPreviewSchema.parse(preview);
     },
   });
 

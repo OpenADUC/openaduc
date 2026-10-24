@@ -61,7 +61,6 @@ export function isSecretAttr(name: string): boolean {
 // typed field (`dn` mirrors distinguishedName), Entra-sync noise the
 // operator can't act on, or fields the operator explicitly opted out of.
 const SKIP_RAW_ATTRS = new Set<string>([
-  'physicalDeliveryOfficeName',
   'url',
   'msExchCoManagedObjectsBL',
   'mS-DS-ConsistencyGuid',

@@ -6,7 +6,12 @@
  */
 export class BulkJobRequestError extends Error {
   constructor(
-    readonly code: 'group_not_found' | 'preview_mismatch' | 'protected_unacknowledged',
+    readonly code:
+      | 'group_not_found'
+      | 'manager_not_found'
+      | 'manager_in_selection'
+      | 'preview_mismatch'
+      | 'protected_unacknowledged',
     message: string,
   ) {
     super(message);

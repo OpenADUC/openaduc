@@ -8,6 +8,7 @@ import type {
   BulkJobStatus,
   BulkJobSubject,
 } from '@openaduc/shared';
+import { fieldNames } from './bulkAttributes.js';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
@@ -15,6 +16,7 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
   'user.unlock': { verb: 'Unlock', ing: 'Unlocking', ed: 'Unlocked' },
   'user.group.add': { verb: 'Add', ing: 'Adding', ed: 'Added' },
   'user.group.remove': { verb: 'Remove', ing: 'Removing', ed: 'Removed' },
+  'user.update': { verb: 'Edit', ing: 'Editing', ed: 'Edited' },
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
@@ -25,9 +27,15 @@ export function groupNames(groups: readonly { name: string }[]): string {
   return `${groups[0]!.name} and ${groups.length - 1} other groups`;
 }
 
-/** Where a job's change goes, said after what it changes: " to Sales", or nothing. */
+/**
+ * Where a job's change goes, said after what it changes: " to Sales",
+ * " (department and title)" for an edit, or nothing.
+ */
 export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | null): string {
-  if (!subject?.groups.length) return '';
+  if (action === 'user.update' && subject?.attributes?.length) {
+    return ` (${fieldNames(subject.attributes.map((a) => a.field))})`;
+  }
+  if (!subject?.groups?.length) return '';
   if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
   if (action === 'user.group.remove') return ` from ${groupNames(subject.groups)}`;
   return '';
