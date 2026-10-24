@@ -4,6 +4,7 @@
 
 import type {
   AccountExpiryRequest,
+  AuditBulkSummary,
   BulkJob,
   BulkJobAction,
   BulkJobRow,
@@ -91,6 +92,10 @@ export interface AuditEventRow {
   before: unknown;
   after: unknown;
   metadata: unknown;
+  /** The bulk job the event belongs to. */
+  bulkJobId: string | null;
+  /** On the `bulk.create` event that heads a bulk job, the job. */
+  bulk: AuditBulkSummary | null;
 }
 
 export interface DirectorySummary {

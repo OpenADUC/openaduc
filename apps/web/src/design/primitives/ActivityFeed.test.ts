@@ -26,6 +26,8 @@ const anEvent = (overrides: Partial<AuditEventRow>): AuditEventRow => ({
   before: null,
   after: null,
   metadata: null,
+  bulkJobId: null,
+  bulk: null,
   ...overrides,
 });
 

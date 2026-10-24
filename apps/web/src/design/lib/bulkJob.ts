@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { BulkJob, BulkJobAction } from '@openaduc/shared';
+import type { AuditBulkSummary, BulkJob, BulkJobAction } from '@openaduc/shared';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
@@ -87,5 +87,40 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
             progress: null,
             controls: ['retry', 'dismiss'],
           };
+  }
+}
+
+/** A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe: 42 users". */
+export function describeBulkEntry(
+  bulk: AuditBulkSummary,
+  actor: string | null,
+): { title: string; outcome: string | null; tone: 'green' | 'amber' | 'red' | 'muted' } {
+  const verb = bulk.action ? BULK_VERBS[bulk.action].verb.toLowerCase() : 'action';
+  const users = bulk.total === 1 ? '1 user' : `${bulk.total} users`;
+  const title = `Bulk ${verb}${actor ? ` by ${actor}` : ''}: ${users}`;
+  const { succeeded, failed } = bulk;
+  if (bulk.status === null || succeeded === null || failed === null) {
+    return { title, outcome: null, tone: 'muted' };
+  }
+  const tally = `${succeeded} succeeded · ${failed} failed`;
+  const tone = failed > 0 ? 'red' : 'green';
+  switch (bulk.status) {
+    case 'queued':
+    case 'running':
+      return {
+        title,
+        outcome: `Running: ${succeeded + failed} of ${bulk.total} done`,
+        tone: 'amber',
+      };
+    case 'paused':
+      return {
+        title,
+        outcome: `Paused: ${succeeded + failed} of ${bulk.total} done`,
+        tone: 'amber',
+      };
+    case 'cancelled':
+      return { title, outcome: `Stopped: ${tally}`, tone: failed > 0 ? 'red' : 'amber' };
+    case 'finished':
+      return { title, outcome: tally, tone };
   }
 }
