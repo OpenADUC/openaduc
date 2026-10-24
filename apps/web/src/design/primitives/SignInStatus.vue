@@ -74,6 +74,9 @@ const lastSignIn = computed(() =>
 }
 
 .sign-in-condition-title {
+  /* Room for the icon, so a title too long for the line wraps beside it
+     rather than below it. */
+  max-width: calc(100% - 18px);
   font-weight: 500;
 }
 
