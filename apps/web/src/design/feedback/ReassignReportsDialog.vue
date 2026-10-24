@@ -19,8 +19,6 @@ const props = defineProps<{
   workflow: ReturnType<typeof useReassignReports>;
   /** Whose reports they are. */
   managerName: string;
-  /** Why the last job couldn't change a report, by id. */
-  errors: ReadonlyMap<string, string>;
 }>();
 
 const {
@@ -29,6 +27,7 @@ const {
   confirmLabel,
   reports,
   notListed,
+  errors,
   selectedCount,
   allSelected,
   newManager,
@@ -59,8 +58,11 @@ const w = props.workflow;
       <section class="rr-section" aria-labelledby="rr-reports-label">
         <div class="rr-section-head">
           <h3 id="rr-reports-label" class="rr-section-title">{{ managerName }}’s direct reports</h3>
-          <span class="rr-count">{{ selectedCount }} of {{ reports.length }} selected</span>
+          <span v-if="reports.length > 0" class="rr-count"
+            >{{ selectedCount }} of {{ reports.length }} selected</span
+          >
           <Button
+            v-if="reports.length > 0"
             :label="allSelected ? 'Select none' : 'Select all'"
             size="small"
             severity="secondary"
@@ -68,7 +70,15 @@ const w = props.workflow;
             @click="allSelected ? w.selectNone() : w.selectAll()"
           />
         </div>
-        <ul class="rr-reports">
+        <Message v-if="reports.length === 0" severity="warn" :closable="false">
+          {{
+            notListed === 1
+              ? 'Their direct report isn’t in the cache, so it can’t be reassigned here.'
+              : `None of their ${notListed} direct reports are in the cache, so they can’t be reassigned here.`
+          }}
+          Run a directory sync from Tasks, then try again.
+        </Message>
+        <ul v-else class="rr-reports">
           <li v-for="r in reports" :key="r.id" class="rr-report">
             <Checkbox
               :model-value="w.isSelected(r.id)"
@@ -83,11 +93,11 @@ const w = props.workflow;
             </label>
           </li>
         </ul>
-        <p v-if="notListed > 0" class="rr-note">
+        <p v-if="notListed > 0 && reports.length > 0" class="rr-note">
           {{
             notListed === 1
-              ? '1 report isn’t in the cache yet, so it isn’t listed.'
-              : `${notListed} reports aren’t in the cache yet, so they aren’t listed.`
+              ? '1 report isn’t in the cache, so it isn’t listed.'
+              : `${notListed} reports aren’t in the cache, so they aren’t listed.`
           }}
         </p>
       </section>

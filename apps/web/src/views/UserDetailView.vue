@@ -51,7 +51,6 @@ import { useMoveDialog } from './_detail/useMoveDialog';
 import { useExpiryDialog } from './_detail/useExpiryDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
-import { useBulkActions } from '../design/composables/useBulkActions.js';
 import { useReassignReports } from '../design/composables/useReassignReports.js';
 import {
   USER_ACTIONS,
@@ -553,26 +552,19 @@ function showExpiryFor(u: UserDetail): void {
 
 // ---- Reassign direct reports ----------------------------------------------
 
-// The reports the dialog has ticked; a job leaves the ones it failed ticked.
-const reportSelection = ref(new Set<string>());
-const {
-  job: reassignJob,
-  busy: reassignJobBusy,
-  bulkRunning: reassignRunning,
-  bulkErrors: reassignErrors,
-  jobFailure: reassignJobFailure,
-  startAttributeEdit,
-  continueJob,
-  retryFailed,
-  stopJob,
-  dismissJob,
-} = useBulkActions({ selectedIds: reportSelection, toast, reload: load });
 const reassign = useReassignReports({
+  managerId: () => props.id,
   manager: () => user.value,
-  selected: reportSelection,
-  start: startAttributeEdit,
+  toast,
+  reload: load,
 });
-const { reports: reassignableReports } = reassign;
+const {
+  hasReports,
+  job: reassignJob,
+  jobBusy: reassignJobBusy,
+  jobRunning: reassignRunning,
+  jobFailure: reassignJobFailure,
+} = reassign;
 
 // ---- Sign-in status --------------------------------------------------------
 
@@ -851,7 +843,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: 'Reassign direct reports…',
       icon: 'pi-sitemap',
       capability: 'write:user.attributes',
-      unavailable: u && reassignableReports.value.length === 0 ? 'has no direct reports' : null,
+      unavailable: u && !hasReports.value ? 'has no direct reports' : null,
       disabled: reassignRunning.value,
       run: reassign.open,
     },
@@ -1044,10 +1036,10 @@ watch(user, (u) => {
           :job="reassignJob"
           :failure="reassignJobFailure"
           :busy="reassignJobBusy"
-          @stop="stopJob"
-          @continue="continueJob"
-          @retry="retryFailed"
-          @dismiss="dismissJob"
+          @stop="reassign.stopJob"
+          @continue="reassign.continueJob"
+          @retry="reassign.retryFailed"
+          @dismiss="reassign.dismissJob"
         />
         <!-- Overview — at-a-glance summary that aggregates the most-asked-about
            pieces from each detail tab so the operator does not have to hunt. -->
@@ -1326,7 +1318,7 @@ watch(user, (u) => {
             :direct-reports="user.directReports"
             :self-name="displayName"
           >
-            <template v-if="canEdit && reassignableReports.length > 0" #actions>
+            <template v-if="canEdit && hasReports" #actions>
               <Button
                 label="Reassign…"
                 icon="pi pi-sitemap"
@@ -1842,11 +1834,7 @@ watch(user, (u) => {
       :failure="moveDialogFailure"
       @close="closeMoveDialog"
     />
-    <ReassignReportsDialog
-      :workflow="reassign"
-      :manager-name="displayName"
-      :errors="reassignErrors"
-    />
+    <ReassignReportsDialog :workflow="reassign" :manager-name="displayName" />
     <AccountExpiryDialog
       :visible="expiryDialogOpen"
       :expiry="expiry"
