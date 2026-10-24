@@ -18,6 +18,7 @@ import { MIN_GROUP_QUERY } from '../../design/composables/useAddToGroup.js';
 import { ouTreeNodes } from '../../design/lib/ouTree.js';
 import { fmtDate } from '../../design/lib/format.js';
 import LicenseBadge from '../../design/primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../../design/primitives/LicenseBadgeNote.vue';
 
 const props = defineProps<{ wizard: ReturnType<typeof useUserImport> }>();
 const w = props.wizard;
@@ -174,6 +175,7 @@ const ouName = (dn: string) =>
                 />
               </li>
             </ul>
+            <LicenseBadgeNote v-if="results.length > 0" />
           </div>
         </template>
       </div>

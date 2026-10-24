@@ -15,6 +15,7 @@ import {
   type EntraIntegrationSummary,
 } from '../../api/index.js';
 import { LICENSE_PERMISSIONS, TAP_PERMISSIONS, type EntraFeatureKey } from '@openaduc/shared';
+import LicenseBadgeNote from '../../design/primitives/LicenseBadgeNote.vue';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
@@ -482,8 +483,8 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
               <code>{{ LICENSE_PERMISSIONS.groups.name }}</code> &mdash; the licenses groups grant
             </li>
             <li>
-              <code>{{ LICENSE_PERMISSIONS.skus.name }}</code> &mdash; the tenant’s subscriptions,
-              to name a license Microsoft’s product list lacks
+              <code>{{ LICENSE_PERMISSIONS.organization.name }}</code> &mdash; the tenant’s
+              subscriptions, to name a license Microsoft’s product list lacks, and its last sync
             </li>
           </ul>
           <p class="entra-help">
@@ -507,6 +508,9 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
                 <span v-if="f.risk" class="entra-feature-risk">
                   <i class="pi pi-exclamation-triangle" aria-hidden="true" /> {{ f.risk }}
                 </span>
+                <LicenseBadgeNote
+                  v-if="f.key === 'licenses' && editTarget?.integration?.features.licenses"
+                />
               </label>
             </li>
           </ul>

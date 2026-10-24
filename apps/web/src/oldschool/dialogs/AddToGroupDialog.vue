@@ -53,7 +53,6 @@ const {
     ),
 });
 
-// A licensed group gives whoever joins it its licenses, so the list says which.
 const licensed = useLicensedGroupsStore();
 const licenseNames = (groupId: string) =>
   licensed
@@ -128,6 +127,9 @@ function ok(): void {
 
       <div v-if="truncated && !searching" class="os-info" style="margin-top: 6px">
         Showing {{ results.length }} — refine your search.
+      </div>
+      <div v-if="licensed.badgeNote && results.length" class="os-info" style="margin-top: 6px">
+        {{ licensed.badgeNote }}
       </div>
       <div v-if="loadError" class="os-error" style="margin-top: 10px">{{ loadError }}</div>
     </div>

@@ -18,7 +18,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import GroupLicenseList from '../design/primitives/GroupLicenseList.vue';
 import LicenseBadge from '../design/primitives/LicenseBadge.vue';
-import { useLicensedGroupsStore } from '../stores/licensedGroups.js';
+import LicenseBadgeNote from '../design/primitives/LicenseBadgeNote.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import DeleteGroupDialog from '../design/feedback/DeleteGroupDialog.vue';
@@ -44,9 +44,6 @@ const props = defineProps<{ id: string }>();
 const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
-// Whether the directory's Entra integration shows licenses.
-const licensed = useLicensedGroupsStore();
-onMounted(() => void licensed.ensureLoaded());
 
 // Member-add dialog state — opens on "Add member", searches users and
 // groups, and adds the selected one the way its own page would.
@@ -336,7 +333,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
             </ul>
           </Card>
 
-          <Card v-if="licensed.enabled" title="Licenses">
+          <Card v-if="group.entra?.licenses" title="Licenses">
             <GroupLicenseList :group-id="group.id" :name="group.name ?? 'This group'" />
           </Card>
         </div>
@@ -487,6 +484,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
         <Message v-else-if="addSearchError" severity="error" :closable="false">
           Couldn’t search the directory: {{ addSearchError }}
         </Message>
+        <LicenseBadgeNote v-if="addResults.some((c) => c.kind === 'group')" />
         <p v-else-if="addQuery.trim() && !addLoading" class="hint">
           No users or groups matched that aren’t members already.
         </p>

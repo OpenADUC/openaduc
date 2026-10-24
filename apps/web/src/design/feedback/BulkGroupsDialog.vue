@@ -14,6 +14,7 @@ import SelectButton from 'primevue/selectbutton';
 import { MAX_BULK_GROUPS, type BulkMembershipOp } from '@openaduc/shared';
 import EmptyState from '../primitives/EmptyState.vue';
 import LicenseBadge from '../primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../primitives/LicenseBadgeNote.vue';
 import { MIN_GROUP_QUERY } from '../composables/useAddToGroup.js';
 import type { useBulkGroupMembership } from '../composables/useBulkGroupMembership.js';
 
@@ -136,6 +137,7 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
           Showing {{ results.length }}. Refine your search.
         </p>
         <p v-if="full" class="hint">Choose at most {{ MAX_BULK_GROUPS }} groups at a time.</p>
+        <LicenseBadgeNote v-if="results.length > 0" />
       </div>
       <Message v-if="previewError" severity="error" :closable="false">
         Couldn’t work out what it would change: {{ previewError }}

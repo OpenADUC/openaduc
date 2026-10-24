@@ -41,6 +41,7 @@ const aGroup = (id: string, name: string) => ({
   groupScope: 'global',
   memberCount: 2,
   email: null,
+  entra: null as { licenses: boolean } | null,
   members: [jane, nested],
   freshness: { cachedAt: null, liveRefreshedAt: null },
 });
@@ -77,6 +78,7 @@ const api = {
     licensed: vi.fn(async (): Promise<LicensedGroups> => ({
       enabled: false,
       refreshedAt: null,
+      refreshFailed: false,
       groups: [],
     })),
     licenses: vi.fn<(id: string) => Promise<GroupLicenses>>(),
@@ -320,19 +322,31 @@ describe('a group’s licenses', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: { ...aGroup(id, 'Engineering'), entra: { licenses: true } },
+    }));
     api.groups.licensed.mockResolvedValue({
       enabled: true,
       refreshedAt: '2026-10-24T11:00:00Z',
+      refreshFailed: false,
       groups: [{ id: 'g5', licenses: [e3] }],
     });
     api.groups.licenses.mockResolvedValue({
       status: 'synced',
-      licenses: [{ ...e3, disabledPlans: 1 }],
+      licenses: [{ ...e3, disabledPlanCount: 1 }],
       processingState: 'ProcessingComplete',
     });
   });
   afterAll(() => {
-    api.groups.licensed.mockResolvedValue({ enabled: false, refreshedAt: null, groups: [] });
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: aGroup(id, id === 'g1' ? 'Engineering' : 'Sales'),
+    }));
+    api.groups.licensed.mockResolvedValue({
+      enabled: false,
+      refreshedAt: null,
+      refreshFailed: false,
+      groups: [],
+    });
   });
 
   it('shows what the group grants, read live, when the Entra integration reads licenses', async () => {
@@ -342,6 +356,15 @@ describe('a group’s licenses', () => {
     expect(card?.text()).toContain('Members get these through the group');
     expect(card?.text()).toContain('Microsoft 365 E3');
     expect(card?.text()).toContain('1 service plan turned off');
+  });
+
+  it('shows no licenses where the Entra integration doesn’t read them', async () => {
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: { ...aGroup(id, 'Engineering'), entra: { licenses: false } },
+    }));
+    const { page } = await openMembers('g1', ['read:group'], 'overview');
+    expect(page.find('.glic').exists()).toBe(false);
+    expect(api.groups.licenses).not.toHaveBeenCalled();
   });
 
   it('badges a licensed group among the members to add', async () => {
@@ -354,5 +377,22 @@ describe('a group’s licenses', () => {
       return found!;
     });
     expect(option.find('.license-badge').text()).toBe('Microsoft 365 E3');
+  });
+
+  it('says when the badges couldn’t be refreshed', async () => {
+    api.groups.licensed.mockResolvedValue({
+      enabled: true,
+      refreshedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      refreshFailed: true,
+      groups: [{ id: 'g5', licenses: [e3] }],
+    });
+    const { page } = await openMembers();
+    await click(page, 'Add member');
+    await page.get('[role="dialog"] input').setValue('con');
+    await vi.waitFor(() =>
+      expect(page.find('.license-note').text()).toBe(
+        'License badges couldn’t be refreshed from Microsoft Entra. Last updated 2h ago.',
+      ),
+    );
   });
 });

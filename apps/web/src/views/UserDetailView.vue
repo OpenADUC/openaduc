@@ -44,6 +44,8 @@ import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import UserLicenseList from '../design/primitives/UserLicenseList.vue';
 import LicenseBadge from '../design/primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../design/primitives/LicenseBadgeNote.vue';
+import { LICENSE_ICON } from '../design/lib/licenses.js';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, nameOf } from '../design/lib/format.js';
 import type { UserCreateResponse, UserDetail } from '@openaduc/shared';
@@ -961,7 +963,7 @@ const tabs = computed<ObjectPageTab<TabId>[]>(() => {
   list.push({
     id: 'licenses',
     label: 'Licenses',
-    icon: 'pi-verified',
+    icon: LICENSE_ICON,
     visible: !!u?.entra?.licenses,
   });
   // Sign-ins is conditional on an Entra integration. We use the same
@@ -1753,7 +1755,6 @@ watch(user, (u) => {
           </Card>
         </div>
 
-        <!-- Licenses — read live from Entra when the tab opens. -->
         <Card v-else-if="activeTab === 'licenses' && user.entra?.licenses" title="Licenses">
           <UserLicenseList :user-id="user.id" :name="displayName" />
         </Card>
@@ -1943,6 +1944,7 @@ watch(user, (u) => {
           Showing {{ groupSearchResults.length }} — refine your search
         </p>
       </div>
+      <LicenseBadgeNote v-if="groupSearchResults.length > 0" />
       <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
       <Message v-else-if="addDialogFailure" severity="error" closable @close="dismissAddFailure">
         Couldn’t

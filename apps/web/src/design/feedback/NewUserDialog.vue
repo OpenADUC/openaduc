@@ -22,6 +22,7 @@ import { ouTreeNodes } from '../lib/ouTree.js';
 import { ORGANISATION_INPUTS, PASSWORD_MODE_LABEL } from '../lib/newUser.js';
 import { nameOf } from '../lib/format.js';
 import LicenseBadge from '../primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../primitives/LicenseBadgeNote.vue';
 
 const props = defineProps<{
   visible: boolean;
@@ -433,6 +434,7 @@ function close(): void {
         <p v-else class="nu-note">
           {{ sourceName }} isn’t directly in any group a copy can be added to.
         </p>
+        <LicenseBadgeNote v-if="groupChoices.length" />
       </template>
 
       <h4 class="nu-section">Password</h4>
