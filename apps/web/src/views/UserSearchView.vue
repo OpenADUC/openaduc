@@ -631,6 +631,14 @@ onMounted(() => {
           @click="newUserOpen = true"
         />
         <Button
+          v-if="canCreate"
+          label="Import"
+          icon="pi pi-file-import"
+          severity="secondary"
+          outlined
+          @click="router.push({ name: 'user-import' })"
+        />
+        <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"
           :severity="activeCount > 0 ? 'primary' : 'secondary'"

@@ -272,6 +272,14 @@ const ctxItems = computed<MenuItem[]>(() => {
       tooltip: 'Create a user in this OU.',
     });
   }
+  if (canCreateUser.value) {
+    items.push({
+      label: 'Import users…',
+      icon: 'pi pi-file-import',
+      command: () => openImport(ou.distinguishedName),
+      tooltip: 'Import users from a spreadsheet into this OU.',
+    });
+  }
   if (canCreateGroup.value) {
     items.push({
       label: 'New group…',
@@ -381,6 +389,11 @@ function onGroupCreated(created: GroupCreateResponse): void {
 
 const newUserOpen = ref(false);
 const newUserOuDn = ref<string | null>(null);
+
+/** Every bucket of the import starts in this OU. */
+function openImport(ouDn: string): void {
+  void router.push({ name: 'user-import', query: { ou: ouDn } });
+}
 
 function openNewUser(ouDn: string): void {
   newUserOuDn.value = ouDn;
@@ -642,6 +655,15 @@ async function onDeleteSubmit(): Promise<void> {
             severity="secondary"
             outlined
             @click="openNewUser(selectedOu.distinguishedName)"
+          />
+          <Button
+            v-if="canCreateUser"
+            label="Import users"
+            icon="pi pi-file-import"
+            size="small"
+            severity="secondary"
+            outlined
+            @click="openImport(selectedOu.distinguishedName)"
           />
           <Button
             v-if="canCreateGroup"

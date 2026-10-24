@@ -1,0 +1,176 @@
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!--
+  Step 6: the final check, against the directory right before the run:
+  each name still free, each OU, group and manager still there. Running
+  the import comes with #153; until then the wizard ends here.
+-->
+<script setup lang="ts">
+import { computed } from 'vue';
+import Button from 'primevue/button';
+import Message from 'primevue/message';
+import type { useUserImport } from '../../design/composables/useUserImport.js';
+import { fmtAbsolute } from '../../design/lib/format.js';
+
+const props = defineProps<{ wizard: ReturnType<typeof useUserImport> }>();
+const w = props.wizard;
+const {
+  importRequest,
+  checking,
+  checkError,
+  result,
+  checkProblems,
+  checkWarnings,
+  protectedGroups,
+  acknowledgedProtected,
+  rulesError,
+  ready,
+} = w;
+
+const count = computed(() => importRequest.value?.rows.length ?? 0);
+const people = (n: number) => (n === 1 ? '1 person' : `${n} people`);
+const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(', '));
+</script>
+
+<template>
+  <div class="ck">
+    <p class="ck-intro">
+      {{ people(count) }} to create. The final check asks the directory again whether each name is
+      still free and each OU, group and manager still there. It changes nothing.
+    </p>
+    <Button
+      :label="result ? 'Check again' : 'Run the final check'"
+      icon="pi pi-shield"
+      :loading="checking"
+      :disabled="!importRequest"
+      @click="w.runCheck"
+    />
+    <Message v-if="checkError" severity="error" :closable="false" class="ck-msg">
+      {{ checkError }}
+    </Message>
+
+    <template v-if="result">
+      <p class="hint ck-when">Checked {{ fmtAbsolute(result.checkedAt) }}</p>
+      <section v-if="checkProblems.length" class="ck-section">
+        <h3 class="ck-title ck-bad">Changed since the review ({{ checkProblems.length }})</h3>
+        <ul class="ck-list">
+          <li v-for="(p, i) in checkProblems" :key="i">
+            <span v-if="p.line" class="ck-line">Row {{ p.line }} · {{ p.name }}</span>
+            {{ p.message }}
+          </li>
+        </ul>
+        <p class="ck-note">
+          Go back to fix them: names in Review names, OUs and groups in Buckets.
+          <Button label="Review names" size="small" text @click="w.goTo('names')" />
+          <Button label="Buckets" size="small" text @click="w.goTo('buckets')" />
+        </p>
+      </section>
+      <section v-if="checkWarnings.length" class="ck-section">
+        <h3 class="ck-title ck-warn">Worth a look ({{ checkWarnings.length }})</h3>
+        <ul class="ck-list">
+          <li v-for="(p, i) in checkWarnings" :key="i">
+            <span v-if="p.line" class="ck-line">Row {{ p.line }} · {{ p.name }}</span>
+            {{ p.message }}
+          </li>
+        </ul>
+      </section>
+      <label v-if="protectedGroups.length && !checkProblems.length" class="ck-ack">
+        <input v-model="acknowledgedProtected" type="checkbox" />
+        <span>I understand these users gain admin rights in AD through {{ groupNames }}.</span>
+      </label>
+      <Message v-if="rulesError" severity="warn" :closable="false" class="ck-msg">
+        {{ rulesError }}. The next import won’t be prefilled from this one.
+      </Message>
+      <p v-if="!checkProblems.length" class="ck-ok">
+        <i class="pi pi-check-circle" aria-hidden="true" /> Ready to import {{ people(count) }}.
+      </p>
+    </template>
+
+    <div class="ck-run">
+      <Button label="Run import" icon="pi pi-play" disabled />
+      <span class="hint">
+        {{
+          ready
+            ? 'Running imports isn’t available yet. The draft stays in this tab until it is.'
+            : 'Run the final check first.'
+        }}
+      </span>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.ck-intro {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.ck-when {
+  margin: 8px 0;
+}
+
+.ck-section {
+  margin: 12px 0;
+}
+
+.ck-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ck-bad {
+  color: var(--red);
+}
+
+.ck-warn {
+  color: var(--amber);
+}
+
+.ck-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.ck-line {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-right: 4px;
+}
+
+.ck-note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.ck-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.ck-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--green);
+}
+
+.ck-run {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.ck-msg {
+  margin: 8px 0;
+}
+</style>
