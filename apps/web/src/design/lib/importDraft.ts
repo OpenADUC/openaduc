@@ -20,11 +20,25 @@ export interface TypedNames {
   displayName?: string;
 }
 
+/** Issue TAPs for class, as the Options step has it. */
+export interface ClassTapDraft {
+  on: boolean;
+  /** The class's date for everyone, as a date input gives it. */
+  date: string;
+  /** When class starts that day, as a time input gives it. */
+  time: string;
+  /** Each person's start date at `time`, when the Start date column is mapped. */
+  byStartDate: boolean;
+  lifetimeMinutes: number;
+  isUsableOnce: boolean;
+}
+
 export interface ImportOptions {
   passwordMode: PasswordMode;
   mustChange: boolean;
   enabled: boolean;
   mailFromUpn: boolean;
+  classTap?: ClassTapDraft;
 }
 
 export interface ImportDraft {

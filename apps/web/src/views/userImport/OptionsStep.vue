@@ -1,17 +1,34 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
-<!-- Step 5: what every account in the import gets: its password, must-change, enabled, mail. -->
+<!--
+  Step 5: what every account in the import gets: its password, must-change,
+  enabled, mail, and a Temporary Access Pass for its onboarding class.
+-->
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import Button from 'primevue/button';
 import InputText from 'primevue/inputtext';
+import Select from 'primevue/select';
 import SelectButton from 'primevue/selectbutton';
-import { PASSWORD_MODES, type PasswordMode } from '@openaduc/shared';
+import { PASSWORD_MODES, lifetimeLabel, type PasswordMode } from '@openaduc/shared';
 import type { useUserImport } from '../../design/composables/useUserImport.js';
 import { PASSWORD_MODE_LABEL } from '../../design/lib/newUser.js';
 
 const props = defineProps<{ wizard: ReturnType<typeof useUserImport> }>();
 const w = props.wizard;
-const { draft, password, passwordChecks, mustChangeNote } = w;
+const {
+  draft,
+  password,
+  passwordChecks,
+  mustChangeNote,
+  canIssueTaps,
+  classTapOptions,
+  classPolicy,
+  classLifetimeOptions,
+  multiUseAllowed,
+  startDateMapped,
+  timeZone,
+  classTapIssues,
+} = w;
 
 const shown = ref(false);
 const modeOptions = PASSWORD_MODES.map((value) => ({
@@ -27,6 +44,12 @@ const mode = computed({
   get: () => draft.options.passwordMode,
   set: (m: PasswordMode) => w.setPasswordMode(m),
 });
+
+const classTap = computed(() => draft.options.classTap);
+const useOptions = [
+  { value: false, label: 'Any number of sign-ins until it expires' },
+  { value: true, label: 'One sign-in' },
+];
 </script>
 
 <template>
@@ -100,6 +123,92 @@ const mode = computed({
       <input v-model="draft.options.mailFromUpn" type="checkbox" />
       <span>Set email to the UPN for rows without an email</span>
     </label>
+
+    <template v-if="canIssueTaps && classTapOptions">
+      <h3 class="op-title">Onboarding class</h3>
+      <label class="op-check">
+        <input
+          type="checkbox"
+          :checked="!!classTap?.on"
+          :disabled="classTapOptions.status !== 'ready'"
+          @change="w.setClassTap(($event.target as HTMLInputElement).checked)"
+        />
+        <span>Issue TAPs for class</span>
+      </label>
+      <p v-if="classTapOptions.status === 'unavailable'" class="op-note op-indent">
+        {{ classTapOptions.message }}
+      </p>
+      <p v-else class="op-note op-indent">
+        Each person gets a Temporary Access Pass that starts with their class, made once Connect
+        Sync has brought them to Microsoft Entra. Their passes are on the import’s class roster, for
+        whoever runs the class to hand out.
+      </p>
+
+      <div v-if="classTap?.on && classPolicy" class="op-class">
+        <fieldset class="op-group">
+          <legend class="op-label">Class starts</legend>
+          <template v-if="startDateMapped">
+            <label class="op-check">
+              <input v-model="classTap.byStartDate" type="radio" :value="false" />
+              <span>One date for everyone</span>
+            </label>
+            <label class="op-check">
+              <input v-model="classTap.byStartDate" type="radio" :value="true" />
+              <span>Each person’s start date</span>
+            </label>
+          </template>
+          <div class="op-when">
+            <InputText
+              v-if="!startDateMapped || !classTap.byStartDate"
+              v-model="classTap.date"
+              type="date"
+              aria-label="Class date"
+            />
+            <span v-else class="op-at">Their start date at</span>
+            <InputText v-model="classTap.time" type="time" aria-label="Class start time" />
+            <span class="op-zone">{{ timeZone }}</span>
+          </div>
+        </fieldset>
+
+        <label for="op-class-lifetime" class="op-label">Lifetime</label>
+        <Select
+          v-model="classTap.lifetimeMinutes"
+          input-id="op-class-lifetime"
+          :options="classLifetimeOptions"
+          option-label="label"
+          option-value="value"
+          class="op-select"
+        />
+        <p class="op-note">
+          How long class lasts. The tenant allows
+          {{ lifetimeLabel(classPolicy.minLifetimeMinutes) }} to
+          {{ lifetimeLabel(classPolicy.maxLifetimeMinutes) }}.
+        </p>
+
+        <label for="op-class-use" class="op-label">Use</label>
+        <Select
+          v-if="multiUseAllowed"
+          v-model="classTap.isUsableOnce"
+          input-id="op-class-use"
+          :options="useOptions"
+          option-label="label"
+          option-value="value"
+          class="op-select"
+        />
+        <p v-else class="op-note">One sign-in: the tenant allows only one-time passes.</p>
+        <p v-if="!multiUseAllowed || classTap.isUsableOnce" class="op-note">
+          A one-time pass is used up if setting up Authenticator fails halfway; reissue it from the
+          class roster.
+        </p>
+      </div>
+
+      <ul v-if="classTapIssues.length" class="op-problems">
+        <li v-for="(issue, i) in classTapIssues" :key="i">
+          <template v-if="issue.line !== null">Row {{ issue.line }} ({{ issue.name }}): </template
+          >{{ issue.message }}
+        </li>
+      </ul>
+    </template>
   </div>
 </template>
 
@@ -168,5 +277,47 @@ const mode = computed({
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.op-class {
+  margin: 0 0 8px 24px;
+}
+
+.op-group {
+  border: 0;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.op-label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.op-when {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.op-at,
+.op-zone {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.op-select {
+  min-width: 16rem;
+}
+
+.op-problems {
+  margin: 4px 0 8px 24px;
+  padding-left: 16px;
+  font-size: 12px;
+  color: var(--red);
 }
 </style>
