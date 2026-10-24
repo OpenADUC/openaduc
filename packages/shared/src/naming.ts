@@ -300,10 +300,12 @@ function prepare(name: PersonName, pattern: string): Prepared {
   };
 
   const deviations: NamingDeviation[] = [];
-  // A field the pattern only takes an initial from isn't reported: the
-  // initial is what the operator sees, and there's nothing to approve.
-  if (uses('first')) deviations.push(...partDeviations('first', name.first, first));
-  if (uses('last')) deviations.push(...partDeviations('last', name.last, last));
+  // A field the pattern only takes an initial from is reported only when
+  // nothing is left to take it from: otherwise the initial is all that shows.
+  const reported = (full: NamingToken, initial: NamingToken, n: Normalized) =>
+    uses(full) || (uses(initial) && !n.value);
+  if (reported('first', 'f', first)) deviations.push(...partDeviations('first', name.first, first));
+  if (reported('last', 'l', last)) deviations.push(...partDeviations('last', name.last, last));
 
   const displayFirst = name.preferredFirst?.trim() || name.first.trim();
   return {

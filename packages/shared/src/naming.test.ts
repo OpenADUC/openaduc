@@ -169,6 +169,12 @@ describe('suggestNames', () => {
       expect(s.samAccountName).toBe('esmith');
       expect(s.deviations).toEqual([]);
     });
+
+    it('reports an initial lost to dropped characters', () => {
+      const s = suggestNames({ first: '李', last: 'Smith' }, { ...settings, pattern: '{f}{last}' });
+      expect(s.samAccountName).toBe('smith');
+      expect(s.deviations).toEqual([expect.objectContaining({ kind: 'dropped', field: 'first' })]);
+    });
   });
 
   describe('truncation', () => {
