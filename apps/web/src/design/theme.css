@@ -1079,8 +1079,8 @@
   }
 
   .p-dialog.ds-sheet .p-dialog-close-button {
-    width: 44px;
-    height: 44px;
+    width: var(--tap-target);
+    height: var(--tap-target);
   }
 
   .p-dialog.ds-sheet .p-dialog-footer > .p-button {
@@ -1094,7 +1094,7 @@
   }
 
   .p-dialog.ds-sheet .p-inputtext {
-    min-height: 44px;
+    min-height: var(--tap-target);
   }
 }
 
@@ -1136,25 +1136,21 @@
 }
 
 /* On a phone, toasts span the screen along the bottom, where a thumb
-   reaches Undo, and stay clear of the on-screen keyboard. */
+   reaches Undo, clear of the on-screen keyboard and of an object page's
+   bar of primary actions (ObjectPageLayout). */
 @media (max-width: 767.98px) {
   .p-toast {
     top: auto !important;
     right: 12px !important;
-    bottom: calc(12px + var(--keyboard-inset, 0px)) !important;
+    bottom: calc(12px + var(--keyboard-inset, 0px) + var(--primary-bar-height, 0px)) !important;
     left: 12px !important;
     width: auto !important;
     transform: none !important;
   }
 
-  /* Clear of an object page's bar of primary actions (ObjectPageLayout). */
-  body:has(.detail-primary-bar) .p-toast {
-    bottom: calc(84px + var(--keyboard-inset, 0px)) !important;
-  }
-
   .p-toast .p-toast-close-button {
-    width: 44px;
-    height: 44px;
+    width: var(--tap-target);
+    height: var(--tap-target);
   }
 }
 
