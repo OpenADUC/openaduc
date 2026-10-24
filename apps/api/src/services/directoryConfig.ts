@@ -51,7 +51,7 @@ export interface DirectoryProviderSummary {
   syncBindUpn: string | null;
   /** Whether a sync bind password is stored. Never returns the password. */
   hasSyncBindPassword: boolean;
-  /** How new accounts are named; the defaults until an admin changes them. */
+  /** How new accounts are named: the defaults until changed with configure:directory. */
   naming: NamingSettings;
   createdAt: Date;
   updatedAt: Date;
@@ -206,16 +206,7 @@ export class DirectoryConfigService {
     id: number,
     patch: Partial<DirectoryProviderInput>,
   ): Promise<DirectoryProviderSummary> {
-    const row = await this.db
-      .selectFrom('directory_providers')
-      .selectAll()
-      .where('id', '=', id)
-      .executeTakeFirst();
-    if (!row) throw new Error(`directory provider ${id} not found`);
-
-    const existingConfig = (row.config_json as Record<string, unknown> | null) ?? {};
-    const nextConfig = {
-      ...existingConfig,
+    const configPatch = {
       ...(patch.tlsRejectUnauthorized !== undefined
         ? { tlsRejectUnauthorized: patch.tlsRejectUnauthorized }
         : {}),
@@ -224,9 +215,10 @@ export class DirectoryConfigService {
         : {}),
     };
 
+    // Merged in the database, so a concurrent updateNaming isn't overwritten.
     const setClause: Record<string, unknown> = {
       updated_at: new Date(),
-      config_json: JSON.stringify(nextConfig),
+      config_json: sql`config_json || ${JSON.stringify(configPatch)}::jsonb`,
     };
     if (patch.name !== undefined) setClause.name = patch.name;
     if (patch.displayName !== undefined) setClause.display_name = patch.displayName;
@@ -249,8 +241,8 @@ export class DirectoryConfigService {
       .set(setClause)
       .where('id', '=', id)
       .returningAll()
-      .executeTakeFirstOrThrow();
-
+      .executeTakeFirst();
+    if (!updated) throw new Error(`directory provider ${id} not found`);
     return rowToSummary(updated, this.env);
   }
 
