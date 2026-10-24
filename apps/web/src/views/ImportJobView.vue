@@ -2,8 +2,9 @@
 <!--
   An import's results: its progress while it runs, then each row's
   result with a link to the account, the retry of what failed, the
-  results CSV, and once its passwords are gone, a reset of them. The
-  workflow lives in useImportJob; this renders it.
+  results CSV, and once its passwords are gone, a reset of them. An
+  import that issues TAPs for class has its class roster as a second tab.
+  The workflow lives in useImportJob; this renders it.
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
@@ -16,6 +17,8 @@ import {
   type ImportJobRow,
 } from '@openaduc/shared';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import ImportJobTabs from './importJob/ImportJobTabs.vue';
+import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import { useImportJob } from '../design/composables/useImportJob.js';
 import { bulkJobTitle } from '../design/lib/bulkJob.js';
@@ -33,7 +36,9 @@ function save({ fileName, csv }: BulkJobResultsDownload): void {
 }
 
 const imp = useImportJob({ save });
+const auth = useAuthStore();
 const {
+  classTap,
   job,
   rows,
   results,
@@ -97,6 +102,19 @@ const downloadLabel = computed(() =>
     <p v-else-if="loading && !job" class="hint">Loading…</p>
 
     <template v-if="job">
+      <ImportJobTabs
+        v-if="classTap && auth.hasCapability('write:user.issueTap')"
+        :id="job.id"
+        active="people"
+        people
+        roster
+      />
+      <Message v-if="classTap?.unsyncedAlert" severity="warn" :closable="false" class="ij-msg">
+        {{ accounts(classTap.unsyncedAlert.count) }} the import created
+        {{ classTap.unsyncedAlert.count === 1 ? 'isn’t' : 'aren’t' }} in Microsoft Entra yet, and
+        class starts {{ fmtAbsolute(classTap.unsyncedAlert.startsAt) }}. Their Temporary Access
+        Passes are made as soon as Connect Sync brings them; check that it’s running.
+      </Message>
       <BulkJobPanel
         :job="job"
         :failure="failure"
