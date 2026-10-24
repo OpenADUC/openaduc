@@ -429,6 +429,12 @@ export interface DirectoryProvider {
   getGroup(identifier: DirectoryObjectIdentifier): Promise<DirectoryGroup | null>;
   searchGroups(query: DirectoryGroupSearchQuery): Promise<DirectoryGroup[]>;
   getUserGroups(userId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
+  /**
+   * Every security group the user is in, nested and primary included (AD's
+   * tokenGroups), read without their members. Null when the user isn't
+   * found or AD returns no tokenGroups (it always has the primary group).
+   */
+  getUserTokenGroups(userId: DirectoryObjectIdentifier): Promise<DirectoryGroup[] | null>;
   getGroupMembers(groupId: DirectoryObjectIdentifier): Promise<DirectoryUser[]>;
   getComputer(identifier: DirectoryObjectIdentifier): Promise<DirectoryComputer | null>;
   searchComputers(query: DirectoryComputerSearchQuery): Promise<DirectoryComputer[]>;

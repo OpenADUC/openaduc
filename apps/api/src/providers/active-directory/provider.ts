@@ -123,6 +123,7 @@ import {
   isLocked,
   objectGuidFromString,
   objectGuidToString,
+  sidToString,
   UAC,
 } from './utils.js';
 
@@ -487,6 +488,34 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         explicitBufferAttributes: BINARY_ATTRS,
       });
       return normalizeGroups(client, searchEntries);
+    });
+  }
+
+  async getUserTokenGroups(userId: DirectoryObjectIdentifier): Promise<DirectoryGroup[] | null> {
+    return this.withServiceBind(async (client) => {
+      const entry = await this.findUserEntry(client, userId, ['distinguishedName']);
+      if (!entry) return null;
+      // tokenGroups is constructed, so AD computes it only for a base search.
+      const { searchEntries } = await client.search(entry.dn, {
+        scope: 'base',
+        filter: '(objectClass=*)',
+        attributes: ['tokenGroups'],
+        explicitBufferAttributes: ['tokenGroups'],
+      });
+      const raw = searchEntries[0]?.tokenGroups;
+      const sids = (Array.isArray(raw) ? raw : raw ? [raw] : [])
+        .filter((v): v is Buffer => Buffer.isBuffer(v))
+        .map(sidToString);
+      if (sids.length === 0) return null;
+      // The string form, which AD and Samba both take; Samba doesn't match
+      // a domain SID written as escaped bytes.
+      const { searchEntries: groups } = await client.search(this.config.baseDn, {
+        scope: 'sub',
+        filter: `(&${GROUP_FILTER_BASE}(|${sids.map((sid) => `(objectSid=${sid})`).join('')}))`,
+        attributes: GROUP_ATTRS.filter((a) => a !== 'member' && a !== 'memberOf'),
+        explicitBufferAttributes: BINARY_ATTRS,
+      });
+      return groups.map(normalizeGroup);
     });
   }
 
