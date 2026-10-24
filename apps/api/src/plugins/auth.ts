@@ -42,10 +42,10 @@ export interface ResolvedActor {
   elevated: ElevatedSession | null;
   /**
    * Step-up bind password pulled from the in-memory CredentialCacheService.
-   * Populated whenever an elevated session is active and the cache still has
-   * the password for it. Writes use this to bind to AD as the operator
-   * without re-prompting per request. Null when not elevated or when the
-   * cache entry has been wiped (session ended, step-down, logout, restart).
+   * Set exactly when `elevated` is: an elevated session whose password the
+   * cache no longer holds (session ended, step-down, logout, restart) counts
+   * as none. Writes use this to bind to AD as the operator without
+   * re-prompting per request.
    */
   elevatedPassword: string | null;
 }
@@ -93,6 +93,10 @@ export default fp(async (app) => {
       const session = await app.services.sessions.resolve(cookieToken);
       if (!session) return;
       let elevated = await app.services.sessions.findActiveElevated(session.id);
+      let elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
+      // Without its cached password (gone with a restart) the session can't
+      // write, so it isn't reported or extended as open.
+      if (!elevatedPassword) elevated = null;
       if (elevated && req.headers[BACKGROUND_REQUEST_HEADER] !== '1') {
         const before = elevated;
         // Failing to record activity shouldn't fail the request.
@@ -103,7 +107,7 @@ export default fp(async (app) => {
         if (elevated) app.services.credentialCache.extend(elevated.id, elevated.idleExpiresAt);
       }
       if (elevated) reply.header(ELEVATED_IDLE_END_HEADER, elevated.idleExpiresAt.toISOString());
-      const elevatedPassword = elevated ? app.services.credentialCache.get(elevated.id) : null;
+      else elevatedPassword = null;
       req.actor = { session, elevated, elevatedPassword };
       req.directoryId = session.directoryId;
     } catch (err) {
@@ -182,11 +186,7 @@ export default fp(async (app) => {
   }
 
   function requireStepUp(actor: ResolvedActor): void {
-    if (!actor.elevated) throw StepUpRequired();
-    // The DB row says elevated, but our process restarted (or another
-    // instance handled the step-up) and we don't have the bind password
-    // cached. Treat it as "step-up required" so the client re-elevates.
-    if (!actor.elevatedPassword) throw StepUpRequired();
+    if (!actor.elevated || !actor.elevatedPassword) throw StepUpRequired();
   }
 
   // Coerces like the routes' idParamSchema; an id that isn't a positive

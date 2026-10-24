@@ -160,6 +160,12 @@ export interface TestApi {
   directoryId: number | null;
   /** A browser-like client with its own cookie jar and source address. */
   client(): TestClient;
+  /**
+   * Stop this instance and build a new one over the same database, as a
+   * restart does: process memory (cached passwords, timers) starts empty.
+   * Existing clients carry on against the new instance.
+   */
+  restart(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -177,7 +183,7 @@ export async function startApi(options: { env?: Record<string, string> } = {}): 
   const dbUrl = new URL(adminUrl);
   dbUrl.pathname = `/${dbName}`;
 
-  Object.assign(process.env, {
+  const env = {
     NODE_ENV: 'test',
     LOG_LEVEL: process.env.TEST_LOG_LEVEL ?? 'fatal',
     DATABASE_URL: dbUrl.toString(),
@@ -197,25 +203,34 @@ export async function startApi(options: { env?: Record<string, string> } = {}): 
     AD_SERVICE_ACCOUNT_PASSWORD: '',
     BOOTSTRAP_ADMIN_GROUP_DN: '',
     ...options.env,
-  });
+  };
 
-  // Fresh module graph so this instance reads the env set above (loadEnv
-  // memoizes) even when a file starts more than one API.
-  vi.resetModules();
-  const { buildApp } = await import('../../src/app.js');
-  const app = await buildApp();
-  await app.ready();
+  const build = async (): Promise<FastifyInstance> => {
+    Object.assign(process.env, env);
+    // Fresh module graph so this instance reads the env set above (loadEnv
+    // memoizes) even when a file starts more than one API.
+    vi.resetModules();
+    const { buildApp } = await import('../../src/app.js');
+    const app = await buildApp();
+    await app.ready();
+    return app;
+  };
 
   let clientCounter = 0;
-  return {
-    app,
+  const api: TestApi = {
+    app: await build(),
     directoryId: null,
-    client: () => new TestClient(app, `10.99.0.${++clientCounter}`),
+    client: () => new TestClient(() => api.app, `10.99.0.${++clientCounter}`),
+    async restart() {
+      await api.app.close();
+      api.app = await build();
+    },
     async close() {
-      await app.close();
+      await api.app.close();
       await withAdmin(adminUrl, (c) => c.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`));
     },
   };
+  return api;
 }
 
 async function withAdmin<T>(url: string, fn: (c: pg.Client) => Promise<T>): Promise<T> {
@@ -317,7 +332,7 @@ export class TestClient {
   readonly headers: Record<string, string> = {};
 
   constructor(
-    private readonly app: FastifyInstance,
+    private readonly app: () => FastifyInstance,
     /** Distinct per client so per-IP rate limits don't couple tests. */
     readonly remoteAddress: string,
   ) {}
@@ -333,7 +348,7 @@ export class TestClient {
     }
     const options: InjectOptions = { method, url, headers, remoteAddress: this.remoteAddress };
     if (payload !== undefined) options.payload = payload as object;
-    const res = await this.app.inject(options);
+    const res = await this.app().inject(options);
     for (const c of res.cookies) {
       if (!c.value || (c.expires && c.expires.getTime() <= Date.now())) this.cookies.delete(c.name);
       else this.cookies.set(c.name, c.value);

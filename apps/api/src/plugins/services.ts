@@ -141,11 +141,35 @@ export default fp(async (app) => {
   // this in `onReady` rather than at decorate-time keeps tests that build
   // and tear down the app instance from leaking timers.
   app.addHook('onReady', async () => {
+    // The passwords cached for them went with the last process, so they
+    // can't write: end them rather than report them as open.
+    await endElevatedSessionsLeftOpen().catch((err) =>
+      app.log.error({ err }, 'ending elevated sessions left open failed'),
+    );
     if (env.SYNC_SCHEDULER_ENABLED) sync.start();
     bulkJobs.start();
     classPasses.start();
     importLicenses.start();
   });
+
+  async function endElevatedSessionsLeftOpen(): Promise<void> {
+    for (const ended of await sessions.endOpenElevatedSessions()) {
+      await audit
+        .recordEvent({
+          action: 'auth.stepup.revoke',
+          result: 'success',
+          actorUserId: ended.actorUserId,
+          actorDisplayName: ended.actorDisplayName,
+          actorAuthMethod: 'system',
+          sessionId: ended.adminSessionId,
+          providerId: ended.directoryId,
+          targetType: 'session',
+          targetId: ended.id,
+          metadata: { reason: 'api_restart' },
+        })
+        .catch((err) => app.log.error({ err }, 'audit insert failed for auth.stepup.revoke'));
+    }
+  }
 
   app.addHook('onClose', async () => {
     // Before the credential cache is wiped, so rows in flight can finish.
