@@ -83,7 +83,7 @@ describe('parsePastedList', () => {
   });
 
   it('drops invisible characters and reads accents in one Unicode form', () => {
-    expect(parsePastedList('﻿jdoe​\nJosé')).toEqual(['jdoe', 'José']);
+    expect(parsePastedList('\uFEFFjdoe\u200B\nJose\u0301')).toEqual(['jdoe', 'José']);
   });
 
   it('drops blanks and exact repeats, leaving case to the server', () => {

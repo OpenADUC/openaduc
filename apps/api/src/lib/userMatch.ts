@@ -7,7 +7,7 @@ export interface MatchableUser extends UserMatchCandidate {
   displayNameKey: string | null;
 }
 
-const INVISIBLE = /[​-‍⁠﻿]/g;
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/g;
 const EDGES = /^[\s,;"'`‘’“”]+|[\s,;"'`‘’“”]+$/g;
 
 /** An entry as written, without stray whitespace, quotes or separators. */
