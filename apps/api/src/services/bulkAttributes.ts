@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { createHash } from 'node:crypto';
 import { sql, type Kysely, type Selectable } from 'kysely';
 import {
   BULK_ATTRIBUTE_FIELDS,
@@ -16,6 +15,7 @@ import { rawArrayValues, rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser, UserAttributePatch } from '../providers/types.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
 import { previewList } from './previewList.js';
+import { previewToken } from './previewToken.js';
 import { cachedUserName, findCachedUser } from './userCache.js';
 import { SELF_MANAGER_MESSAGE } from './userAttributeWrite.js';
 
@@ -212,23 +212,15 @@ export function rowSnapshots(changes: readonly FieldChange[]): {
   };
 }
 
-/**
- * Names this edit of these users, whatever their order or case, so the
- * job can check it runs on what the operator previewed. Not a secret: it
- * guards against a stale preview, not a forged one.
- */
 export function attributesPreviewToken(
   ids: readonly string[],
   changes: BulkAttributeChanges,
 ): string {
-  const users = [...ids.map((id) => id.toLowerCase())].sort().join(',');
   const fields = named(changes).map((f) => {
     const value = changes[f];
     return [f, f === 'manager' && typeof value === 'string' ? value.toLowerCase() : value];
   });
-  return createHash('sha256')
-    .update(`attributes\n${users}\n${JSON.stringify(fields)}`)
-    .digest('base64url');
+  return previewToken('attributes', ids, fields);
 }
 
 /**

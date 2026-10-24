@@ -8,6 +8,7 @@ import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BULK_ATTRIBUTE_FIELDS,
+  type BulkAccountPreview,
   type BulkUserAttributesPreview,
   type BulkGroupMembershipPreview,
   type BulkJob,
@@ -68,6 +69,19 @@ const api = {
     })),
     previewGroupChange: vi.fn(),
     previewAttributeEdit: vi.fn(),
+    previewAccountChange: vi.fn(),
+  },
+  ous: {
+    list: vi.fn(async () => ({
+      ous: [
+        {
+          distinguishedName: 'OU=Leavers,DC=corp,DC=example',
+          name: 'Leavers',
+          parentDn: 'DC=corp,DC=example',
+          stale: false,
+        },
+      ],
+    })),
   },
   groups: {
     search: vi.fn(async (): Promise<{ rows: GroupSummary[]; total: number }> => ({
@@ -80,6 +94,7 @@ const api = {
     get: vi.fn(),
     startGroupChange: vi.fn(),
     startAttributeEdit: vi.fn(),
+    startAccountChange: vi.fn(),
     rows: vi.fn(async () => ({
       rows: [
         {
@@ -414,5 +429,147 @@ describe('the user list, editing the selection’s attributes', () => {
       previewToken: 'tok',
     });
     expect(page.get('.bulk-job').text()).toContain('Editing 2 accounts (department and company)…');
+  });
+});
+
+describe('the user list, moving the selection and changing its account settings', () => {
+  const running = (action: BulkJob['action'], subject: BulkJob['subject']): BulkJob => ({
+    id: '10',
+    action,
+    subject,
+    status: 'running',
+    pauseReason: null,
+    actorDisplayName: 'OpenADUC Operator',
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    counts: { total: 2, pending: 2, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 },
+  });
+  const preview = (more: Partial<BulkAccountPreview>): BulkAccountPreview => ({
+    op: 'move',
+    changed: { count: 0, offset: 0, users: [] },
+    unchanged: { count: 0, users: [] },
+    notes: [],
+    ou: null,
+    unknownCount: 0,
+    previewToken: 'tok',
+    ...more,
+  });
+
+  async function selectBoth(page: Awaited<ReturnType<typeof openUsers>>) {
+    await button(page, 'Paste a list').trigger('click');
+    await page.get('#paste-list-input').setValue('jdoe\nbsmith');
+    await button(page, 'Find users').trigger('click');
+    await flushPromises();
+    await button(page, 'Select 2 users').trigger('click');
+  }
+
+  it('picks an OU, previews who moves, and starts the job on confirming', async () => {
+    const leavers = 'OU=Leavers,DC=corp,DC=example';
+    api.users.previewAccountChange.mockResolvedValue(
+      preview({
+        changed: {
+          count: 1,
+          offset: 0,
+          users: [{ id: 'jdoe', name: 'Jane Doe', from: 'OU=Staff,DC=corp,DC=example' }],
+        },
+        unchanged: { count: 1, users: [{ id: 'bsmith', name: 'Bob Smith' }] },
+        ou: { distinguishedName: leavers, name: 'Leavers' },
+      }),
+    );
+    const job = running('user.move', { ou: { distinguishedName: leavers, name: 'Leavers' } });
+    api.bulkJobs.startAccountChange.mockResolvedValue({ job });
+    api.bulkJobs.get.mockResolvedValue({ job });
+    const page = await openUsers('', ['read:user', 'write:user.move']);
+    await selectBoth(page);
+    expect(button(page, 'Account…')).toBeUndefined();
+
+    await button(page, 'Move…').trigger('click');
+    await flushPromises();
+    expect(page.text()).toContain('Move 2 accounts to an OU');
+    expect(button(page, 'Preview').attributes('disabled')).toBeDefined();
+    await page.get('.p-treeselect').trigger('click');
+    await flushPromises();
+    await page
+      .findAll('.p-tree-node-content')
+      .find((n) => n.text().includes('Leavers'))!
+      .trigger('click');
+    await button(page, 'Preview').trigger('click');
+    await flushPromises();
+
+    expect(api.users.previewAccountChange).toHaveBeenCalledWith({
+      ids: ['jdoe', 'bsmith'],
+      change: { op: 'move', targetOuDn: leavers },
+    });
+    const text = page.text();
+    expect(text).toContain('Move 2 accounts to Leavers?');
+    expect(text).toContain('1 will be moved · 1 is already in Leavers');
+    expect(page.get('.ba-user').text()).toMatch(/Jane Doe.*in OU=Staff/s);
+    expect(text).toContain('Already in Leavers (1)');
+    expect(api.bulkJobs.startAccountChange).not.toHaveBeenCalled();
+
+    await button(page, 'Move account').trigger('click');
+    await flushPromises();
+    expect(api.bulkJobs.startAccountChange).toHaveBeenCalledExactlyOnceWith({
+      ids: ['jdoe', 'bsmith'],
+      change: { op: 'move', targetOuDn: leavers },
+      previewToken: 'tok',
+    });
+    expect(page.get('.bulk-job').text()).toContain('Moving 2 accounts to Leavers…');
+  });
+
+  it('offers the account settings the operator may change, and warns who must-change won’t reach', async () => {
+    api.users.previewAccountChange.mockResolvedValue(
+      preview({
+        op: 'mustChangePassword',
+        changed: {
+          count: 2,
+          offset: 0,
+          users: [
+            { id: 'bsmith', name: 'Bob Smith', from: null },
+            { id: 'jdoe', name: 'Jane Doe', from: null },
+          ],
+        },
+        notes: [{ kind: 'never_expires', count: 1, users: [{ id: 'jdoe', name: 'Jane Doe' }] }],
+      }),
+    );
+    const job = running('user.passwordMustChange.set', null);
+    api.bulkJobs.startAccountChange.mockResolvedValue({ job });
+    api.bulkJobs.get.mockResolvedValue({ job });
+    const page = await openUsers('', [
+      'read:user',
+      'write:user.enableDisable',
+      'write:user.resetPassword',
+    ]);
+    await selectBoth(page);
+    expect(button(page, 'Move…')).toBeUndefined();
+
+    await button(page, 'Account…').trigger('click');
+    expect(page.text()).toContain('Set when 2 accounts expire');
+    const options = page.findAll('[aria-label="Account setting"] button').map((b) => b.text());
+    expect(options).toEqual(['Account expiry', 'Must change password', 'Password expires']);
+    await page
+      .findAll('[aria-label="Account setting"] button')
+      .find((b) => b.text() === 'Must change password')!
+      .trigger('click');
+    expect(page.text()).toContain('Make 2 accounts change their password');
+    await button(page, 'Preview').trigger('click');
+    await flushPromises();
+
+    expect(api.users.previewAccountChange).toHaveBeenLastCalledWith({
+      ids: ['jdoe', 'bsmith'],
+      change: { op: 'mustChangePassword' },
+    });
+    const text = page.text();
+    expect(text).toContain('2 will have to change their password · 0 already have to');
+    expect(text).toContain('1 user has a password that never expires.');
+
+    await button(page, 'Require change for 2 accounts').trigger('click');
+    await flushPromises();
+    expect(api.bulkJobs.startAccountChange).toHaveBeenCalledExactlyOnceWith({
+      ids: ['jdoe', 'bsmith'],
+      change: { op: 'mustChangePassword' },
+      previewToken: 'tok',
+    });
+    expect(page.get('.bulk-job').text()).toContain('Requiring a password change for 2 accounts…');
   });
 });

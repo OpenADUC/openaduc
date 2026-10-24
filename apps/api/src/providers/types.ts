@@ -456,6 +456,17 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult>;
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
+  /** Make the user change their password at next sign-in: `pwdLastSet` 0. */
+  requirePasswordChange(
+    userId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
+  /** Set or clear "password never expires" (DONT_EXPIRE_PASSWORD in `userAccountControl`). */
+  setPasswordNeverExpires(
+    userId: DirectoryObjectIdentifier,
+    neverExpires: boolean,
+    ctx: WriteContext,
+  ): Promise<MutationResult>;
   updateUserAttributes(
     userId: DirectoryObjectIdentifier,
     patch: UserAttributePatch,

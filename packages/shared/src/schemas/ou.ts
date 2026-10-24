@@ -23,6 +23,10 @@ export const ouListResponseSchema = z.object({
 });
 export type OuListResponse = z.infer<typeof ouListResponseSchema>;
 
+/** An OU as a job or preview names it. */
+export const ouRefSchema = z.object({ distinguishedName: z.string(), name: z.string() });
+export type OuRef = z.infer<typeof ouRefSchema>;
+
 export const moveRequestSchema = z.object({
   // The new parent OU's DN. The server validates that it exists in the
   // cached directory_ous table for the active provider before issuing the

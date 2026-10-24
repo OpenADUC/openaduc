@@ -3,6 +3,7 @@ import { sql, type Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryOu } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { rawFlag } from '../lib/rawAttributes.js';
 import { memberOfArray, rawValuesArray } from './userCache.js';
 
 /**
@@ -113,22 +114,47 @@ export async function rebuildMemberships(
   });
 }
 
+export interface CachedOu {
+  distinguished_name: string;
+  name: string;
+  raw_attributes_json: Record<string, unknown>;
+}
+
 /**
  * A live OU from the cache, matched case-insensitively, with its DN as AD
- * spells it; null when OpenADUC doesn't know it. Routes use this to refuse
- * an OU the sync hasn't seen before asking AD.
+ * spells it; null when OpenADUC doesn't know it, or the last full sync
+ * didn't see it. Routes use this to refuse an OU the sync hasn't seen
+ * before asking AD.
  */
 export async function findCachedOu(
   db: Kysely<DB>,
   providerId: number,
   dn: string,
-): Promise<{ distinguished_name: string; name: string } | null> {
+): Promise<CachedOu | null> {
   const row = await db
     .selectFrom('directory_ous')
-    .select(['distinguished_name', 'name'])
+    .select(['distinguished_name', 'name', 'raw_attributes_json'])
     .where('provider_id', '=', providerId)
     .where('deleted_at', 'is', null)
+    .where('stale_at', 'is', null)
     .where(sql<string>`lower(distinguished_name)`, '=', dn.toLowerCase())
     .executeTakeFirst();
   return row ?? null;
+}
+
+/** The Domain Controllers OU, at the root of a domain. */
+const DOMAIN_CONTROLLERS = /^OU=Domain Controllers(,DC=[^,]+)+$/i;
+
+/**
+ * Why users can't be moved into this OU, or null. Domain Controllers is
+ * AD's own (isCriticalSystemObject; the DN for rows synced before that
+ * was read), and the domain's policy for DCs applies there. AD's other
+ * system containers (CN=System, CN=Builtin, ...) aren't OUs, so aren't in
+ * the cache to begin with.
+ */
+export function userMoveRefusal(ou: CachedOu): string | null {
+  return rawFlag(ou.raw_attributes_json['isCriticalSystemObject']) ||
+    DOMAIN_CONTROLLERS.test(ou.distinguished_name)
+    ? `${ou.name} is a system OU AD keeps for its own objects; users can’t be moved there.`
+    : null;
 }

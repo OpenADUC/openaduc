@@ -3,6 +3,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sql, type RawBuilder, type Selectable } from 'kysely';
 import {
   accountExpiryRequestSchema,
+  bulkAccountPreviewRequestSchema,
+  bulkAccountPreviewSchema,
   bulkGroupMembershipPreviewRequestSchema,
   bulkGroupMembershipPreviewSchema,
   bulkUserAttributesPreviewRequestSchema,
@@ -19,6 +21,7 @@ import {
   userSearchQuerySchema,
   userSearchResponseSchema,
   userUpdateRequestSchema,
+  type BulkAccountPreview,
   type BulkGroupMembershipPreview,
   type BulkUserAttributesPreview,
   type RecycleBinStatus,
@@ -32,18 +35,28 @@ import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
 import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
 import { lookupsFor, matchEntries } from '../lib/userMatch.js';
-import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
+import {
+  AppError,
+  BadRequest,
+  Conflict,
+  NotFound,
+  StepUpRequired,
+  Unauthorized,
+} from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
+import { previewAccountChange } from '../services/bulkAccountChange.js';
 import { previewAttributes } from '../services/bulkAttributes.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
-import { findCachedOu } from '../services/ouCache.js';
+import { findCachedOu, userMoveRefusal } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
+  expireAccountAt,
+  moveUserTo,
   UNLOCK_USER,
   writeUserAccount,
 } from '../services/userAccountWrite.js';
@@ -298,7 +311,11 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               eb('account_expires_at', 'is not', null),
               eb('account_expires_at', '<=', horizon),
             ]),
-            eb('password_must_change', '=', true),
+            // AD holds must-change back while the password never expires.
+            eb.and([
+              eb('password_must_change', '=', true),
+              eb('password_never_expires', '=', false),
+            ]),
             // Password expiring or expired (excluding never-expires accounts).
             eb.and([
               eb('password_never_expires', '=', false),
@@ -440,7 +457,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                 when not password_never_expires and not password_must_change
                   and ${expiry} <= now() then 3
                 when account_expires_at <= now() then 4
-                when password_must_change then 5
+                when password_must_change and not password_never_expires then 5
                 when not password_never_expires
                   and ${expiry} <= now() + interval '14 days' then 6
                 else 7
@@ -943,36 +960,16 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
 
-      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
-      if (!beforeRefresh) throw NotFound('user not found');
-
-      const result = await withAudit(
-        app.services.audit,
-        {
-          ...auditContextFromRequest(req),
-          action: 'user.accountExpiry.set',
-          actorAuthMethod: 'ad-password',
-          providerId: provider.id,
-          targetType: 'user',
-          targetId: beforeRefresh.user.objectGuid,
-          targetDn: beforeRefresh.user.distinguishedName,
-          metadata: { expiresAt: body.expiresAt },
-        },
-        async () => {
-          const r = await provider.setAccountExpiry(
-            { kind: 'objectGuid', value: id },
-            body.expiresAt === null ? null : new Date(body.expiresAt),
-            ctx(actor, req),
-          );
-          return {
-            ok: r.ok,
-            before: r.before ?? null,
-            after: r.after ?? null,
-            errorCode: r.reason ?? null,
-          };
-        },
+      const written = await writeUserAccount(
+        app.services,
+        provider,
+        expireAccountAt(body.expiresAt === null ? null : new Date(body.expiresAt)),
+        id,
+        ctx(actor, req),
+        auditContextFromRequest(req),
       );
-
+      if (!written) throw NotFound('user not found');
+      const { result } = written;
       if (!result.ok) {
         if (result.errorCode === 'permission_denied') {
           throw app.httpErrors.forbidden('directory rejected the change');
@@ -981,7 +978,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
           `setting account expiry failed: ${result.errorCode ?? 'unknown'}`,
         );
       }
-      await app.services.userLiveRefresh.refresh(provider, id);
       return { ok: true, before: result.before, after: result.after };
     },
   });
@@ -1096,11 +1092,26 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     },
   });
 
+  // ---- POST /api/users/bulk-account/preview -----------------------------
+  // What moving the selected users, setting when their accounts expire,
+  // making them change their password or clearing "password never
+  // expires" would change, from the cache, before the job starts.
+  app.post('/api/users/bulk-account/preview', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<BulkAccountPreview> => {
+      const body = bulkAccountPreviewRequestSchema.parse(req.body);
+      const preview = await previewAccountChange(app.db, req.directoryId!, body).catch(
+        refuseBulkRequest,
+      );
+      return bulkAccountPreviewSchema.parse(preview);
+    },
+  });
+
   // ---- POST /api/users/:id/move (modifyDN to a new parent OU) ----------
   // Body: { targetOuDn }. The server validates that the OU exists for this
   // provider in the cache before issuing the modify; the AD provider then
-  // re-checks via its own bind. Idempotent — if the user is already under
-  // the requested OU, the provider returns ok with a no-op.
+  // re-checks via its own bind. Idempotent — a user already under the
+  // requested OU isn't written, and the no-op is audited as `unchanged`.
   app.post('/api/users/:id/move', {
     config: { policy: { capability: 'write:user.move', stepUp: true, directory: 'caller' } },
     handler: async (req) => {
@@ -1110,57 +1121,43 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
 
-      const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
-      if (!beforeRefresh) throw NotFound('user not found');
-
-      // Confirm the target OU is one we know about for this provider. This
-      // gates against typos and against pointing the move at a container the
-      // sync hasn't seen — the AD bind would refuse those anyway, but
-      // failing fast here gives a cleaner 400.
+      // The AD bind would refuse an OU the sync hasn't seen too, but failing
+      // here first gives a cleaner 400; a missing user is still a 404.
       const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
       if (!targetOu) {
+        if (!(await app.services.userLiveRefresh.refresh(provider, id))) {
+          throw NotFound('user not found');
+        }
         throw app.httpErrors.badRequest('target OU not found in directory cache');
       }
+      const refused = userMoveRefusal(targetOu);
+      if (refused) {
+        throw new AppError({ statusCode: 422, code: 'unprocessable_entity', message: refused });
+      }
 
-      const result = await withAudit(
-        app.services.audit,
-        {
-          ...auditContextFromRequest(req),
-          action: 'user.move',
-          actorAuthMethod: 'ad-password',
-          providerId: provider.id,
-          targetType: 'user',
-          targetId: beforeRefresh.user.objectGuid,
-          targetDn: beforeRefresh.user.distinguishedName,
-          metadata: { targetOuDn: targetOu.distinguished_name, targetOuName: targetOu.name },
-        },
-        async () => {
-          const r = await provider.moveUser(
-            { kind: 'objectGuid', value: id },
-            targetOu.distinguished_name,
-            ctx(actor, req),
-          );
-          return {
-            ok: r.ok,
-            before: r.before ?? null,
-            after: r.after ?? null,
-            errorCode: r.reason ?? null,
-          };
-        },
+      const move = moveUserTo(targetOu);
+      const written = await writeUserAccount(
+        app.services,
+        provider,
+        move,
+        id,
+        ctx(actor, req),
+        auditContextFromRequest(req),
       );
-
+      if (!written) throw NotFound('user not found');
+      const { result, user } = written;
       if (!result.ok) {
         if (result.errorCode === 'permission_denied') {
           throw app.httpErrors.forbidden('directory rejected the move');
+        }
+        if (result.errorCode === 'conflict') {
+          throw Conflict(move.refused('conflict', user) ?? 'the name is taken in that OU');
         }
         if (result.errorCode === 'not_found') {
           throw app.httpErrors.notFound('user not found in directory');
         }
         throw app.httpErrors.badGateway(`move failed: ${result.errorCode ?? 'unknown'}`);
       }
-
-      // Refresh cache so the new distinguished_name lands in user_cache_records.
-      await app.services.userLiveRefresh.refresh(provider, id);
       return { ok: true, before: result.before, after: result.after };
     },
   });

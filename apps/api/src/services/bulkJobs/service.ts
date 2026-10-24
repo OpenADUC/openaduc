@@ -407,10 +407,12 @@ export class BulkJobService {
             stopped.pause = 'step_up_required';
             return;
           }
+          if (stopped.pause) return;
           const row = await this.claimRow(jobId, token);
           if (!row) return;
-          const paused = await this.runRow(job, token, provider, row, writeCtx);
-          if (paused) stopped.pause = paused;
+          await this.runRow(job, token, provider, row, writeCtx, (reason) => {
+            stopped.pause = reason;
+          });
         }
       };
       // A failed worker stops the others claiming rows; the rows they have
@@ -493,14 +495,19 @@ export class BulkJobService {
     return rows[0] ?? null;
   }
 
-  /** Run one row and record its outcome; returns why the job should pause, if it should. */
+  /**
+   * Run one row and record its outcome. `pause` is told, before anything
+   * else is awaited, when the job should pause, so no other worker claims
+   * a row meanwhile.
+   */
   private async runRow(
     job: JobRecord,
     token: string,
     provider: DirectoryProvider,
     row: RowRecord,
     writeCtx: WriteContext,
-  ): Promise<BulkJobPauseReason | null> {
+    pause: (reason: BulkJobPauseReason) => void,
+  ): Promise<void> {
     const handler = this.handlers[job.action];
     const audit = auditBase(actorOf(job), job.id);
     let outcome: BulkRowOutcome;
@@ -517,6 +524,7 @@ export class BulkJobService {
       );
     } catch (err) {
       if (err instanceof DirectoryUnavailableError && !wasAudited(err)) {
+        pause('directory_unavailable');
         // Nothing was written: the row waits for the job to continue.
         await this.db
           .updateTable('bulk_job_rows')
@@ -524,7 +532,7 @@ export class BulkJobService {
           .where('id', '=', row.id)
           .where('run_token', '=', token)
           .execute();
-        return 'directory_unavailable';
+        return;
       }
       const errorCode =
         err instanceof DirectoryUnavailableError ? 'directory_unavailable' : 'internal_error';
@@ -533,6 +541,8 @@ export class BulkJobService {
       }
       outcome = { ok: false, errorCode, audited: wasAudited(err) };
     }
+    if (!outcome.ok && outcome.errorCode === 'directory_unavailable')
+      pause('directory_unavailable');
 
     if (!outcome.ok && !outcome.audited) {
       await this.deps.audit
@@ -570,9 +580,6 @@ export class BulkJobService {
       .where('id', '=', row.id)
       .where('run_token', '=', token)
       .execute();
-    return outcome.ok || outcome.errorCode !== 'directory_unavailable'
-      ? null
-      : 'directory_unavailable';
   }
 
   /** Fail the rows a run left in flight (any run's, with no token). */

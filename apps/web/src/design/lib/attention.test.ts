@@ -27,6 +27,10 @@ describe('needsAttention, as the API’s issues filter decides it', () => {
       { passwordExpiresAt: HOUR_AGO, passwordNeverExpires: true },
     ],
     ['a disabled account, whatever else is wrong', { enabled: false, locked: true }],
+    [
+      'a must-change AD holds back while the password never expires',
+      { passwordMustChange: true, passwordNeverExpires: true },
+    ],
   ])('drops %s', (_, u) => {
     expect(needsAttention(aUserDetail(u), 1, NOW)).toBe(false);
   });

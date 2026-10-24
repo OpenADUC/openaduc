@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { aUserDetail } from '../../test/userDetail.js';
 import {
   describeBlocker,
+  describeNote,
   fixFor,
   lockoutEnd,
   signInBlockers,
   signInFix,
+  signInNotes,
   userStatus,
   type SignInBlocker,
 } from './signIn.js';
@@ -73,6 +75,19 @@ describe('signInBlockers', () => {
     expect(signInBlockers(aUserDetail({ passwordMustChange: true }), NOW)).toEqual([
       { kind: 'must-change-password' },
     ]);
+  });
+
+  it('says a must-change AD holds back, while the password never expires, without blocking', () => {
+    const u = aUserDetail({ passwordMustChange: true, passwordNeverExpires: true });
+    expect(signInBlockers(u, NOW)).toEqual([]);
+    expect(signInNotes(u)).toEqual([{ kind: 'must-change-held-back' }]);
+    expect(describeNote(signInNotes(u)[0]!)).toMatchObject({
+      title: 'Must change password is set',
+      details: ['AD won’t ask for it because the password never expires'],
+    });
+    expect(fixFor(u, () => true, NOW)).toBeNull();
+    expect(userStatus(u, NOW)).toBe('active');
+    expect(signInNotes(aUserDetail({ passwordMustChange: true }))).toEqual([]);
   });
 
   it('puts the most severe first when several apply', () => {
