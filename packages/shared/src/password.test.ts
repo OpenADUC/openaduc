@@ -47,6 +47,13 @@ describe('generatePassword', () => {
     }
   });
 
+  it('makes a longer one when asked, never shorter than the policy’s', () => {
+    expect(generatePassword(complex, jane, 32)).toHaveLength(32);
+    expect(generatePassword({ minPwdLength: 40, complexityRequired: true }, jane, 32)).toHaveLength(
+      40,
+    );
+  });
+
   it('meets complexity even when the policy doesn’t ask for it', () => {
     const password = generatePassword({ minPwdLength: 0, complexityRequired: false }, jane);
     expect(unmet(password)).toEqual([]);
