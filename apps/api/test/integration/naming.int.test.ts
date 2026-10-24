@@ -191,4 +191,15 @@ describe('naming pattern', () => {
     const [s] = await check(operator, [{ first: 'Alice', last: 'Anders' }]);
     expect(s).toMatchObject({ samAccountName: 'aanders', upn: `aanders@${EXTRA_SUFFIX}` });
   });
+
+  it('keeps the naming pattern when other directory settings change', async () => {
+    const res = await admin.patch(`/api/directories/${api.directoryId}`, {
+      displayName: 'Naming test',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await operator.get(url)).json<NamingSettingsResponse>().naming).toEqual({
+      pattern: '{f}{last}',
+      upnSuffix: EXTRA_SUFFIX,
+    });
+  });
 });
