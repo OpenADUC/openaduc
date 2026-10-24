@@ -1,26 +1,36 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
-import type { Capability } from '../capabilities.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
 export const BULK_JOB_ACTIONS = ['user.disable', 'user.enable', 'user.unlock'] as const;
 export type BulkJobAction = (typeof BULK_JOB_ACTIONS)[number];
 
-export const BULK_JOB_CAPABILITY: Record<BulkJobAction, Capability> = {
-  'user.disable': 'write:user.enableDisable',
-  'user.enable': 'write:user.enableDisable',
-  'user.unlock': 'write:user.unlock',
-};
+/** The action without its object type, as in "disable". */
+export type BulkJobVerb = BulkJobAction extends `user.${infer V}` ? V : never;
+
+export function bulkJobVerb(action: BulkJobAction): BulkJobVerb {
+  return action.slice('user.'.length) as BulkJobVerb;
+}
+
+/** The route, under /api, that starts a job of this action. */
+export function bulkJobPath(action: BulkJobAction): string {
+  return `/users/bulk-${bulkJobVerb(action)}`;
+}
 
 /**
  * `paused` waits for the operator: their elevated session ended
- * (`step_up_required`), or the API stopped while it ran (`interrupted`).
- * `finished` and `cancelled` are final until the operator retries.
+ * (`step_up_required`), the API stopped while it ran (`interrupted`), or
+ * no domain controller answered (`directory_unavailable`). `finished` and
+ * `cancelled` are final until the operator retries.
  */
 export const BULK_JOB_STATUSES = ['queued', 'running', 'paused', 'finished', 'cancelled'] as const;
 export type BulkJobStatus = (typeof BULK_JOB_STATUSES)[number];
 
-export const BULK_JOB_PAUSE_REASONS = ['step_up_required', 'interrupted'] as const;
+export const BULK_JOB_PAUSE_REASONS = [
+  'step_up_required',
+  'interrupted',
+  'directory_unavailable',
+] as const;
 export type BulkJobPauseReason = (typeof BULK_JOB_PAUSE_REASONS)[number];
 
 /** `skipped`: the job was cancelled before the row ran. */
@@ -35,6 +45,7 @@ export type BulkJobRowStatus = (typeof BULK_JOB_ROW_STATUSES)[number];
 
 export const MAX_BULK_JOB_ROWS = 10_000;
 
+/** Starting a job that acts on users by id. */
 export const bulkJobCreateRequestSchema = z.object({
   ids: z
     .array(z.guid())
@@ -68,6 +79,9 @@ export const bulkJobSchema = z.object({
 });
 export type BulkJob = z.infer<typeof bulkJobSchema>;
 
+export const bulkJobResponseSchema = z.object({ job: bulkJobSchema });
+export const bulkJobListResponseSchema = z.object({ jobs: z.array(bulkJobSchema) });
+
 export const bulkJobRowSchema = z.object({
   targetId: z.string(),
   targetName: z.string().nullable(),
@@ -77,18 +91,21 @@ export const bulkJobRowSchema = z.object({
 });
 export type BulkJobRow = z.infer<typeof bulkJobRowSchema>;
 
+export const bulkJobRowsResponseSchema = z.object({ rows: z.array(bulkJobRowSchema) });
+
 export const bulkJobRowsQuerySchema = z.object({
   status: z.enum(BULK_JOB_ROW_STATUSES).optional(),
 });
 
 /** A bulk job as the audit log shows it, on the `bulk.create` event that heads it. */
 export const auditBulkSummarySchema = z.object({
-  action: z.enum(BULK_JOB_ACTIONS).nullable(),
+  action: z.enum(BULK_JOB_ACTIONS),
   /** Null once the job's record is gone; its audit events remain. */
   status: z.enum(BULK_JOB_STATUSES).nullable(),
   pauseReason: z.enum(BULK_JOB_PAUSE_REASONS).nullable(),
+  /** Null once the job's record is gone. */
+  counts: bulkJobCountsSchema.nullable(),
+  /** How many rows it was started with, from its `bulk.create` event. */
   total: z.number().int(),
-  succeeded: z.number().int().nullable(),
-  failed: z.number().int().nullable(),
 });
 export type AuditBulkSummary = z.infer<typeof auditBulkSummarySchema>;

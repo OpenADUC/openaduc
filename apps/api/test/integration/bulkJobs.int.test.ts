@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { BulkJob, BulkJobRow } from '@openaduc/shared';
+import type { AuditBulkSummary, BulkJob, BulkJobRow } from '@openaduc/shared';
 import {
   configureDirectory,
   readDirectoryUser,
@@ -16,7 +16,7 @@ interface AuditRow {
   result: string;
   targetId: string | null;
   bulkJobId: string | null;
-  bulk: { action: string; status: string; total: number; succeeded: number; failed: number } | null;
+  bulk: AuditBulkSummary | null;
 }
 
 const isDisabled = async (sam: string) =>
@@ -147,8 +147,7 @@ describe('bulk actions run as server-side jobs', () => {
             status: 'finished',
             pauseReason: null,
             total: 3,
-            succeeded: 2,
-            failed: 1,
+            counts: { total: 3, pending: 0, running: 0, succeeded: 2, failed: 1, skipped: 0 },
           },
         }),
       ]);

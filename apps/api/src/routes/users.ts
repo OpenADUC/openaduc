@@ -31,7 +31,12 @@ import { StepUpBindFailedError, type DirectoryProvider } from '../providers/type
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
-import { writeUserAccount } from '../services/userAccountWrite.js';
+import {
+  DISABLE_USER,
+  ENABLE_USER,
+  UNLOCK_USER,
+  writeUserAccount,
+} from '../services/userAccountWrite.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
 import type { UserCacheRecordsTable } from '../db/types.js';
@@ -899,7 +904,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const written = await writeUserAccount(
         app.services,
         provider,
-        'user.unlock',
+        UNLOCK_USER,
         id,
         ctx(actor, req),
         auditContextFromRequest(req),
@@ -1392,7 +1397,7 @@ async function toggleEnabled(
   const written = await writeUserAccount(
     app.services,
     provider,
-    disable ? 'user.disable' : 'user.enable',
+    disable ? DISABLE_USER : ENABLE_USER,
     id,
     ctx(actor, req),
     auditContextFromRequest(req),

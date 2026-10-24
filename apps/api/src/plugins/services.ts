@@ -3,7 +3,7 @@ import fp from 'fastify-plugin';
 import { loadEnv } from '../config/env.js';
 import { AuditService } from '../services/audit.js';
 import { AuthorizationService } from '../services/authorization.js';
-import { BulkJobService } from '../services/bulkJobs.js';
+import { BulkJobService } from '../services/bulkJobs/service.js';
 import { CredentialCacheService } from '../services/credentialCache.js';
 import { DirectoryConfigService } from '../services/directoryConfig.js';
 import { EntraIntegrationService } from '../services/entraIntegration.js';
