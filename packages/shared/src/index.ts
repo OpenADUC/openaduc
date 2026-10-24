@@ -25,3 +25,5 @@ export * from './phone.js';
 export * from './country.js';
 export * from './schemas/userCreate.js';
 export * from './userCreation.js';
+export * from './schemas/userImport.js';
+export * from './userImport.js';

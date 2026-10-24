@@ -72,20 +72,21 @@ export function remainingSteps(
 export const PHONE_FIELDS = ['mobile', 'telephoneNumber'] as const;
 export type PhoneField = (typeof PHONE_FIELDS)[number];
 
-const text = (max: number) =>
+/** Text AD holds up to `max` characters of, without control characters. */
+export const directoryText = (max: number) =>
   z
     .string()
     .trim()
     .max(max)
     .refine((v) => !CONTROL_CHARS.test(v), { message: 'cannot contain control characters' });
-const optionalText = (max: number) =>
-  text(max)
+export const optionalDirectoryText = (max: number) =>
+  directoryText(max)
     .nullable()
     .optional()
     .transform((v) => v || null);
 // eslint-disable-next-line no-control-regex -- matching them is the point
 const CONTROL_CHARS_BUT_NEWLINES = /[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]/;
-const optionalLines = (max: number) =>
+export const optionalDirectoryLines = (max: number) =>
   z
     .string()
     .trim()
@@ -122,21 +123,21 @@ export type NewUserOrganisationField = (typeof NEW_USER_ORGANISATION_FIELDS)[num
 // AD's own upper bounds for each attribute.
 export const newUserOrganisationSchema = z
   .object({
-    title: optionalText(128),
-    department: optionalText(64),
-    company: optionalText(64),
-    physicalDeliveryOfficeName: optionalText(128),
+    title: optionalDirectoryText(128),
+    department: optionalDirectoryText(64),
+    company: optionalDirectoryText(64),
+    physicalDeliveryOfficeName: optionalDirectoryText(128),
     /** Multi-line, as ADUC's Street box. */
-    streetAddress: optionalLines(1024),
-    l: optionalText(128),
-    st: optionalText(128),
-    postalCode: optionalText(40),
+    streetAddress: optionalDirectoryLines(1024),
+    l: optionalDirectoryText(128),
+    st: optionalDirectoryText(128),
+    postalCode: optionalDirectoryText(40),
     /** The two-letter country code. */
-    c: optionalText(3),
+    c: optionalDirectoryText(3),
     /** The country's name. */
-    co: optionalText(128),
+    co: optionalDirectoryText(128),
     /** The country's ISO 3166 number. */
-    countryCode: optionalText(3).refine((v) => v === null || /^\d+$/.test(v), {
+    countryCode: optionalDirectoryText(3).refine((v) => v === null || /^\d+$/.test(v), {
       message: 'must be a number',
     }),
     /** The manager's objectGUID. */
@@ -154,6 +155,14 @@ export type NewUserOrganisation = z.input<typeof newUserOrganisationSchema>;
 
 /** More than any template user is in; it bounds one create's writes. */
 export const MAX_NEW_USER_GROUPS = 200;
+
+/** Groups by objectGUID, each once. */
+export const newUserGroupsSchema = z
+  .array(z.guid())
+  .max(MAX_NEW_USER_GROUPS)
+  .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
+    message: 'lists a group twice',
+  });
 
 /**
  * The password a new account gets. In `random` mode the server makes it
@@ -176,11 +185,11 @@ export type UserCreatePassword = z.infer<typeof userCreatePasswordSchema>;
 export const userCreateRequestSchema = z
   .object({
     ouDn: z.string().trim().min(1).max(512),
-    givenName: text(64).min(1),
-    surname: text(64).min(1),
-    displayName: text(256).min(1),
+    givenName: directoryText(64).min(1),
+    surname: directoryText(64).min(1),
+    displayName: directoryText(256).min(1),
     /** The RDN value; the naming check suggests it (the display name, or a fallback). */
-    cn: text(64).min(1),
+    cn: directoryText(64).min(1),
     samAccountName: samAccountNameSchema,
     userPrincipalName: userPrincipalNameSchema.refine((v) => !CONTROL_CHARS.test(v), {
       message: 'cannot contain control characters',
@@ -188,8 +197,8 @@ export const userCreateRequestSchema = z
     mailFromUpn: z.boolean(),
     /** A personal address, written to `otherMailbox`. */
     personalEmail: z.string().trim().email().max(256).nullable().optional(),
-    mobile: optionalText(64),
-    telephoneNumber: optionalText(64),
+    mobile: optionalDirectoryText(64),
+    telephoneNumber: optionalDirectoryText(64),
     /**
      * Phone numbers to write as typed though they can't be read as one;
      * any other is written in Entra's form, or refused if unreadable.
@@ -202,13 +211,7 @@ export const userCreateRequestSchema = z
      * Groups to add the account to, by objectGUID, after its password and
      * before it's enabled. Needs `write:group.membership` as well.
      */
-    groups: z
-      .array(z.guid())
-      .max(MAX_NEW_USER_GROUPS)
-      .refine((ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length, {
-        message: 'lists a group twice',
-      })
-      .optional(),
+    groups: newUserGroupsSchema.optional(),
     /** The user this one is a copy of, by objectGUID, recorded with the create. */
     copiedFrom: z.guid().optional(),
   })
