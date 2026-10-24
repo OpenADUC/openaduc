@@ -49,10 +49,20 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
     iconClass: 'pi pi-key',
     tone: 'tone-amber',
   },
+  'user.passwordMustChange.clear': {
+    title: 'No longer must change password',
+    iconClass: 'pi pi-key',
+    tone: 'tone-blue',
+  },
   'user.passwordNeverExpires.clear': {
     title: 'Password set to expire',
     iconClass: 'pi pi-key',
     tone: 'tone-blue',
+  },
+  'user.passwordNeverExpires.set': {
+    title: 'Password set never to expire',
+    iconClass: 'pi pi-key',
+    tone: 'tone-amber',
   },
   'user.group.add': { title: 'Added to group', iconClass: 'pi pi-plus', tone: 'tone-blue' },
   'user.group.remove': { title: 'Removed from group', iconClass: 'pi pi-minus', tone: 'tone-blue' },

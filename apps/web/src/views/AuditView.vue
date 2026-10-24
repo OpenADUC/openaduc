@@ -23,6 +23,7 @@ import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
 import AuditBulkEvents from '../design/primitives/AuditBulkEvents.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import BulkRevertDialog from '../design/feedback/BulkRevertDialog.vue';
+import { useBulkActions } from '../design/composables/useBulkActions.js';
 import { useBulkJobRevert } from '../design/composables/useBulkJobRevert.js';
 import { describeBulkEntry } from '../design/lib/bulkJob.js';
 import { resultBadge } from '../design/lib/auditResult.js';
@@ -346,11 +347,16 @@ function openDetail(ev: DataTableRowClickEvent): void {
 
 const bulkEntry = (row: AuditEventRow) => describeBulkEntry(row.bulk!, row.actorDisplayName);
 
-const revert = useBulkJobRevert({ toast: useToast(), reload: load });
-const { job: revertJob, jobBusy: revertBusy, jobFailure: revertFailure } = revert;
+const revertBulk = useBulkActions({ selectedIds: ref(new Set()), toast: useToast(), reload: load });
+const { job: revertJob, busy: revertBusy, jobFailure: revertFailure } = revertBulk;
+const revert = useBulkJobRevert({ bulk: revertBulk });
 
 function openRevert(row: AuditEventRow): void {
-  void revert.open({ jobId: row.bulkJobId!, title: bulkEntry(row).title, bulk: row.bulk! });
+  void revert.open({
+    jobId: row.bulkJobId!,
+    title: bulkEntry(row).title,
+    action: row.bulk!.action,
+  });
 }
 
 onMounted(() => {
@@ -433,10 +439,10 @@ onMounted(() => {
         :job="revertJob"
         :failure="revertFailure"
         :busy="revertBusy"
-        @stop="revert.stopJob"
-        @continue="revert.continueJob"
-        @retry="revert.retryFailed"
-        @dismiss="revert.dismissJob"
+        @stop="revertBulk.stopJob"
+        @continue="revertBulk.continueJob"
+        @retry="revertBulk.retryFailed"
+        @dismiss="revertBulk.dismissJob"
       />
 
       <DataTable

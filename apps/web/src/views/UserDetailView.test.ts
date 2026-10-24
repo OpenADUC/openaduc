@@ -792,6 +792,8 @@ describe('reassigning the direct reports', () => {
     status: 'finished',
     pauseReason: null,
     revertsJobId: null,
+    revertible: false,
+    revertedBy: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),

@@ -20,6 +20,7 @@ const CONTROLS: Record<
   stop: { label: 'Stop', icon: 'pi pi-stop-circle', severity: 'secondary', text: true },
   continue: { label: 'Continue', icon: 'pi pi-play' },
   retry: { label: 'Retry failed', icon: 'pi pi-refresh' },
+  revert: { label: 'Revert…', icon: 'pi pi-undo', severity: 'secondary', text: true },
   dismiss: { label: 'Dismiss', icon: 'pi pi-times', severity: 'secondary', text: true },
 };
 </script>

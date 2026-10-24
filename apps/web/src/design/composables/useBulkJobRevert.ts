@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Revert a bulk job from its entry in the audit log: preview, from the
-// cache, whom it puts back and what, who has changed again since the job
-// (left as they are unless the operator includes them) and whom it can't
-// revert; then confirm with the count, which starts the revert as a job
-// of its own (useBulkActions.startRevert), prompting step-up first. The
-// audit log follows that job, and shows it again on coming back.
+// Revert a bulk job, from its audit log entry or from its panel once it
+// has stopped: preview, from the cache, whom it puts back and what, who
+// has changed again since the job (left as they are unless the operator
+// ticks them) and whom it can't revert; then confirm with the count,
+// which starts the revert as a job of its own on the page's bulk actions,
+// prompting step-up first.
 
 import { computed, ref, shallowRef } from 'vue';
-import type { ToastServiceMethods } from 'primevue/toastservice';
 import {
+  BULK_ATTRIBUTE_FIELDS,
   BULK_JOB_CAPABILITIES,
   type AuditBulkSummary,
+  type BulkJob,
+  type BulkJobKind,
   type BulkJobRevertPreview,
   type BulkRevertChange,
+  type BulkRevertField,
 } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
@@ -20,89 +23,67 @@ import { expiryMoment } from '../lib/accountExpiry.js';
 import { ATTRIBUTE_LABELS, shownValue } from '../lib/bulkAttributes.js';
 import { accounts } from '../lib/bulkJob.js';
 import { dnName } from '../lib/dn.js';
-import { useBulkActions } from './useBulkActions.js';
+import type { useBulkActions } from './useBulkActions.js';
 
-/** The job's entry in the audit log. */
+/** The job to revert, as the dialog names it. */
 export interface RevertEntry {
   jobId: string;
   /** Its heading, e.g. "Bulk disable by Jane Doe: 42 users". */
   title: string;
-  bulk: AuditBulkSummary;
+  action: BulkJobKind;
 }
 
-/** The revert last started here, so coming back to the audit log shows it. */
-const REVERT_KEY = 'openaduc.bulkRevert.job';
+type Value = string | boolean | null;
 
-function storedRevert(): string | null {
-  try {
-    return localStorage.getItem(REVERT_KEY);
-  } catch {
-    return null;
-  }
-}
+const text = (v: Value) => shownValue(typeof v === 'string' ? v : null);
+const yesNo = (v: Value) => (v ? 'Yes' : 'No');
 
-function rememberRevert(id: string): void {
-  try {
-    localStorage.setItem(REVERT_KEY, id);
-  } catch {
-    // Without storage, coming back doesn't show the revert.
-  }
-}
+/** What each thing a revert changes is called, and how its values read. */
+const REVERT_FIELDS: Record<BulkRevertField, { label: string; value: (v: Value) => string }> = {
+  ...(Object.fromEntries(
+    BULK_ATTRIBUTE_FIELDS.map((f) => [f, { label: ATTRIBUTE_LABELS[f], value: text }]),
+  ) as Record<
+    (typeof BULK_ATTRIBUTE_FIELDS)[number],
+    { label: string; value: (v: Value) => string }
+  >),
+  enabled: { label: 'Account', value: (v) => (v ? 'Enabled' : 'Disabled') },
+  ou: { label: 'OU', value: (v) => (typeof v === 'string' ? dnName(v) : text(null)) },
+  accountExpires: {
+    label: 'Account expires',
+    value: (v) => (typeof v === 'string' ? expiryMoment(v) : 'Never'),
+  },
+  passwordMustChange: { label: 'Must change password', value: yesNo },
+  passwordNeverExpires: { label: 'Password never expires', value: yesNo },
+  group: { label: 'Group', value: (v) => (v ? 'Member' : 'Not a member') },
+};
 
 /** What a change is to: a field, the account, or a group by name. */
-export function revertChangeLabel(change: BulkRevertChange): string {
-  switch (change.field) {
-    case 'enabled':
-      return 'Account';
-    case 'ou':
-      return 'OU';
-    case 'accountExpires':
-      return 'Account expires';
-    case 'passwordMustChange':
-      return 'Must change password';
-    case 'passwordNeverExpires':
-      return 'Password never expires';
-    case 'group':
-      return change.group ?? 'Group';
-    default:
-      return ATTRIBUTE_LABELS[change.field];
-  }
-}
+export const revertChangeLabel = (change: BulkRevertChange): string =>
+  change.field === 'group' && change.group ? change.group : REVERT_FIELDS[change.field].label;
 
-/** One of a change's values, as shown. */
-export function revertValueText(
-  field: BulkRevertChange['field'],
-  value: string | boolean | null,
-): string {
-  if (field === 'enabled') return value ? 'Enabled' : 'Disabled';
-  if (field === 'group') return value ? 'Member' : 'Not a member';
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (field === 'accountExpires') return value === null ? 'Never' : expiryMoment(value);
-  if (field === 'ou' && value !== null) return dnName(value);
-  return shownValue(value);
-}
+export const revertValueText = (field: BulkRevertField, value: Value): string =>
+  REVERT_FIELDS[field].value(value);
+
+/** The revert last started from the audit log, so coming back there shows it. */
+const REVERT_KEY = 'openaduc.bulkRevert.job';
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 export function useBulkJobRevert(options: {
-  toast: Pick<ToastServiceMethods, 'add'>;
-  /** Reload the audit log once the revert finishes. */
-  reload: () => Promise<void>;
+  /** The page's bulk actions, whose panel follows the revert once it starts. */
+  bulk: ReturnType<typeof useBulkActions>;
+  /** Hears of the revert's job, as the page remembers its jobs. */
+  started?: (job: BulkJob) => void;
 }) {
   const auth = useAuthStore();
-  const bulk = useBulkActions({
-    selectedIds: ref(new Set<string>()),
-    toast: options.toast,
-    reload: options.reload,
-  });
   const entry = shallowRef<RevertEntry | null>(null);
   const visible = computed(() => entry.value !== null);
   const preview = shallowRef<BulkJobRevertPreview | null>(null);
   const previewing = ref(false);
   const previewError = ref<string | null>(null);
-  // Users changed since the job that the operator chose to revert anyway.
   const included = ref(new Set<string>());
   const includeAll = ref(false);
+  const acknowledged = ref(false);
   let asked = 0;
 
   /** Whether the operator may revert the entry's job, as far as the UI can tell. */
@@ -116,6 +97,7 @@ export function useBulkJobRevert(options: {
     previewError.value = null;
     included.value = new Set();
     includeAll.value = false;
+    acknowledged.value = false;
     const ask = ++asked;
     previewing.value = true;
     try {
@@ -148,36 +130,56 @@ export function useBulkJobRevert(options: {
     if (!all) included.value = new Set();
   }
 
+  function setAcknowledged(yes: boolean): void {
+    acknowledged.value = yes;
+  }
+
   const count = computed(() => {
     const p = preview.value;
     if (!p) return 0;
     return p.revert.count + (includeAll.value ? p.modified.count : included.value.size);
   });
-  const canConfirm = computed(() => count.value > 0);
+  const needsAcknowledgement = computed(() => (preview.value?.protectedGroups.length ?? 0) > 0);
+  const canConfirm = computed(
+    () => count.value > 0 && (!needsAcknowledgement.value || acknowledged.value),
+  );
   const confirmLabel = computed(() => `Revert ${accounts(count.value)}`);
-  /** What a revert can't put back exactly. */
   const caveat = computed(() =>
-    entry.value?.bulk.action === 'user.passwordMustChange.set'
+    entry.value?.action === 'user.passwordMustChange.set'
       ? 'They won’t have to change their password any more, but AD can’t put back when it was last set: their password’s age starts again from now.'
       : null,
   );
 
-  /** Start the revert on what was previewed, prompting step-up first. */
   function confirm(): void {
     const current = entry.value;
     const p = preview.value;
     if (!current || !p || !canConfirm.value) return;
     const include = includeAll.value ? ('all' as const) : [...included.value];
+    const acknowledgeProtected = needsAcknowledgement.value && acknowledged.value;
     close();
-    bulk.startRevert(current.jobId, { previewToken: p.previewToken, include }, (job) =>
-      rememberRevert(job.id),
+    options.bulk.startRevert(
+      current.jobId,
+      { previewToken: p.previewToken, include, acknowledgeProtected },
+      (job) => {
+        try {
+          localStorage.setItem(REVERT_KEY, job.id);
+        } catch {
+          // Without storage, coming back doesn't show the revert.
+        }
+        options.started?.(job);
+      },
     );
   }
 
-  /** Coming back: show the revert last started here, unless it's old news or dismissed. */
+  /** Coming back to the audit log: show the revert last started, unless it's old news or dismissed. */
   function restore(): void {
-    const id = storedRevert();
-    if (id) void bulk.restore(id);
+    let id: string | null = null;
+    try {
+      id = localStorage.getItem(REVERT_KEY);
+    } catch {
+      // Without storage there's nothing to show.
+    }
+    if (id) void options.bulk.restore(id);
   }
 
   return {
@@ -190,6 +192,9 @@ export function useBulkJobRevert(options: {
     includeAll,
     toggle,
     setIncludeAll,
+    acknowledged,
+    setAcknowledged,
+    needsAcknowledgement,
     count,
     canConfirm,
     confirmLabel,
@@ -199,12 +204,5 @@ export function useBulkJobRevert(options: {
     close,
     confirm,
     restore,
-    job: bulk.job,
-    jobBusy: bulk.busy,
-    jobFailure: bulk.jobFailure,
-    continueJob: bulk.continueJob,
-    retryFailed: bulk.retryFailed,
-    stopJob: bulk.stopJob,
-    dismissJob: bulk.dismissJob,
   };
 }

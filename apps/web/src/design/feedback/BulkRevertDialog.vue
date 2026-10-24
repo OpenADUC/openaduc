@@ -8,8 +8,10 @@
 <script setup lang="ts">
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
+import Checkbox from 'primevue/checkbox';
 import Message from 'primevue/message';
 import type { BulkRevertChange } from '@openaduc/shared';
+import { groupNames } from '../lib/bulkJob.js';
 import {
   revertChangeLabel,
   revertValueText,
@@ -25,6 +27,9 @@ const {
   previewing,
   previewError,
   includeAll,
+  acknowledged,
+  needsAcknowledgement,
+  count,
   canConfirm,
   confirmLabel,
   caveat,
@@ -66,7 +71,11 @@ const listed = (shown: number, total: number) =>
         <li v-for="u in preview.revert.users" :key="u.id" class="br-user">
           <span>{{ u.name }}</span>
           <span v-for="(c, i) in u.changes" :key="i" class="br-change">
-            {{ revertChangeLabel(c) }}: {{ value(c, c.job) }} → {{ value(c, c.restore) }}
+            {{ revertChangeLabel(c) }}:
+            <template v-if="c.unverified">
+              couldn’t check what the job left; reverting sets {{ value(c, c.restore) }}
+            </template>
+            <template v-else>{{ value(c, c.job) }} → {{ value(c, c.restore) }}</template>
           </span>
         </li>
       </ul>
@@ -98,6 +107,7 @@ const listed = (shown: number, total: number) =>
               />
               <span>{{ u.name }}</span>
             </label>
+            <span v-if="u.changedSince" class="br-change">{{ u.changedSince }}</span>
             <span v-for="(c, i) in u.changes" :key="i" class="br-change">
               {{ revertChangeLabel(c) }}: now {{ value(c, c.now) }} (the job set
               {{ value(c, c.job) }}); reverting sets {{ value(c, c.restore) }}
@@ -128,7 +138,19 @@ const listed = (shown: number, total: number) =>
             : `${preview.excluded} rows of the job failed or needed no change, so there’s nothing to put back for them.`
         }}
       </p>
-      <Message v-if="!canConfirm" severity="info" :closable="false">
+      <div v-if="needsAcknowledgement" class="br-ack">
+        <Checkbox
+          :model-value="acknowledged"
+          input-id="br-ack"
+          binary
+          @update:model-value="(v: boolean) => w.setAcknowledged(v)"
+        />
+        <label for="br-ack">
+          I understand these users gain admin rights in AD through
+          {{ groupNames(preview.protectedGroups) }}.
+        </label>
+      </div>
+      <Message v-if="count === 0" severity="info" :closable="false">
         There’s nothing to revert.
       </Message>
     </template>
@@ -206,6 +228,14 @@ const listed = (shown: number, total: number) =>
 .br-change {
   font-size: 12px;
   color: var(--text-3);
+}
+
+.br-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
 }
 
 .br-details {
