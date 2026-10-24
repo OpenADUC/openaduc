@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { useBulkActions, type BulkAction } from '../design/composables/useBulkActions.js';
+import { useBulkGroupMembership } from '../design/composables/useBulkGroupMembership.js';
 import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
 import SyncFreshness from '../design/primitives/SyncFreshness.vue';
@@ -29,6 +30,7 @@ import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import BulkGroupsDialog from '../design/feedback/BulkGroupsDialog.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
 import { announceUserCreated } from '../design/feedback/userToasts.js';
@@ -447,6 +449,7 @@ const {
   requestBulk,
   cancelBulk,
   startBulk,
+  startGroupChange,
   continueJob,
   retryFailed,
   stopJob,
@@ -454,6 +457,16 @@ const {
   restore: restoreBulkJob,
 } = useBulkActions({ selectedIds, toast, reload: load });
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
+
+const canBulkGroups = computed(() => auth.hasCapability('write:group.membership'));
+const groupChange = useBulkGroupMembership({
+  ids: () => Array.from(selectedIds.value),
+  start: startGroupChange,
+});
+const groupJobPending = computed(
+  () =>
+    pendingBulkAction.value === 'user.group.add' || pendingBulkAction.value === 'user.group.remove',
+);
 
 const BULK_ICONS: Record<BulkAction, string> = {
   disable: 'pi pi-ban',
@@ -501,7 +514,7 @@ async function onBulkDeleted(deletedIds: string[]): Promise<void> {
 }
 
 const canBulkAct = computed(
-  () => canBulkDisable.value || canBulkUnlock.value || canBulkDelete.value,
+  () => canBulkDisable.value || canBulkUnlock.value || canBulkDelete.value || canBulkGroups.value,
 );
 const pasteListOpen = ref(false);
 
@@ -809,6 +822,16 @@ onMounted(() => {
             @click="requestBulk('enable')"
           />
           <Button
+            v-if="canBulkGroups"
+            label="Groups…"
+            icon="pi pi-users"
+            severity="secondary"
+            size="small"
+            :loading="bulkRunning && groupJobPending"
+            :disabled="bulkRunning"
+            @click="groupChange.open()"
+          />
+          <Button
             v-if="canBulkDelete"
             label="Delete…"
             icon="pi pi-trash"
@@ -862,6 +885,8 @@ onMounted(() => {
         />
       </template>
     </Dialog>
+
+    <BulkGroupsDialog :workflow="groupChange" :hidden-count="hiddenSelectedCount" />
 
     <PasteListDialog
       v-model:visible="pasteListOpen"

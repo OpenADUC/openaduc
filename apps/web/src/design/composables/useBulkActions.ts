@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Bulk unlock / enable / disable over a selection of users, run as a job
-// on the server.
+// Bulk unlock / enable / disable over a selection of users, and adding
+// them to groups or removing them from groups, run as a job on the server.
 //
 // Every bulk action asks first: it changes more than one account, and
 // there's no undo for a whole run. The job carries on if the operator
@@ -10,10 +10,10 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type { BulkJob } from '@openaduc/shared';
+import type { BulkJob, BulkMembershipOp } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
-import { accounts, BULK_VERBS, bulkJobActive } from '../lib/bulkJob.js';
+import { accounts, BULK_VERBS, bulkJobActive, bulkJobTarget } from '../lib/bulkJob.js';
 
 /** The bulk actions that change the accounts themselves. */
 export type BulkAction = 'disable' | 'enable' | 'unlock';
@@ -171,7 +171,7 @@ export function useBulkActions(opts: {
       const { ed } = BULK_VERBS[done.action];
       opts.toast.add({
         severity: 'success',
-        summary: `${ed} ${accounts(done.counts.succeeded)}`,
+        summary: `${ed} ${accounts(done.counts.succeeded)}${bulkJobTarget(done.action, done.subject)}`,
         life: 4000,
       });
       dismissJob();
@@ -213,6 +213,14 @@ export function useBulkActions(opts: {
     confirming.value = null;
     bulkErrors.value = new Map();
     write(() => api.bulkJobs.start(`user.${action}`, ids), true);
+  }
+
+  /** Add the selection to these groups, or remove it from them, once the operator has seen the preview. */
+  function startGroupChange(op: BulkMembershipOp, groupIds: string[]): void {
+    const ids = Array.from(opts.selectedIds.value);
+    if (ids.length === 0 || groupIds.length === 0) return;
+    bulkErrors.value = new Map();
+    write(() => api.bulkJobs.startGroupChange(op, ids, groupIds), true);
   }
 
   function continueJob(): void {
@@ -265,6 +273,7 @@ export function useBulkActions(opts: {
     requestBulk,
     cancelBulk,
     startBulk,
+    startGroupChange,
     continueJob,
     retryFailed,
     stopJob,

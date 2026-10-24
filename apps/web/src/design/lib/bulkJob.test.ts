@@ -54,6 +54,22 @@ describe('a bulk job in the audit log', () => {
     ).toMatchObject({ outcome: 'Stopped: 10 succeeded · 0 failed', tone: 'amber' });
   });
 
+  it('names the groups a membership job changed', () => {
+    const groups = (...names: string[]) => ({
+      groups: names.map((name, i) => ({ id: `g${i}`, name })),
+    });
+    expect(
+      describeBulkEntry(summary({ action: 'user.group.add', subject: groups('Sales') }), 'Jane')
+        .title,
+    ).toBe('Bulk add to Sales by Jane: 42 users');
+    expect(
+      describeBulkEntry(
+        summary({ action: 'user.group.remove', subject: groups('Sales', 'HR', 'Ops') }),
+        null,
+      ).title,
+    ).toBe('Bulk remove from Sales and 2 other groups: 42 users');
+  });
+
   it('keeps its heading once the job’s record is gone', () => {
     expect(describeBulkEntry(summary({ status: null, counts: null }), 'Jane Doe')).toEqual({
       title: 'Bulk disable by Jane Doe: 42 users',

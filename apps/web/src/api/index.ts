@@ -5,10 +5,13 @@
 import type {
   AccountExpiryRequest,
   AuditBulkSummary,
+  BulkGroupMembershipPreview,
+  BulkGroupMembershipPreviewRequest,
   BulkJob,
   BulkJobAction,
   BulkJobRow,
   BulkJobRowStatus,
+  BulkMembershipOp,
   ComputerDetail,
   ComputerSearchQuery,
   ComputerSearchResponse,
@@ -512,6 +515,15 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
+    /** What adding these users to groups, or removing them, would change; nothing is written. */
+    previewGroupChange(
+      body: BulkGroupMembershipPreviewRequest,
+    ): Promise<BulkGroupMembershipPreview> {
+      return apiFetch('/users/bulk-groups/preview', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
     match(entries: string[]): Promise<UserMatchResponse> {
       return apiFetch('/users/match', {
         method: 'POST',
@@ -664,10 +676,23 @@ export const api = {
     },
   },
   bulkJobs: {
-    start(action: BulkJobAction, ids: string[]): Promise<{ job: BulkJob }> {
+    start(
+      action: Exclude<BulkJobAction, 'user.group.add' | 'user.group.remove'>,
+      ids: string[],
+    ): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath(action), {
         method: 'POST',
         body: JSON.stringify({ ids }),
+      });
+    },
+    startGroupChange(
+      op: BulkMembershipOp,
+      ids: string[],
+      groupIds: string[],
+    ): Promise<{ job: BulkJob }> {
+      return apiFetch(bulkJobPath(`user.group.${op}`), {
+        method: 'POST',
+        body: JSON.stringify({ ids, groupIds }),
       });
     },
     /** The operator's own jobs in this directory, newest first. */

@@ -6,6 +6,7 @@ import type {
   BulkJobCounts,
   BulkJobPauseReason,
   BulkJobStatus,
+  BulkJobSubject,
 } from '@openaduc/shared';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
@@ -17,6 +18,20 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
+
+/** Groups by name: "Sales", "Sales and HR", or "Sales and 3 other groups". */
+export function groupNames(groups: readonly { name: string }[]): string {
+  if (groups.length <= 2) return groups.map((g) => g.name).join(' and ');
+  return `${groups[0]!.name} and ${groups.length - 1} other groups`;
+}
+
+/** Where a job's change goes, said after what it changes: " to Sales", or nothing. */
+export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | null): string {
+  if (!subject?.groups.length) return '';
+  if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
+  if (action === 'user.group.remove') return ` from ${groupNames(subject.groups)}`;
+  return '';
+}
 
 /** Rows got through, whatever their outcome. */
 const done = (c: BulkJobCounts): number => c.succeeded + c.failed + c.skipped;
@@ -62,6 +77,7 @@ export interface BulkJobDescription {
 /** What a bulk job's progress panel says, and which controls it offers. */
 export function describeBulkJob(job: BulkJob): BulkJobDescription {
   const { ing, ed } = BULK_VERBS[job.action];
+  const target = bulkJobTarget(job.action, job.subject);
   const { counts } = job;
   const { label, open } = STATUS[job.status];
   const progress = counts.total === 0 ? 0 : Math.round((done(counts) / counts.total) * 100);
@@ -83,7 +99,7 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   if (open) {
     return {
       tone: 'info',
-      title: `${ing} ${accounts(counts.total)}…`,
+      title: `${ing} ${accounts(counts.total)}${target}…`,
       detail: `${done(counts)} of ${counts.total} done. You can leave this page; it carries on. ${PAUSES_WHEN}`,
       progress,
       controls: ['stop'],
@@ -93,7 +109,7 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
     const skipped = counts.skipped > 0 ? `${counts.skipped} weren’t changed.` : null;
     return {
       tone: 'warn',
-      title: `${label}: ${ed.toLowerCase()} ${counts.succeeded} of ${accounts(counts.total)}`,
+      title: `${label}: ${ed.toLowerCase()} ${counts.succeeded} of ${accounts(counts.total)}${target}`,
       detail: [skipped, failedNote].filter(Boolean).join(' ') || null,
       progress: null,
       controls: afterwards,
@@ -103,22 +119,26 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
     tone: counts.failed > 0 ? 'warn' : 'success',
     title:
       counts.failed > 0
-        ? `${ed} ${counts.succeeded} of ${accounts(counts.total)}`
-        : `${ed} ${accounts(counts.succeeded)}`,
+        ? `${ed} ${counts.succeeded} of ${accounts(counts.total)}${target}`
+        : `${ed} ${accounts(counts.succeeded)}${target}`,
     detail: failedNote,
     progress: null,
     controls: afterwards,
   };
 }
 
-/** A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe: 42 users". */
+/**
+ * A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe:
+ * 42 users" or "Bulk add to Sales by Jane Doe: 42 users".
+ */
 export function describeBulkEntry(
   bulk: AuditBulkSummary,
   actor: string | null,
 ): { title: string; outcome: string | null; tone: 'green' | 'amber' | 'red' | 'muted' } {
   const verb = BULK_VERBS[bulk.action].verb.toLowerCase();
   const users = bulk.total === 1 ? '1 user' : `${bulk.total} users`;
-  const title = `Bulk ${verb}${actor ? ` by ${actor}` : ''}: ${users}`;
+  const target = bulkJobTarget(bulk.action, bulk.subject);
+  const title = `Bulk ${verb}${target}${actor ? ` by ${actor}` : ''}: ${users}`;
   const { status, counts } = bulk;
   if (status === null || counts === null) return { title, outcome: null, tone: 'muted' };
 
