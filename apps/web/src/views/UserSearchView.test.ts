@@ -317,8 +317,10 @@ describe('the user list, editing the selection’s attributes', () => {
     } as BulkUserAttributesPreview['current'];
     const empty = {
       current,
-      changed: { count: 0, users: [] },
+      changed: { count: 0, offset: 0, users: [] },
       unchanged: { count: 0, users: [] },
+      unread: { count: 0, users: [] },
+      skipped: { count: 0, users: [] },
       fields: [],
       unknownCount: 0,
       previewToken: 'none',
@@ -327,6 +329,7 @@ describe('the user list, editing the selection’s attributes', () => {
       ...empty,
       changed: {
         count: 1,
+        offset: 0,
         users: [
           {
             id: 'jdoe',
@@ -340,8 +343,8 @@ describe('the user list, editing the selection’s attributes', () => {
       },
       unchanged: { count: 1, users: [{ id: 'bsmith', name: 'Bob Smith' }] },
       fields: [
-        { field: 'department', count: 1 },
-        { field: 'company', count: 1 },
+        { field: 'department', count: 1, unread: 0 },
+        { field: 'company', count: 1, unread: 0 },
       ],
       previewToken: 'tok',
     });

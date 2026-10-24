@@ -43,6 +43,8 @@ const {
   previewing,
   previewError,
   canConfirm,
+  hasMore,
+  loadingMore,
 } = props.workflow;
 const w = props.workflow;
 
@@ -63,7 +65,7 @@ const SECTIONS: { title: string; fields: BulkAttributeField[] }[] = [
     fields: ['streetAddress', 'postOfficeBox', 'l', 'st', 'postalCode', 'country'],
   },
 ];
-const MULTILINE = new Set<BulkAttributeField>(['streetAddress', 'description']);
+const MULTILINE = new Set<BulkAttributeField>(['streetAddress', 'description', 'postOfficeBox']);
 
 const modeOptions: { label: string; value: FieldMode }[] = [
   { label: 'Unchanged', value: 'keep' },
@@ -168,6 +170,9 @@ function now(field: BulkAttributeField): string {
               fluid
               @update:model-value="(v: string | undefined) => w.setValue(field, v ?? '')"
             />
+            <p v-if="field === 'postOfficeBox'" class="be-note">
+              One per line; they replace all of each user’s.
+            </p>
             <p v-if="problems[field]" class="be-problem">{{ problems[field] }}</p>
           </template>
         </div>
@@ -196,9 +201,20 @@ function now(field: BulkAttributeField): string {
         <li v-for="f in preview.fields" :key="f.field">
           <strong>{{ ATTRIBUTE_LABELS[f.field] }}</strong
           >: {{ f.count === 1 ? '1 user changes' : `${f.count} users change` }}
+          <template v-if="f.unread > 0">
+            · not known yet for {{ f.unread === 1 ? '1 user' : `${f.unread} users` }}
+          </template>
         </li>
       </ul>
-      <Message v-if="preview.changed.count === 0" severity="info" :closable="false">
+      <p v-if="preview.fields.some((f) => f.unread > 0)" class="be-note">
+        The cache hasn’t read every user’s value yet. The job reads each user first and changes only
+        what differs.
+      </p>
+      <Message
+        v-if="preview.changed.count === 0 && preview.unread.count === 0"
+        severity="info"
+        :closable="false"
+      >
         They’re all as asked already. There’s nothing to change.
       </Message>
       <ul v-else class="be-users" aria-label="Changes by user">
@@ -214,10 +230,31 @@ function now(field: BulkAttributeField): string {
           </ul>
         </li>
       </ul>
-      <p v-if="preview.changed.count > preview.changed.users.length" class="be-note">
-        The first {{ preview.changed.users.length }} are listed;
-        {{ preview.changed.count - preview.changed.users.length }} more aren’t.
-      </p>
+      <div v-if="hasMore" class="be-more">
+        <span class="be-note">
+          {{ preview.changed.users.length }} of {{ preview.changed.count }} listed.
+        </span>
+        <Button
+          label="Show more"
+          size="small"
+          severity="secondary"
+          text
+          :loading="loadingMore"
+          @click="w.showMore"
+        />
+      </div>
+      <details v-if="preview.skipped.count > 0" class="be-unchanged" open>
+        <summary>Skipped ({{ preview.skipped.count }})</summary>
+        <ul>
+          <li v-for="u in preview.skipped.users" :key="u.id">{{ u.name }}: {{ u.reason }}</li>
+        </ul>
+      </details>
+      <details v-if="preview.unread.count > 0" class="be-unchanged">
+        <summary>Not known yet ({{ preview.unread.count }})</summary>
+        <ul>
+          <li v-for="u in preview.unread.users" :key="u.id">{{ u.name }}</li>
+        </ul>
+      </details>
       <details v-if="preview.unchanged.count > 0" class="be-unchanged">
         <summary>Already as asked, unchanged ({{ preview.unchanged.count }})</summary>
         <ul>
@@ -356,6 +393,12 @@ function now(field: BulkAttributeField): string {
 
 .be-message {
   margin: 8px 0;
+}
+
+.be-more {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .be-counts {
