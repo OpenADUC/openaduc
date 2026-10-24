@@ -19,7 +19,7 @@ import {
   type TestApi,
   type TestClient,
 } from './harness.js';
-import { previewToken } from '../../src/services/groupMembershipPreview.js';
+import { membershipPreviewToken } from '../../src/services/groupMembershipPreview.js';
 
 type Fixture = 'alice' | 'bob' | 'carol' | 'dave' | 'guest';
 const SAM: Record<Fixture, string> = {
@@ -481,7 +481,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
       const unknown = await operator.post('/api/users/bulk-add-to-groups', {
         ids: [users.bob],
         groupIds: [gone],
-        previewToken: previewToken('add', [users.bob], [gone]),
+        previewToken: membershipPreviewToken('add', [users.bob], [gone]),
       });
       expect(unknown.statusCode).toBe(404);
       expect(

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { createHash } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
 import {
   type BulkGroupMembershipPreview,
@@ -11,23 +10,17 @@ import { groupPrivilege, type RoleGroup } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import { findCachedGroupsById } from './groupCache.js';
 import { previewList } from './previewList.js';
+import { previewToken } from './previewToken.js';
 import { alreadyAsAsked, membershipState } from './membershipState.js';
 import { cachedUserName } from './userCache.js';
 
-/**
- * Names this op on these users and groups, whatever their order or case,
- * so the job can check it runs on what the operator previewed. Not a
- * secret: it guards against a stale preview, not a forged one.
- */
-export function previewToken(
+/** The preview token for adding these users to these groups, or removing them. */
+export function membershipPreviewToken(
   op: BulkMembershipOp,
   ids: readonly string[],
   groupIds: readonly string[],
 ): string {
-  const set = (xs: readonly string[]) => [...xs.map((x) => x.toLowerCase())].sort().join(',');
-  return createHash('sha256')
-    .update(`${op}\n${set(ids)}\n${set(groupIds)}`)
-    .digest('base64url');
+  return previewToken(`groups:${op}`, ids, groupIds.map((id) => id.toLowerCase()).sort());
 }
 
 /**
@@ -103,7 +96,7 @@ export async function previewGroupMembership(
   return {
     op: request.op,
     unknownCount: request.ids.filter((id) => !knownIds.has(id.toLowerCase())).length,
-    previewToken: previewToken(request.op, request.ids, request.groupIds),
+    previewToken: membershipPreviewToken(request.op, request.ids, request.groupIds),
     groups: groupIds.map((groupId) => {
       const group = byGroupId.get(groupId)!;
       const unchanged = previewList();

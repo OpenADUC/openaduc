@@ -16,7 +16,7 @@ import TreeSelect from 'primevue/treeselect';
 import type { TreeNode } from 'primevue/treenode';
 import type { BulkAccountOp } from '@openaduc/shared';
 import {
-  ACCOUNT_OP_LABELS,
+  accountOpLabel,
   fromText,
   type useBulkAccountChange,
 } from '../composables/useBulkAccountChange.js';
@@ -54,7 +54,7 @@ const {
 const w = props.workflow;
 
 const opOptions = computed(() =>
-  choices.value.map((value) => ({ label: ACCOUNT_OP_LABELS[value], value })),
+  choices.value.map((value) => ({ label: accountOpLabel(value), value })),
 );
 const tree = computed<TreeNode[]>(() => ouTreeNodes(ous.value));
 // PrimeVue TreeSelect keys its single selection by node key, which is the DN.

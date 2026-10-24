@@ -26,13 +26,98 @@ const message = (err: unknown): string => (err instanceof ApiError ? err.message
 const users = (n: number): string => (n === 1 ? '1 user' : `${n} users`);
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
 
-/** How each change is offered, in the order the dialog offers them. */
-export const ACCOUNT_OP_LABELS: Record<BulkAccountOp, string> = {
-  move: 'Move to OU',
-  accountExpiry: 'Account expiry',
-  mustChangePassword: 'Must change password',
-  clearPasswordNeverExpires: 'Password expires',
+type ChangeOf<K extends BulkAccountOp> = Extract<BulkAccountChange, { op: K }>;
+
+/** What the dialog's form holds; each change reads the part it needs. */
+interface AccountForm {
+  destination: string | null;
+  never: boolean;
+  endOf: Date | null;
+}
+
+/** How one change is asked for and described. */
+interface AccountOpCopy<K extends BulkAccountOp> {
+  label: string;
+  /** The change the form asks for; null until it's complete. */
+  change(form: AccountForm): ChangeOf<K> | null;
+  title(who: string, preview: BulkAccountPreview | null): string;
+  confirm(who: string): string;
+  /** "2 will be moved" */
+  changes(n: number): string;
+  /** "1 is already in Leavers" */
+  already(n: number, preview: BulkAccountPreview, change: ChangeOf<K>): string;
+  /** What the change does to the users it changes, said before confirming. */
+  consequence(change: ChangeOf<K>): string;
+  /** What a user has now, as the preview lists it beside their name. */
+  from(user: BulkAccountPreviewUser): string | null;
+}
+
+const ask = (preview: BulkAccountPreview | null) => (preview ? '?' : '');
+
+const OPS: { [K in BulkAccountOp]: AccountOpCopy<K> } = {
+  move: {
+    label: 'Move to OU',
+    change: ({ destination }) => (destination ? { op: 'move', targetOuDn: destination } : null),
+    title: (who, preview) =>
+      preview?.ou ? `Move ${who} to ${preview.ou.name}?` : `Move ${who} to an OU`,
+    confirm: (who) => `Move ${who}`,
+    changes: (n) => `${n} will be moved`,
+    already: (n, preview) =>
+      `${n} ${plural(n, 'is', 'are')} already in ${preview.ou?.name ?? 'it'}`,
+    consequence: () =>
+      'Their names, group memberships and GUIDs stay the same. Group Policy and permissions delegated on the OU apply to them from now on.',
+    from: (user) => (user.from ? `in ${user.from}` : null),
+  },
+  accountExpiry: {
+    label: 'Account expiry',
+    change: ({ never, endOf }) => {
+      if (never) return { op: 'accountExpiry', expiresAt: null };
+      if (!endOf) return null;
+      const expiresAt = expiryAtEndOf(endOf);
+      return Date.parse(expiresAt) > Date.now() ? { op: 'accountExpiry', expiresAt } : null;
+    },
+    title: (who, preview) => `Set when ${who} expire${ask(preview)}`,
+    confirm: (who) => `Set expiry of ${who}`,
+    changes: (n) => `${n} will change`,
+    already: (n, _preview, { expiresAt }) =>
+      expiresAt === null
+        ? `${n} already never ${plural(n, 'expires', 'expire')}`
+        : `${n} already ${plural(n, 'expires', 'expire')} then`,
+    consequence: ({ expiresAt }) =>
+      expiresAt === null
+        ? 'Their accounts won’t expire.'
+        : `They can sign in until ${expiryMoment(expiresAt)}.`,
+    from: (user) => `now ${expiryText(user.from)}`,
+  },
+  mustChangePassword: {
+    label: 'Must change password',
+    change: () => ({ op: 'mustChangePassword' }),
+    title: (who, preview) => `Make ${who} change their password${ask(preview)}`,
+    confirm: (who) => `Require change for ${who}`,
+    changes: (n) => `${n} will have to change their password`,
+    already: (n) => `${n} already ${plural(n, 'has', 'have')} to`,
+    consequence: () => 'They’re asked for a new password the next time they sign in.',
+    from: () => null,
+  },
+  clearPasswordNeverExpires: {
+    label: 'Password expires',
+    change: () => ({ op: 'clearPasswordNeverExpires' }),
+    title: (who, preview) => `Clear “password never expires” for ${who}${ask(preview)}`,
+    confirm: (who) => `Clear for ${who}`,
+    changes: (n) =>
+      `${n} will have ${plural(n, 'a password', 'passwords')} that ${plural(n, 'expires', 'expire')}`,
+    already: (n) => `${n} already ${plural(n, 'does', 'do')}`,
+    consequence: () =>
+      'Their passwords expire as the password policy says; one already older than its maximum age has to be changed at the next sign-in.',
+    from: () => null,
+  },
 };
+
+// The table's entries, typed loosely so any op's can be called.
+const copy = (op: BulkAccountOp) => OPS[op] as AccountOpCopy<BulkAccountOp>;
+
+/** How each change is offered in the dialog. */
+export const accountOpLabel = (op: BulkAccountOp): string => OPS[op].label;
 
 /** What a note in the preview says about the users it lists. */
 export function noteText(kind: BulkAccountNote, n: number): string {
@@ -48,51 +133,15 @@ export function noteText(kind: BulkAccountNote, n: number): string {
 
 /** "2 will be moved · 1 is already in Leavers" */
 export function previewSummary(preview: BulkAccountPreview, change: BulkAccountChange): string {
-  const n = preview.changed.count;
-  const u = preview.unchanged.count;
-  const head =
-    change.op === 'move'
-      ? `${n} will be moved`
-      : change.op === 'accountExpiry'
-        ? `${n} will change`
-        : change.op === 'mustChangePassword'
-          ? `${n} will have to change their password`
-          : `${n} will have ${plural(n, 'a password', 'passwords')} that ${plural(n, 'expires', 'expire')}`;
-  const already =
-    change.op === 'move'
-      ? `${u} ${plural(u, 'is', 'are')} already in ${preview.ou?.name ?? 'it'}`
-      : change.op === 'accountExpiry'
-        ? change.expiresAt === null
-          ? `${u} already never ${plural(u, 'expires', 'expire')}`
-          : `${u} already ${plural(u, 'expires', 'expire')} then`
-        : change.op === 'mustChangePassword'
-          ? `${u} already ${plural(u, 'has', 'have')} to`
-          : `${u} already ${plural(u, 'does', 'do')}`;
-  return `${head} · ${already}`;
+  const op = copy(change.op);
+  return `${op.changes(preview.changed.count)} · ${op.already(preview.unchanged.count, preview, change)}`;
 }
 
-/** What the change does to the users it changes, said before confirming. */
-export function consequence(change: BulkAccountChange): string {
-  switch (change.op) {
-    case 'move':
-      return 'Their names, group memberships and GUIDs stay the same. Group Policy and permissions delegated on the OU apply to them from now on.';
-    case 'accountExpiry':
-      return change.expiresAt === null
-        ? 'Their accounts won’t expire.'
-        : `They can sign in until ${expiryMoment(change.expiresAt)}.`;
-    case 'mustChangePassword':
-      return 'They’re asked for a new password the next time they sign in.';
-    case 'clearPasswordNeverExpires':
-      return 'Their passwords expire as the password policy says; one already older than its maximum age has to be changed at the next sign-in.';
-  }
-}
+export const consequence = (change: BulkAccountChange): string =>
+  copy(change.op).consequence(change);
 
-/** What a user has now, as the preview lists it beside their name. */
-export function fromText(op: BulkAccountOp, user: BulkAccountPreviewUser): string | null {
-  if (op === 'move') return user.from ? `in ${user.from}` : null;
-  if (op === 'accountExpiry') return `now ${expiryText(user.from)}`;
-  return null;
-}
+export const fromText = (op: BulkAccountOp, user: BulkAccountPreviewUser): string | null =>
+  copy(op).from(user);
 
 export function useBulkAccountChange(options: {
   /** The selected users, read when the preview is asked for. */
@@ -128,20 +177,13 @@ export function useBulkAccountChange(options: {
     op.value === 'move' ? [] : options.allowed().filter((o) => o !== 'move'),
   );
 
-  const change = computed<BulkAccountChange | null>(() => {
-    switch (op.value) {
-      case 'move':
-        return destination.value ? { op: 'move', targetOuDn: destination.value } : null;
-      case 'accountExpiry': {
-        if (never.value) return { op: 'accountExpiry', expiresAt: null };
-        if (!endOf.value) return null;
-        const expiresAt = expiryAtEndOf(endOf.value);
-        return Date.parse(expiresAt) > Date.now() ? { op: 'accountExpiry', expiresAt } : null;
-      }
-      default:
-        return { op: op.value };
-    }
-  });
+  const change = computed<BulkAccountChange | null>(() =>
+    copy(op.value).change({
+      destination: destination.value,
+      never: never.value,
+      endOf: endOf.value,
+    }),
+  );
   const canPreview = computed(() => count.value > 0 && change.value !== null && !previewing.value);
   const canConfirm = computed(() => (preview.value?.changed.count ?? 0) > 0);
   const hasMore = computed(
@@ -155,28 +197,10 @@ export function useBulkAccountChange(options: {
   );
   const effect = computed(() => (previewed ? consequence(previewed.change) : null));
 
-  const title = computed(() => {
-    const who = accounts(count.value);
-    const ask = preview.value ? '?' : '';
-    const ou = preview.value?.ou;
-    const titles: Record<BulkAccountOp, string> = {
-      move: ou ? `Move ${who} to ${ou.name}?` : `Move ${who} to an OU`,
-      accountExpiry: `Set when ${who} expire${ask}`,
-      mustChangePassword: `Make ${who} change their password${ask}`,
-      clearPasswordNeverExpires: `Clear “password never expires” for ${who}${ask}`,
-    };
-    return titles[op.value];
-  });
+  const title = computed(() => copy(op.value).title(accounts(count.value), preview.value));
   const confirmLabel = computed(() => {
     const n = preview.value?.changed.count ?? 0;
-    const who = n === 1 ? 'account' : accounts(n);
-    const labels: Record<BulkAccountOp, string> = {
-      move: `Move ${who}`,
-      accountExpiry: `Set expiry of ${who}`,
-      mustChangePassword: `Require change for ${who}`,
-      clearPasswordNeverExpires: `Clear for ${who}`,
-    };
-    return labels[op.value];
+    return copy(op.value).confirm(n === 1 ? 'account' : accounts(n));
   });
 
   function forgetPreview(): void {
@@ -291,11 +315,6 @@ export function useBulkAccountChange(options: {
     }
   }
 
-  /** Back from the preview to change what it does. */
-  function back(): void {
-    forgetPreview();
-  }
-
   function confirm(): void {
     const shown = preview.value;
     if (!shown || !previewed || !canConfirm.value) return;
@@ -342,7 +361,8 @@ export function useBulkAccountChange(options: {
     setEndOf,
     setNever,
     review,
-    back,
+    /** Back from the preview to change what it does. */
+    back: forgetPreview,
     confirm,
   };
 }

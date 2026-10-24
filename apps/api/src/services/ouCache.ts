@@ -113,6 +113,11 @@ export async function rebuildMemberships(
   });
 }
 
+export interface CachedOu {
+  distinguished_name: string;
+  name: string;
+}
+
 /**
  * A live OU from the cache, matched case-insensitively, with its DN as AD
  * spells it; null when OpenADUC doesn't know it. Routes use this to refuse
@@ -122,7 +127,7 @@ export async function findCachedOu(
   db: Kysely<DB>,
   providerId: number,
   dn: string,
-): Promise<{ distinguished_name: string; name: string } | null> {
+): Promise<CachedOu | null> {
   const row = await db
     .selectFrom('directory_ous')
     .select(['distinguished_name', 'name'])

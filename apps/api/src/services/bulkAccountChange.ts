@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { createHash } from 'node:crypto';
 import { sql, type Kysely } from 'kysely';
 import type {
   BulkAccountChange,
   BulkAccountNote,
+  BulkAccountOp,
   BulkAccountPreview,
   BulkAccountPreviewUser,
   BulkJobSubject,
@@ -12,8 +12,9 @@ import type {
 import type { DB } from '../db/types.js';
 import { parentDn } from '../providers/active-directory/normalize.js';
 import { BulkJobRequestError } from './bulkJobs/errors.js';
-import { findCachedOu } from './ouCache.js';
+import { findCachedOu, type CachedOu } from './ouCache.js';
 import { previewList } from './previewList.js';
+import { previewToken } from './previewToken.js';
 import {
   CLEAR_PASSWORD_NEVER_EXPIRES,
   expireAccountAt,
@@ -24,72 +25,114 @@ import {
 } from './userAccountWrite.js';
 import { cachedUserName } from './userCache.js';
 
-/** An account change with what it names looked up: a move's OU as the cache has it. */
-export type ResolvedAccountChange =
-  | { op: 'move'; ou: { distinguished_name: string; name: string } }
-  | { op: 'accountExpiry'; expiresAt: Date | null }
-  | { op: 'mustChangePassword' }
-  | { op: 'clearPasswordNeverExpires' };
+/** A user a preview looks at, with their account as the cache has it. */
+export interface PreviewCandidate {
+  id: string;
+  name: string;
+  state: AccountState;
+}
 
-/** Refuses a move to an OU the cache doesn't know. */
+type Notes = (user: PreviewCandidate) => BulkAccountNote[];
+type ChangeOf<K extends BulkAccountOp> = Extract<BulkAccountChange, { op: K }>;
+const NO_NOTES: Notes = () => [];
+
+/** How one account change finds what it acts with, writes, and previews. */
+interface AccountOp<K extends BulkAccountOp, Target> {
+  /** What the change acts with; throws BulkJobRequestError when it can't. */
+  resolve(db: Kysely<DB>, providerId: number, change: ChangeOf<K>): Promise<Target>;
+  write(target: Target): AccountWrite;
+  /** What the job's audit entry and progress say it does. */
+  subject(target: Target): BulkJobSubject | null;
+  /** What the preview token names besides the op and the users. */
+  token(change: ChangeOf<K>): unknown;
+  /** What the user has now that the change replaces, as the preview shows it. */
+  from(user: AccountState): string | null;
+  /** What the preview says about the users it changes, looked up for them all at once. */
+  notes(
+    db: Kysely<DB>,
+    providerId: number,
+    target: Target,
+    users: PreviewCandidate[],
+  ): Promise<Notes>;
+}
+
+const OPS: { [K in BulkAccountOp]: AccountOp<K, never> } = {
+  move: accountOp<'move', CachedOu>({
+    async resolve(db, providerId, { targetOuDn }) {
+      const ou = await findCachedOu(db, providerId, targetOuDn);
+      if (!ou) throw new BulkJobRequestError('ou_not_found', 'OU not found');
+      return ou;
+    },
+    write: moveUserTo,
+    subject: (ou) => ({ ou: { distinguishedName: ou.distinguished_name, name: ou.name } }),
+    token: ({ targetOuDn }) => targetOuDn.toLowerCase(),
+    from: (user) => parentDn(user.distinguishedName),
+    notes: async () => NO_NOTES,
+  }),
+  accountExpiry: accountOp<'accountExpiry', Date | null>({
+    resolve: async (_db, _providerId, { expiresAt }) =>
+      expiresAt === null ? null : new Date(expiresAt),
+    write: expireAccountAt,
+    subject: (at) => ({ expiresAt: at?.toISOString() ?? null }),
+    token: ({ expiresAt }) => (expiresAt === null ? null : Date.parse(expiresAt)),
+    from: (user) => user.accountExpiresAt?.toISOString() ?? null,
+    notes: async () => NO_NOTES,
+  }),
+  mustChangePassword: accountOp<'mustChangePassword', null>({
+    resolve: async () => null,
+    write: () => REQUIRE_PASSWORD_CHANGE,
+    subject: () => null,
+    token: () => null,
+    from: () => null,
+    async notes(db, providerId, _target, users) {
+      const random = await randomPasswordUsers(db, providerId, users);
+      return (user) => [
+        ...(user.state.passwordNeverExpires ? (['never_expires'] as const) : []),
+        ...(random.has(user.id) ? (['random_password'] as const) : []),
+      ];
+    },
+  }),
+  clearPasswordNeverExpires: accountOp<'clearPasswordNeverExpires', null>({
+    resolve: async () => null,
+    write: () => CLEAR_PASSWORD_NEVER_EXPIRES,
+    subject: () => null,
+    token: () => null,
+    from: () => null,
+    notes: async () => (user) => (user.state.passwordMustChange ? ['must_change'] : []),
+  }),
+};
+
+// Types each op's table entry by its own change and target.
+function accountOp<K extends BulkAccountOp, Target>(op: AccountOp<K, Target>): AccountOp<K, never> {
+  return op as unknown as AccountOp<K, never>;
+}
+
+/** An account change with what it acts with looked up. */
+export interface ResolvedAccountChange {
+  write: AccountWrite;
+  subject: BulkJobSubject | null;
+  from(user: AccountState): string | null;
+  notes(users: PreviewCandidate[]): Promise<Notes>;
+}
+
 export async function resolveAccountChange(
   db: Kysely<DB>,
   providerId: number,
   change: BulkAccountChange,
 ): Promise<ResolvedAccountChange> {
-  switch (change.op) {
-    case 'move': {
-      const ou = await findCachedOu(db, providerId, change.targetOuDn);
-      if (!ou) throw new BulkJobRequestError('ou_not_found', 'OU not found');
-      return { op: 'move', ou };
-    }
-    case 'accountExpiry':
-      return {
-        op: 'accountExpiry',
-        expiresAt: change.expiresAt === null ? null : new Date(change.expiresAt),
-      };
-    default:
-      return change;
-  }
+  const op = OPS[change.op] as AccountOp<BulkAccountOp, unknown>;
+  const target = await op.resolve(db, providerId, change as never);
+  return {
+    write: op.write(target),
+    subject: op.subject(target),
+    from: op.from,
+    notes: (users) => op.notes(db, providerId, target, users),
+  };
 }
 
-/** The single-user write the change makes to each user, the same as its route's. */
-export function accountWrite(change: ResolvedAccountChange): AccountWrite {
-  switch (change.op) {
-    case 'move':
-      return moveUserTo(change.ou);
-    case 'accountExpiry':
-      return expireAccountAt(change.expiresAt);
-    case 'mustChangePassword':
-      return REQUIRE_PASSWORD_CHANGE;
-    case 'clearPasswordNeverExpires':
-      return CLEAR_PASSWORD_NEVER_EXPIRES;
-  }
-}
-
-/** What the job's audit entry and progress say it does. */
-export function accountChangeSubject(change: ResolvedAccountChange): BulkJobSubject | null {
-  if (change.op === 'move') return { ou: ouOf(change.ou) };
-  if (change.op === 'accountExpiry') return { expiresAt: change.expiresAt?.toISOString() ?? null };
-  return null;
-}
-
-/**
- * Names this change of these users, whatever their order or case, so the
- * job can check it runs on what the operator previewed. Not a secret: it
- * guards against a stale preview, not a forged one.
- */
 export function accountPreviewToken(ids: readonly string[], change: BulkAccountChange): string {
-  const users = [...ids.map((id) => id.toLowerCase())].sort().join(',');
-  const target =
-    change.op === 'move'
-      ? change.targetOuDn.toLowerCase()
-      : change.op === 'accountExpiry'
-        ? String(change.expiresAt === null ? null : Date.parse(change.expiresAt))
-        : '';
-  return createHash('sha256')
-    .update(`account\n${change.op}\n${users}\n${target}`)
-    .digest('base64url');
+  const op = OPS[change.op] as AccountOp<BulkAccountOp, unknown>;
+  return previewToken(`account:${change.op}`, ids, op.token(change as never));
 }
 
 /**
@@ -105,7 +148,6 @@ export async function previewAccountChange(
 ): Promise<BulkAccountPreview> {
   const ids = request.ids.map((id) => id.toLowerCase());
   const change = await resolveAccountChange(db, providerId, request.change);
-  const write = accountWrite(change);
   const rows = await db
     .selectFrom('user_cache_records')
     .select([
@@ -123,7 +165,7 @@ export async function previewAccountChange(
     .where('deleted_at', 'is', null)
     .where(sql<boolean>`object_guid = ANY(${ids}::uuid[])`)
     .execute();
-  const known = rows
+  const known: PreviewCandidate[] = rows
     .map((u) => ({
       id: u.object_guid.toLowerCase(),
       name: cachedUserName(u, u.object_guid),
@@ -134,57 +176,38 @@ export async function previewAccountChange(
         passwordNeverExpires: u.password_never_expires,
         passwordLastSetAt: u.password_last_set_at ? new Date(u.password_last_set_at) : null,
         rawAttributes: u.raw_attributes_json,
-      } satisfies AccountState,
+      },
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const randomPassword =
-    change.op === 'mustChangePassword' ? await randomPasswordUsers(db, providerId, ids) : null;
+  const changing = known.filter((u) => !change.write.asAsked?.(u.state));
+  const notesOf = await change.notes(changing);
   const changed = previewList<BulkAccountPreviewUser>(request.offset, request.limit);
   const unchanged = previewList();
   const notes = new Map<BulkAccountNote, ReturnType<typeof previewList<PreviewUser>>>();
-  const note = (kind: BulkAccountNote, user: { id: string; name: string }) => {
-    if (!notes.has(kind)) notes.set(kind, previewList());
-    notes.get(kind)!.add(user);
-  };
   for (const user of known) {
     const entry = { id: user.id, name: user.name };
-    if (write.asAsked?.(user.state)) {
+    if (!changing.includes(user)) {
       unchanged.add(entry);
       continue;
     }
-    changed.add({ ...entry, from: from(change, user.state) });
-    if (change.op === 'mustChangePassword') {
-      if (user.state.passwordNeverExpires) note('never_expires', entry);
-      if (randomPassword?.has(user.id)) note('random_password', entry);
-    }
-    if (change.op === 'clearPasswordNeverExpires' && user.state.passwordMustChange) {
-      note('must_change', entry);
+    changed.add({ ...entry, from: change.from(user.state) });
+    for (const kind of notesOf(user)) {
+      if (!notes.has(kind)) notes.set(kind, previewList());
+      notes.get(kind)!.add(entry);
     }
   }
 
   const knownIds = new Set(known.map((u) => u.id));
   return {
-    op: change.op,
+    op: request.change.op,
     changed: { ...changed.list, offset: request.offset },
     unchanged: unchanged.list,
     notes: [...notes].map(([kind, list]) => ({ kind, ...list.list })),
-    ou: change.op === 'move' ? ouOf(change.ou) : null,
+    ou: change.subject?.ou ?? null,
     unknownCount: ids.filter((id) => !knownIds.has(id)).length,
     previewToken: accountPreviewToken(request.ids, request.change),
   };
-}
-
-const ouOf = (ou: { distinguished_name: string; name: string }) => ({
-  distinguishedName: ou.distinguished_name,
-  name: ou.name,
-});
-
-/** What the user has now that the change replaces, as the preview shows it. */
-function from(change: ResolvedAccountChange, user: AccountState): string | null {
-  if (change.op === 'move') return parentDn(user.distinguishedName);
-  if (change.op === 'accountExpiry') return user.accountExpiresAt?.toISOString() ?? null;
-  return null;
 }
 
 /**
@@ -195,9 +218,10 @@ function from(change: ResolvedAccountChange, user: AccountState): string | null 
 async function randomPasswordUsers(
   db: Kysely<DB>,
   providerId: number,
-  ids: string[],
+  users: PreviewCandidate[],
 ): Promise<Set<string>> {
-  if (ids.length === 0) return new Set();
+  if (users.length === 0) return new Set();
+  const ids = users.map((u) => u.id);
   const { rows } = await sql<{ user_id: string; mode: string | null }>`
     SELECT DISTINCT ON (target_id) lower(target_id) AS user_id, metadata_json->>'passwordMode' AS mode
       FROM audit_events
