@@ -53,6 +53,7 @@ import type {
   SyncInput,
   UserAttributePatch,
   UserCreateFinish,
+  GroupsStepResult,
   UserCreateInput,
   UserCreateResult,
   AccountFingerprint,
@@ -95,6 +96,7 @@ import {
   asStringArray,
   groupTypeValue,
   leafRdn,
+  leafRdnValue,
   normalizeComputer,
   normalizeDeletedComputer,
   normalizeDeletedUser,
@@ -1033,39 +1035,47 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (!groupEntry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
         const memberDn = asString(memberEntry.distinguishedName) ?? memberEntry.dn;
         const groupDn = asString(groupEntry.distinguishedName) ?? groupEntry.dn;
-        // Ask AD rather than reading `member`, which a large group hands
-        // out in ranges.
-        const { searchEntries } = await client.search(groupDn, {
-          scope: 'base',
-          filter: `(member=${escapeLdapFilter(memberDn)})`,
-          attributes: ['distinguishedName'],
-        });
-        const isMember = searchEntries.length > 0;
         const snapshot = (inGroup: boolean) => ({
           isMember: inGroup,
           group: groupDn,
           member: memberDn,
           memberKind: member.kind,
         });
-
-        if ((op === 'add') === isMember) {
-          return { ok: true, before: snapshot(isMember), after: snapshot(isMember) };
-        }
-
-        await client.modify(
-          groupDn,
-          new Change({
-            operation: op,
-            modification: new Attribute({ type: 'member', values: [memberDn] }),
-          }),
-        );
-        return { ok: true, before: snapshot(isMember), after: snapshot(op === 'add') };
+        const wasMember = await this.setMember(client, groupDn, memberDn, op === 'add');
+        return { ok: true, before: snapshot(wasMember), after: snapshot(op === 'add') };
       } catch (err) {
         return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
     });
+  }
+
+  /** Make `memberDn` a member of `groupDn` or not; returns whether it was one. */
+  private async setMember(
+    client: Client,
+    groupDn: string,
+    memberDn: string,
+    member: boolean,
+  ): Promise<boolean> {
+    // Ask AD rather than reading `member`, which a large group hands out
+    // in ranges.
+    const { searchEntries } = await client.search(groupDn, {
+      scope: 'base',
+      filter: `(member=${escapeLdapFilter(memberDn)})`,
+      attributes: ['distinguishedName'],
+    });
+    const wasMember = searchEntries.length > 0;
+    if (wasMember !== member) {
+      await client.modify(
+        groupDn,
+        new Change({
+          operation: member ? 'add' : 'delete',
+          modification: new Attribute({ type: 'member', values: [memberDn] }),
+        }),
+      );
+    }
+    return wasMember;
   }
 
   /**
@@ -1537,6 +1547,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 
   async createUser(
     input: UserCreateInput,
+    steps: readonly UserCreateStep[],
     finish: UserCreateFinish,
     ctx: WriteContext,
   ): Promise<UserCreateResult> {
@@ -1570,12 +1581,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
         if (input.mobile) attrs.mobile = input.mobile;
         if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
+        Object.assign(attrs, input.organisation);
+        if (input.manager) attrs.manager = input.manager;
         try {
           await client.add(input.dn, attrs);
         } catch (err) {
           return { ...classifyWriteError(err), completed: [] };
         }
-        const steps: UserCreateStep[] = finish.enable ? ['password', 'enable'] : ['password'];
         return await this.runCreateSteps(client, input.dn, ['create'], steps, finish);
       } catch (err) {
         return { ...classifyWriteError(err), completed: [] };
@@ -1643,7 +1655,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * The steps after the add, in order, stopping at the first that fails,
+   * The steps not yet `done`, in order, stopping at the first that fails,
    * then the account as they left it. The password step also clears
    * PASSWD_NOTREQD, and enabling leaves exactly a normal account, so a
    * new account carries no flags nobody chose.
@@ -1665,7 +1677,28 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         ...(fingerprint ? { fingerprint } : {}),
       };
     };
+    let groups: GroupsStepResult | undefined;
     for (const step of steps) {
+      if (completed.includes(step)) continue;
+      if (step === 'groups') {
+        groups = await this.addToGroups(client, dn, finish.groups);
+        const failed = groups.failed;
+        if (failed.length > 0) {
+          return {
+            ok: false,
+            reason: failed[0]!.reason,
+            errorMessage: failed
+              .map((f) => `${leafRdnValue(f.dn) ?? f.dn}: ${f.errorMessage}`)
+              .join('; '),
+            completed,
+            failedStep: step,
+            groups,
+            ...(await leftAs()),
+          };
+        }
+        completed.push(step);
+        continue;
+      }
       try {
         if (step === 'password') {
           await client.modify(dn, [
@@ -1678,10 +1711,43 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         completed.push(step);
       } catch (err) {
         const refused = step === 'password' ? classifyPasswordError(err) : classifyWriteError(err);
-        return { ...refused, completed, failedStep: step, ...(await leftAs()) };
+        return {
+          ...refused,
+          completed,
+          failedStep: step,
+          ...(groups ? { groups } : {}),
+          ...(await leftAs()),
+        };
       }
     }
-    return { ok: true, completed, ...(await leftAs()) };
+    return { ok: true, completed, ...(groups ? { groups } : {}), ...(await leftAs()) };
+  }
+
+  /** Add the account to each group, carrying on past one that refuses. */
+  private async addToGroups(
+    client: Client,
+    dn: string,
+    groupDns: readonly string[],
+  ): Promise<GroupsStepResult> {
+    const done: GroupsStepResult = { added: [], failed: [], missing: [] };
+    for (const groupDn of groupDns) {
+      try {
+        await this.setMember(client, groupDn, dn, true);
+        done.added.push(groupDn);
+      } catch (err) {
+        if ((err as { name?: string }).name === 'NoSuchObjectError') {
+          done.missing.push(groupDn);
+          continue;
+        }
+        const { reason, errorMessage } = classifyWriteError(err);
+        done.failed.push({
+          dn: groupDn,
+          reason: reason ?? 'directory_error',
+          errorMessage: errorMessage ?? 'refused',
+        });
+      }
+    }
+    return done;
   }
 
   async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {

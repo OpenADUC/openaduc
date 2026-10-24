@@ -24,6 +24,7 @@ interface FeedItem {
 const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: string }> = {
   'user.view': { title: 'Account viewed', iconClass: 'pi pi-eye', tone: 'tone-muted' },
   'user.create': { title: 'Account created', iconClass: 'pi pi-user-plus', tone: 'tone-green' },
+  'user.copied': { title: 'Copied to a new user', iconClass: 'pi pi-copy', tone: 'tone-blue' },
   'user.create.finish': {
     title: 'Account creation finished',
     iconClass: 'pi pi-user-plus',
@@ -99,6 +100,13 @@ function detailFor(e: AuditEventRow): string {
   }
   if (e.result !== 'success') {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';
+  }
+  if (e.action === 'user.create' && md.copiedFrom && typeof md.copiedFrom === 'object') {
+    const from = md.copiedFrom as { samAccountName?: unknown; distinguishedName?: unknown };
+    return `Copied from ${String(from.samAccountName ?? from.distinguishedName)}`;
+  }
+  if (e.action === 'user.copied' && md.copySamAccountName) {
+    return `To: ${String(md.copySamAccountName)}`;
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
   if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {

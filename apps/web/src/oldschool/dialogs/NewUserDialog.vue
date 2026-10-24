@@ -2,7 +2,8 @@
      "New Object - User", rendering the shared create workflow
      (useUserCreation): names suggested and checked as they're typed,
      ADUC's password checkboxes, and an unfinished create kept with a
-     retry of what's left. -->
+     retry of what's left. As "Copy Object - User" it starts from the
+     copied user, with its groups to untick. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useToast } from 'primevue/usetoast';
@@ -15,7 +16,12 @@ import { announceUserCreated } from '../../design/feedback/userToasts.js';
 import { useUserCreation } from '../../design/composables/useUserCreation.js';
 import { PASSWORD_MODE_LABEL } from '../../design/lib/newUser.js';
 
-const props = defineProps<{ windowId: number; parentDn: string }>();
+const props = defineProps<{
+  windowId: number;
+  parentDn?: string;
+  /** The user to copy, by id. */
+  copyFrom?: string;
+}>();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
 const store = useOldSchool();
@@ -29,20 +35,27 @@ const creation = useUserCreation({
 });
 const { form, names, upnSuffixes, deviations, plan, unfinished, unfinishedSummary, submitting } =
   creation;
-void creation.start({ ouDn: props.parentDn });
+const { copySource, copyError, groupChoices } = creation;
+if (props.copyFrom) void creation.startCopy(props.copyFrom);
+else void creation.start({ ouDn: props.parentDn ?? null });
 
-const createIn = computed(() => dnPath(rdns(props.parentDn)));
+const createIn = computed(() => (form.ouDn ? dnPath(rdns(form.ouDn)) : ''));
 const locked = computed(() => submitting.value || !!unfinished.value);
 const toApprove = computed(() => deviations.value.filter((d) => d.needsApproval));
 
 // One line, as ADUC shows it: the first thing stopping OK.
 const problem = computed(
   () =>
+    creation.loadError.value ??
     plan.value.blockers[0]?.message ??
     creation.error.value ??
     (unfinishedSummary.value
       ? `${unfinishedSummary.value.title} ${unfinishedSummary.value.failed} ${unfinishedSummary.value.left}`
       : null),
+);
+
+const groupWarnings = computed(() =>
+  plan.value.warnings.filter((w) => w.field === 'groups').map((w) => w.message),
 );
 
 const unmetChecks = computed(() =>
@@ -58,7 +71,7 @@ function ok(): void {
 <template>
   <WinDialog
     :window-id="windowId"
-    title="New Object - User"
+    :title="copyFrom ? 'Copy Object - User' : 'New Object - User'"
     icon="newuser"
     hide-apply
     :resizable="false"
@@ -68,7 +81,10 @@ function ok(): void {
     @cancel="emit('close')"
     @close="emit('close')"
   >
-    <div class="os-tab-body">
+    <div v-if="copyError" class="os-tab-body">
+      <div class="os-error">{{ copyError }}</div>
+    </div>
+    <div v-else class="os-tab-body">
       <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px">
         <WinIcon name="user" :size="32" />
         <span>Create in: {{ createIn }}</span>
@@ -128,6 +144,25 @@ function ok(): void {
         />
         {{ deviation.reason }}
       </label>
+      <fieldset v-if="copySource" class="os-groupbox" style="margin-top: 8px">
+        <legend>Member of</legend>
+        <div v-for="m in groupWarnings" :key="m">{{ m }}</div>
+        <div v-if="!groupChoices.length">
+          {{ copySource.source.samAccountName }} isn't directly in any group a copy can be added to.
+        </div>
+        <template v-for="g in groupChoices" :key="g.id">
+          <label class="os-check" style="display: flex">
+            <input
+              type="checkbox"
+              :checked="g.ticked"
+              :disabled="locked || g.disabled"
+              @change="creation.toggleGroup(g.id)"
+            />
+            {{ g.name }}
+          </label>
+          <div v-if="g.warning" style="margin: 0 0 4px 20px">{{ g.warning }}</div>
+        </template>
+      </fieldset>
       <fieldset class="os-groupbox" style="margin-top: 8px">
         <legend>Password</legend>
         <label v-for="m in PASSWORD_MODES" :key="m" class="os-check" style="display: flex">

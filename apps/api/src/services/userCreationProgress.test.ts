@@ -16,6 +16,7 @@ const unfinished: UnfinishedCreate = {
   createdAt: created,
   completed: ['create'],
   remaining: ['password', 'enable'],
+  groupsLeft: [],
   account,
 };
 const live = (over: Partial<AccountFingerprint & { enabled: boolean }> = {}) => ({

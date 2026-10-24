@@ -28,6 +28,7 @@ export type DialogSpec =
   | { kind: 'rename-user'; id: string }
   | { kind: 'delete-user'; id: string; label: string }
   | { kind: 'new-user'; parentDn: string }
+  | { kind: 'copy-user'; id: string }
   | { kind: 'new-group'; parentDn: string }
   | { kind: 'delete-group'; id: string; label: string }
   | { kind: 'move'; accountKind: AccountKind; id: string; label: string }
@@ -78,6 +79,8 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
       return { width: 460, height: 270 };
     case 'new-user':
       return { width: 480, height: 560 };
+    case 'copy-user':
+      return { width: 480, height: 640 };
     case 'new-group':
       return { width: 440, height: 400 };
     case 'move':

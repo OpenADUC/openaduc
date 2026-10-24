@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
 import { suggestNames, type NamingDeviation, type NamingSuggestion } from './naming.js';
+import { userCreateRequestSchema, type UserCopySource } from './schemas/userCreate.js';
 import {
   RANDOM_MODE_MUST_CHANGE_NOTE,
   approvalKey,
+  copyToForm,
   phonesToWrite,
   planNewUser,
   type NewUserForm,
@@ -36,6 +38,7 @@ const ctx = (over: Partial<NewUserPlanContext> = {}): NewUserPlanContext => ({
   approved: new Set(),
   policy: { minPwdLength: 8, complexityRequired: true },
   phoneCountry: 'GB',
+  canAddGroups: true,
   ...over,
 });
 const withDeviation = (d: NamingDeviation): NamingSuggestion => ({ ...jane, deviations: [d] });
@@ -173,6 +176,161 @@ describe('planNewUser', () => {
     });
     expect(plan.warnings.map((w) => w.field)).toEqual(['mobile', 'telephoneNumber']);
     expect(plan.mobile.warning).toContain('landline');
+  });
+});
+
+describe('copying a user', () => {
+  const ALICE = '0b0f2a8e-1111-4c1d-9f00-00000000a11c';
+  const BOB = '0b0f2a8e-1111-4c1d-9f00-0000000000b0';
+  const ENGINEERING = '0b0f2a8e-2222-4c1d-9f00-0000000000e1';
+  const ALL_STAFF = '0b0f2a8e-2222-4c1d-9f00-0000000000a5';
+  const DOMAIN_ADMINS = '0b0f2a8e-2222-4c1d-9f00-0000000000da';
+  const OPERATORS = '0b0f2a8e-2222-4c1d-9f00-00000000000b';
+  const source: UserCopySource = {
+    source: {
+      id: ALICE,
+      distinguishedName: `CN=Alice Anders,${OU}`,
+      samAccountName: 'alice.anders',
+      displayName: 'Alice Anders',
+    },
+    ouDn: OU,
+    organisation: {
+      title: 'Engineer',
+      department: 'Engineering',
+      company: 'OpenADUC Ltd',
+      physicalDeliveryOfficeName: 'Leeds',
+      streetAddress: '1 Park Row\r\nFloor 2',
+      l: 'Leeds',
+      st: null,
+      postalCode: 'LS1 5AB',
+      c: 'GB',
+      co: 'United Kingdom',
+      countryCode: '826',
+    },
+    manager: { id: BOB, distinguishedName: `CN=Bob Baker,${OU}`, displayName: 'Bob Baker' },
+    groups: [
+      {
+        id: ENGINEERING,
+        name: 'Engineering',
+        distinguishedName: 'CN=Engineering',
+        privilege: null,
+      },
+      { id: ALL_STAFF, name: 'All Staff', distinguishedName: 'CN=All Staff', privilege: null },
+      {
+        id: DOMAIN_ADMINS,
+        name: 'Domain Admins',
+        distinguishedName: 'CN=Domain Admins',
+        privilege: { reason: 'protected' },
+      },
+      {
+        id: OPERATORS,
+        name: 'OpenADUC Operators',
+        distinguishedName: 'CN=OpenADUC Operators',
+        privilege: { reason: 'role', role: 'operator' },
+      },
+    ],
+  };
+  // The operator names the new person; everything else comes from the copy.
+  const copyOf = (over: Partial<NewUserForm> = {}) =>
+    form({
+      personalEmail: '',
+      mobile: '',
+      telephoneNumber: '',
+      ...copyToForm(source),
+      ...over,
+    });
+
+  it('starts in the source’s OU, with its organisation and groups, and none of its own details', () => {
+    const start = copyToForm(source);
+
+    expect(start).toEqual({
+      ouDn: OU,
+      copiedFrom: ALICE,
+      organisation: { ...source.organisation, managerId: BOB },
+      groups: [ENGINEERING, ALL_STAFF],
+    });
+    // Names, email, phones, employee IDs and description are the new person's.
+    for (const key of [
+      'first',
+      'last',
+      'preferredFirst',
+      'personalEmail',
+      'mobile',
+      'telephoneNumber',
+      'password',
+    ]) {
+      expect(start).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(start)).not.toMatch(/alice|employee|description/i);
+  });
+
+  it('creates the copy with the organisation, the ticked groups and where it came from', () => {
+    const plan = planNewUser(copyOf(), ctx());
+
+    expect(plan.request).toMatchObject({
+      ouDn: OU,
+      givenName: 'Jane',
+      surname: 'Doe',
+      samAccountName: 'jane.doe',
+      personalEmail: null,
+      mobile: null,
+      telephoneNumber: null,
+      organisation: {
+        title: 'Engineer',
+        department: 'Engineering',
+        company: 'OpenADUC Ltd',
+        physicalDeliveryOfficeName: 'Leeds',
+        streetAddress: '1 Park Row\r\nFloor 2',
+        l: 'Leeds',
+        postalCode: 'LS1 5AB',
+        c: 'GB',
+        co: 'United Kingdom',
+        countryCode: '826',
+        managerId: BOB,
+      },
+      groups: [ENGINEERING, ALL_STAFF],
+      copiedFrom: ALICE,
+    });
+    expect(plan.groups).toEqual([ENGINEERING, ALL_STAFF]);
+    // What the source doesn't have isn't written at all.
+    const parsed = userCreateRequestSchema.parse(plan.request);
+    expect(parsed.organisation?.attributes).not.toHaveProperty('st');
+    expect(parsed.organisation?.attributes).toMatchObject({ c: 'GB', countryCode: '826' });
+    expect(parsed.organisation?.managerId).toBe(BOB);
+  });
+
+  it('needs an OU picked when the source isn’t in one', () => {
+    const plan = planNewUser(copyOf({ ouDn: null }), ctx());
+    expect(plan.request).toBeNull();
+    expect(plan.blockers).toEqual([
+      { field: 'ouDn', message: expect.stringContaining('isn’t in an OU') },
+    ]);
+  });
+
+  it('adds only the groups left ticked, privileged ones only when ticked on purpose', () => {
+    const plan = planNewUser(copyOf({ groups: [ALL_STAFF, DOMAIN_ADMINS] }), ctx());
+    expect(plan.request?.groups).toEqual([ALL_STAFF, DOMAIN_ADMINS]);
+
+    const none = planNewUser(copyOf({ groups: [] }), ctx());
+    expect(none.request).not.toHaveProperty('groups');
+  });
+
+  it('adds no groups for an operator who can’t change memberships, and says so', () => {
+    const plan = planNewUser(copyOf(), ctx({ canAddGroups: false }));
+
+    expect(plan.request).not.toBeNull();
+    expect(plan.request).not.toHaveProperty('groups');
+    expect(plan.groups).toEqual([]);
+    expect(plan.warnings).toEqual([
+      { field: 'groups', message: expect.stringContaining('group memberships') },
+    ]);
+  });
+
+  it('leaves a plain create without organisation, groups or a source', () => {
+    const plan = planNewUser(form(), ctx());
+    expect(plan.request).not.toHaveProperty('organisation');
+    expect(plan.request).not.toHaveProperty('groups');
+    expect(plan.request).not.toHaveProperty('copiedFrom');
   });
 });
 
