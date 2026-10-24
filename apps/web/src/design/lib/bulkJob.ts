@@ -37,6 +37,11 @@ export const BULK_VERBS: Record<BulkJobKind, { verb: string; ing: string; ed: st
     ing: 'Clearing “password never expires” for',
     ed: 'Cleared “password never expires” for',
   },
+  'user.password.reset': {
+    verb: 'Reset password',
+    ing: 'Resetting the password of',
+    ed: 'Reset the password of',
+  },
   'user.create': { verb: 'Import', ing: 'Creating', ed: 'Created' },
   'user.passwordMustChange.clear': {
     verb: 'Stop requiring a password change',
@@ -90,6 +95,10 @@ export function bulkJobWords(job: Pick<BulkJob, 'action' | 'subject' | 'revertsJ
   const { ing, ed } = BULK_VERBS[job.action];
   return { ing, ed, target: bulkJobTarget(job.action, job.subject) };
 }
+
+/** An import, or a reset of its passwords: its results are on the import's own page. */
+export const onImportPage = (job: Pick<BulkJob, 'action'>): boolean =>
+  job.action === IMPORT_JOB_ACTION || job.action === 'user.password.reset';
 
 /** Rows got through, whatever their outcome. */
 const done = (c: BulkJobCounts): number => c.succeeded + c.partial + c.failed + c.skipped;
@@ -161,7 +170,7 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
         ]
           .filter(Boolean)
           .join(' and ')}. ${
-          job.action === IMPORT_JOB_ACTION
+          onImportPage(job)
             ? 'The results below say what failed.'
             : job.revertsJobId === null
               ? `${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`
@@ -171,7 +180,7 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   const afterwards: BulkJobControl[] = [
     ...(problems > 0 ? (['retry'] as const) : []),
     ...(job.revertible ? (['revert'] as const) : []),
-    ...(job.action === IMPORT_JOB_ACTION ? [] : (['dismiss'] as const)),
+    ...(onImportPage(job) ? [] : (['dismiss'] as const)),
   ];
 
   if (job.status === 'paused') {
