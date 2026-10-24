@@ -172,8 +172,10 @@ describe('the bulk job runner', () => {
     const { service, calls } = runner();
     const id = await start(service, 6);
     await vi.waitFor(() => expect(calls).toHaveLength(4));
+    const [first] = await rows(id);
 
-    calls.shift()!.fail(new DirectoryUnavailableError('dc1: ECONNREFUSED'));
+    const failing = calls.findIndex((c) => c.targetId === first!.target_id);
+    calls.splice(failing, 1)[0]!.fail(new DirectoryUnavailableError('dc1: ECONNREFUSED'));
     for (const c of calls.splice(0)) c.release();
 
     await vi.waitFor(async () => expect((await job(id)).status).toBe('paused'));
