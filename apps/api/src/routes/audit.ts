@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'kysely';
 import { z } from 'zod';
 
 const querySchema = z.object({
@@ -18,12 +19,35 @@ const querySchema = z.object({
 
 export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/audit-events', {
-    config: { policy: { capability: 'view:audit', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'view:audit', stepUp: false, directory: 'caller' } },
     handler: async (req) => {
       const q = querySchema.parse(req.query);
       const offset = (q.page - 1) * q.pageSize;
+      const directoryId = req.directoryId!;
 
-      let baseQuery = app.db.selectFrom('audit_events');
+      // The caller's directory's rows, and installation-wide ones (no
+      // directory, config target: settings changes, first-run setup).
+      // Older authz.deny rows have no provider_id; attribute them via
+      // their session's directory.
+      let baseQuery = app.db.selectFrom('audit_events').where((eb) =>
+        eb.or([
+          eb('provider_id', '=', directoryId),
+          eb.and([
+            eb('provider_id', 'is', null),
+            eb.or([
+              eb('target_type', '=', 'config'),
+              eb(
+                'session_id',
+                'in',
+                eb
+                  .selectFrom('admin_sessions')
+                  .select(sql<string>`id::text`.as('id'))
+                  .where('directory_id', '=', directoryId),
+              ),
+            ]),
+          ]),
+        ]),
+      );
       if (q.from) baseQuery = baseQuery.where('timestamp', '>=', new Date(q.from));
       if (q.to) baseQuery = baseQuery.where('timestamp', '<=', new Date(q.to));
       if (q.actorUserId) baseQuery = baseQuery.where('actor_user_id', '=', q.actorUserId);

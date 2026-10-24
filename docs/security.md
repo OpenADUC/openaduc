@@ -59,6 +59,8 @@ Every authenticated action — successful or denied — produces an `audit_event
 
 Each row captures: action, actor, target type and id, before/after JSON snapshots, source IP, user agent, session id, correlation id, error code, and arbitrary metadata. Keys matching a sensitive-key allowlist (`password`, `secret`, `token`, etc.) are auto-redacted to `[REDACTED]` before insert.
 
+Each row also names the directory it belongs to: the one the action targeted, else the one the operator was signed in to. The audit log shows an auditor only their own directory's rows, plus installation-wide ones (settings changes, first-run setup), which name no directory and appear in every directory's log.
+
 Audit retention is unbounded by default. Operators can prune older rows out-of-band if needed, but the application will not.
 
 ## Encryption at rest

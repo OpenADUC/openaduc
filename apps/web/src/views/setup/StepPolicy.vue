@@ -6,8 +6,10 @@ import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
 import { api } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
+import { useAuthStore } from '../../stores/auth.js';
 
 const emit = defineEmits<{ next: []; back: [] }>();
+const auth = useAuthStore();
 
 // Password expiry itself comes from the AD domain `maxPwdAge` at request
 // time — the wizard no longer collects a rotation override. These two
@@ -57,6 +59,7 @@ async function submit(): Promise<void> {
     });
     emit('next');
   } catch (err) {
+    if (auth.retryAfterStepUp(err, submit)) return;
     error.value =
       err instanceof ApiError
         ? err.message

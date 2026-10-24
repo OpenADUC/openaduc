@@ -139,6 +139,7 @@ export default fp(async (app) => {
         userAgent: req.headers['user-agent'] ?? null,
         sessionId: actor.session.id,
         correlationId: req.correlationId,
+        providerId: actor.session.directoryId,
         targetType: 'system',
         metadata: { requiredCapability: capability, route: req.routeOptions.url ?? req.url },
       })

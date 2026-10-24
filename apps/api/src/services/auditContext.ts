@@ -11,7 +11,10 @@ export const wasAudited = (err: unknown): boolean =>
 
 // Build the request-scoped audit fields once per route handler. Routes spread
 // this into recordEvent calls so source_ip / user_agent / correlation_id /
-// session_id / actor_* are uniformly captured.
+// session_id / actor_* are uniformly captured. provider_id defaults to the
+// session's directory, which decides whose auditors see the row; a route
+// acting on another directory overrides it, and an installation-wide config
+// change sets it to null so every directory's auditors see it.
 export interface RequestAuditContext {
   sourceIp: string;
   userAgent: string | null;
@@ -19,6 +22,7 @@ export interface RequestAuditContext {
   sessionId: string | null;
   actorUserId: string | null;
   actorDisplayName: string | null;
+  providerId: number | null;
 }
 
 export function auditContextFromRequest(req: FastifyRequest): RequestAuditContext {
@@ -30,6 +34,7 @@ export function auditContextFromRequest(req: FastifyRequest): RequestAuditContex
     sessionId: actor?.session.id ?? null,
     actorUserId: actor?.session.actorUserId ?? null,
     actorDisplayName: actor?.session.actorDisplayName ?? null,
+    providerId: req.directoryId,
   };
 }
 

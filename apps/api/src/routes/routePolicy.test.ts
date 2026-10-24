@@ -7,39 +7,6 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 
-// Known gaps, keyed by route. Each breaks a rule today; #72 closes them and
-// empties this list. Don't add to it to get a new route past the test.
-const ALLOWLIST: Record<string, string> = {
-  // Cross-directory access: an operator signed into one directory can reach
-  // another's Entra data by changing the id in the URL.
-  'GET /api/directories/:id/entra': "reads any directory's Entra config, not just the caller's",
-  'PUT /api/directories/:id/entra': "changes any directory's Entra config",
-  'DELETE /api/directories/:id/entra': "removes any directory's Entra config",
-  'POST /api/directories/:id/entra/test':
-    "tests any directory's stored Entra secret, without step-up, and records the result",
-  'GET /api/directories/:id/signin-events': "reads any directory's sign-in events (IPs, apps)",
-  'GET /api/directories/:id/signin-events/apps': "reads any directory's sign-in app list",
-  'GET /api/directories/:id/signin-events/:eventId': "reads any directory's sign-in event",
-  'GET /api/directories/:id/mfa-registration': "reads any directory's MFA registration state",
-  'GET /api/directories/:id/mfa-registration/methods': "reads any directory's MFA method counts",
-  'GET /api/directories/:id/users/:userId/photo': "reads any directory's user photos",
-  'GET /api/audit-events': "returns every directory's audit rows; no directory filter",
-
-  // Writes without step-up.
-  'PATCH /api/settings':
-    'can turn off view/search auditing, change retention and lengthen sessions',
-  'POST /api/directories/:id/sync': 'starts a full user sync',
-  'POST /api/directories/:id/sync/reset': "resets every stuck sync task's state",
-  'POST /api/directories/:id/sync-tasks/:key/run': 'starts a sync task',
-  'POST /api/directories/:id/sync-tasks/:key/reset': "resets a sync task's state",
-  // Setup wizard steps. Setup/initialize opens an elevated session, so
-  // requiring step-up here shouldn't prompt the admin again.
-  'POST /api/setup/service-account': 'stores the sync service account credentials',
-  'POST /api/setup/policy': 'writes view settings',
-  'POST /api/setup/run-initial-sync': 'starts the initial sync',
-  'POST /api/setup/retry-task': 're-runs a failed initial sync task',
-};
-
 // Signed-in writes exempt from step-up by design: they open and close the
 // elevated session itself.
 const STEP_UP_EXEMPT = new Set(['POST /api/auth/step-up', 'DELETE /api/auth/step-up']);
@@ -122,18 +89,8 @@ describe('route policies', () => {
   });
 
   it('every route declares a policy that follows the rules', () => {
-    const broken = routes
-      .filter((r) => !(keyOf(r) in ALLOWLIST))
-      .flatMap((r) => problems(r).map((p) => `${keyOf(r)} ${p}`));
+    const broken = routes.flatMap((r) => problems(r).map((p) => `${keyOf(r)} ${p}`));
     expect(broken).toEqual([]);
-  });
-
-  it('allowlists only routes that still break a rule', () => {
-    const stale = Object.keys(ALLOWLIST).filter((key) => {
-      const route = routes.find((r) => keyOf(r) === key);
-      return !route || problems(route).length === 0;
-    });
-    expect(stale).toEqual([]);
   });
 
   it('exempts only routes that exist', () => {

@@ -287,6 +287,26 @@ export async function configureDirectory(
   return admin;
 }
 
+/**
+ * Add a second directory pointing at the same dev DC, as `admin` (a client
+ * left signed in and stepped up by configureDirectory). Operators sign in
+ * to it with `signInTo`; it shares the role mapping but none of the first
+ * directory's data.
+ */
+export async function addDirectory(admin: TestClient, name: string): Promise<number> {
+  const res = await admin.post('/api/directories', {
+    name,
+    domain: DC.domain,
+    baseDn: DC.baseDn,
+    ldapUrls: [DC.ldapsUrl],
+    tlsMode: 'ldaps',
+    adminUsername: 'oa.admin',
+    adminPassword: DC.password,
+  });
+  expectOk(res, `add directory ${name}`);
+  return res.json<{ directory: { id: number } }>().directory.id;
+}
+
 // ---- Client -------------------------------------------------------------
 
 export class TestClient {
@@ -336,11 +356,11 @@ export class TestClient {
   }
 
   async signIn(api: TestApi, username: string, password: string = DC.password): Promise<void> {
-    const res = await this.post('/api/auth/login', {
-      directoryId: api.directoryId,
-      username,
-      password,
-    });
+    await this.signInTo(api.directoryId!, username, password);
+  }
+
+  async signInTo(directoryId: number, username: string, password: string = DC.password) {
+    const res = await this.post('/api/auth/login', { directoryId, username, password });
     expectOk(res, `sign in as ${username}`);
   }
 
