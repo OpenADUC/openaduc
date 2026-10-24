@@ -2,7 +2,7 @@
 // Creating a user: the directory's defaults for new accounts, the create
 // request, and how far a create got.
 import { z } from 'zod';
-import type { Role } from '../capabilities.js';
+import { ROLES } from '../capabilities.js';
 import { isPhoneCountry } from '../phone.js';
 import {
   CONTROL_CHARS,
@@ -226,7 +226,11 @@ export const userCreateFinishRequestSchema = z
 export type UserCreateFinishRequest = z.infer<typeof userCreateFinishRequestSchema>;
 
 /** Why adding someone to a group grants rights: AD protects it, or it maps to an OpenADUC role. */
-export type GroupPrivilege = { reason: 'protected' } | { reason: 'role'; role: Role };
+export const groupPrivilegeSchema = z.discriminatedUnion('reason', [
+  z.object({ reason: z.literal('protected') }),
+  z.object({ reason: z.literal('role'), role: z.enum(ROLES) }),
+]);
+export type GroupPrivilege = z.infer<typeof groupPrivilegeSchema>;
 
 export interface CopiedGroup {
   id: string;

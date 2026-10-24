@@ -6,7 +6,14 @@ import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BulkJob, UserMatchCandidate, UserSummary } from '@openaduc/shared';
+import type {
+  BulkGroupMembershipPreview,
+  BulkJob,
+  Capability,
+  GroupSummary,
+  UserMatchCandidate,
+  UserSummary,
+} from '@openaduc/shared';
 
 const summary = (id: string, displayName: string): UserSummary => ({
   id,
@@ -57,10 +64,18 @@ const api = {
         user: candidate(u),
       })),
     })),
+    previewGroupChange: vi.fn(),
+  },
+  groups: {
+    search: vi.fn(async (): Promise<{ rows: GroupSummary[]; total: number }> => ({
+      rows: [],
+      total: 0,
+    })),
   },
   bulkJobs: {
     list: vi.fn(async (): Promise<{ jobs: BulkJob[] }> => ({ jobs: [] })),
     get: vi.fn(),
+    startGroupChange: vi.fn(),
     rows: vi.fn(async () => ({
       rows: [
         {
@@ -81,7 +96,10 @@ const { useAuthStore } = await import('../stores/auth.js');
 
 enableAutoUnmount(afterEach);
 
-async function openUsers(query: string) {
+async function openUsers(
+  query: string,
+  capabilities: Capability[] = ['read:user', 'write:user.enableDisable'],
+) {
   const pinia = createPinia();
   const router = createRouter({
     history: createMemoryHistory(),
@@ -92,7 +110,12 @@ async function openUsers(query: string) {
   });
   await router.push(`/users${query}`);
   useAuthStore(pinia).actor = {
-    capabilities: ['read:user', 'write:user.enableDisable'],
+    capabilities,
+    elevated: {
+      active: true,
+      idleExpiresAt: '2999-01-01T00:15:00.000Z',
+      absoluteExpiresAt: '2999-01-01T04:00:00.000Z',
+    },
   } as never;
   const page = mount(RouterView, {
     attachTo: document.body,
@@ -153,6 +176,7 @@ describe('the user list, coming back to a bulk job', () => {
   const aJob = (status: BulkJob['status'], succeeded: number, failed: number): BulkJob => ({
     id: '7',
     action: 'user.disable',
+    subject: null,
     status,
     pauseReason: null,
     actorDisplayName: 'OpenADUC Operator',
@@ -163,6 +187,7 @@ describe('the user list, coming back to a bulk job', () => {
       pending: 2 - succeeded - failed,
       running: 0,
       succeeded,
+      partial: 0,
       failed,
       skipped: 0,
     },
@@ -190,5 +215,91 @@ describe('the user list, coming back to a bulk job', () => {
     await button(page, 'Dismiss').trigger('click');
     expect(page.find('.bulk-job').exists()).toBe(false);
     expect(page.get('.bulkbar-count').text()).toBe('1 selected');
+  });
+});
+
+describe('the user list, adding the selection to groups', () => {
+  const sales: GroupSummary = {
+    id: 'g1',
+    name: 'Sales',
+    samAccountName: 'Sales',
+    distinguishedName: 'CN=Sales,DC=corp,DC=example',
+    description: null,
+    groupType: 'security',
+    groupScope: 'global',
+    memberCount: 1,
+  };
+
+  it('picks a group, previews who it adds, and starts the job on confirming', async () => {
+    api.groups.search.mockResolvedValue({ rows: [sales], total: 1 });
+    const preview: BulkGroupMembershipPreview = {
+      op: 'add',
+      unknownCount: 0,
+      previewToken: 'tok',
+      groups: [
+        {
+          id: 'g1',
+          name: 'Sales',
+          distinguishedName: sales.distinguishedName,
+          privilege: { reason: 'protected' },
+          changes: 1,
+          unchanged: { count: 1, users: [{ id: 'jdoe', name: 'Jane Doe' }] },
+          indirect: { count: 0, users: [] },
+        },
+      ],
+    };
+    api.users.previewGroupChange.mockResolvedValue(preview);
+    const running: BulkJob = {
+      id: '8',
+      action: 'user.group.add',
+      subject: { groups: [{ id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales' }] },
+      status: 'running',
+      pauseReason: null,
+      actorDisplayName: 'OpenADUC Operator',
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
+      counts: { total: 2, pending: 2, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 },
+    };
+    api.bulkJobs.startGroupChange.mockResolvedValue({ job: running });
+    api.bulkJobs.get.mockResolvedValue({ job: running });
+    const page = await openUsers('', ['read:user', 'write:group.membership']);
+    await button(page, 'Paste a list').trigger('click');
+    await page.get('#paste-list-input').setValue('jdoe\nbsmith');
+    await button(page, 'Find users').trigger('click');
+    await flushPromises();
+    await button(page, 'Select 2 users').trigger('click');
+
+    await button(page, 'Groups…').trigger('click');
+    expect(page.text()).toContain('Add 2 accounts to groups');
+    await page.get('input[aria-label="Search groups"]').setValue('sal');
+    await vi.waitFor(() => expect(button(page, 'Choose')).toBeDefined());
+    await button(page, 'Choose').trigger('click');
+    await button(page, 'Preview').trigger('click');
+    await flushPromises();
+
+    expect(api.users.previewGroupChange).toHaveBeenCalledWith({
+      op: 'add',
+      ids: ['jdoe', 'bsmith'],
+      groupIds: ['g1'],
+    });
+    const text = page.text();
+    expect(text).toContain('Add 2 accounts to Sales?');
+    expect(text).toContain('1 will be added · 1 is already a member');
+    expect(text).toContain('Administrative group: its members get admin rights in AD.');
+    expect(text).toContain('Already members (1)');
+    expect(api.bulkJobs.startGroupChange).not.toHaveBeenCalled();
+
+    expect(button(page, 'Add to group').attributes('disabled')).toBeDefined();
+    await page.get('#bg-ack').setValue(true);
+    await button(page, 'Add to group').trigger('click');
+    await flushPromises();
+    expect(api.bulkJobs.startGroupChange).toHaveBeenCalledExactlyOnceWith({
+      op: 'add',
+      ids: ['jdoe', 'bsmith'],
+      groupIds: ['g1'],
+      previewToken: 'tok',
+      acknowledgeProtected: true,
+    });
+    expect(page.get('.bulk-job').text()).toContain('Adding 2 accounts to Sales…');
   });
 });

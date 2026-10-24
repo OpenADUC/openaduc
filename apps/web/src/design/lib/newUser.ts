@@ -43,9 +43,15 @@ const ROLE_LABEL: Record<Role, string> = {
   auditor: 'Auditor',
 };
 
+/** What membership in a group grants. */
+export function privilegeNote(privilege: GroupPrivilege): string {
+  return privilege.reason === 'protected'
+    ? 'Administrative group: its members get admin rights in AD.'
+    : `Gives its members OpenADUC’s ${ROLE_LABEL[privilege.role]} role.`;
+}
+
 /** Why adding the copy to a group deserves a second thought. */
 export function privilegeWarning(privilege: GroupPrivilege): string {
-  return privilege.reason === 'protected'
-    ? 'Administrative group: its members get admin rights in AD. Tick it only if this person needs them.'
-    : `Gives its members OpenADUC’s ${ROLE_LABEL[privilege.role]} role. Tick it only if this person needs it.`;
+  const needs = privilege.reason === 'protected' ? 'them' : 'it';
+  return `${privilegeNote(privilege)} Tick it only if this person needs ${needs}.`;
 }

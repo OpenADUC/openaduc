@@ -76,9 +76,9 @@ import {
   describeGroupDeleteBlock,
   groupDeleteBlock,
   type GroupDeleteFacts,
-  type RoleGroup,
 } from '../../lib/groupDeletion.js';
-import { ridOf } from '../../lib/sid.js';
+import type { RoleGroup } from '../../lib/groupPrivilege.js';
+import { isDomainSid, ridOf } from '../../lib/sid.js';
 import { computerWriteBlock, describeComputerWriteBlock } from '../../lib/computerWrites.js';
 import {
   BINARY_ATTRS,
@@ -1779,7 +1779,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   ): Promise<number | null> {
     const rid = ridOf(group.sid);
     // Only a group of the account's own domain can be its primary group.
-    if (rid === null || !group.sid?.startsWith('S-1-5-21-')) return 0;
+    if (rid === null || !isDomainSid(group.sid)) return 0;
     try {
       const { searchEntries } = await client.search(await this.domainRoot(client), {
         scope: 'sub',

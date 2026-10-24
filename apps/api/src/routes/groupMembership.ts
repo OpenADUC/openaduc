@@ -3,9 +3,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { groupMembershipChangeSchema } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import type { DirectoryObjectIdentifier } from '../providers/types.js';
-import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { findCachedGroups, reconcileNestedGroups, upsertGroup } from '../services/groupCache.js';
+import { auditContextFromRequest } from '../services/auditContext.js';
+import { findCachedGroups } from '../services/groupCache.js';
+import {
+  membershipRequirement,
+  refreshMembershipCache,
+  writeGroupMembership,
+} from '../services/groupMembershipWrite.js';
 import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
@@ -14,9 +18,8 @@ const idParamSchema = z.object({ id: z.guid() });
  * Add the user or group `:id` to the group named in the body, or remove it.
  * Both POST/DELETE /api/users/:id/groups and /api/groups/:id/groups run
  * this, so a change made from the member's page or the group's checks,
- * writes and audits the same way: `user.group.add`, `group.group.remove`,
- * … targeting the member, with the group in the metadata. The cache shows
- * the change straight away rather than after the next sync.
+ * writes and audits the same way (`writeGroupMembership`), and the cache
+ * shows it straight away.
  */
 export async function changeMembership(
   app: FastifyInstance,
@@ -32,52 +35,24 @@ export async function changeMembership(
   const actor = req.actor!;
   if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
   const provider = await app.services.providers.buildForRequest(req);
-  const memberRef: DirectoryObjectIdentifier = { kind: 'objectGuid', value: id };
-  const groupRef: DirectoryObjectIdentifier = { kind: 'objectGuid', value: body.groupId };
-
   const member =
     kind === 'user'
       ? (await app.services.userLiveRefresh.refresh(provider, id))?.user
-      : await provider.getGroup(memberRef);
+      : await provider.getGroup({ kind: 'objectGuid', value: id });
   if (!member) throw NotFound(`${kind} not found`);
 
   // Validate the group id belongs to this provider before bothering AD.
   const [group] = await findCachedGroups(app.db, provider.id, { ids: [body.groupId] });
   if (!group) throw NotFound('group not found');
+  const needs = membershipRequirement(op, [group], await app.services.authorization.roleGroups());
+  if (needs) await app.requireCapability(req, needs.capability, needs.reason);
 
-  const writeCtx = ctx(actor, req);
-  const result = await withAudit(
+  const result = await writeGroupMembership(
     app.services.audit,
-    {
-      ...auditContextFromRequest(req),
-      action: `${kind}.group.${op}`,
-      actorAuthMethod: 'ad-password',
-      providerId: provider.id,
-      targetType: kind,
-      targetId: member.objectGuid,
-      targetDn: member.distinguishedName,
-      metadata: {
-        groupId: body.groupId,
-        groupDn: group.distinguishedName,
-        groupName: group.name,
-      },
-    },
-    async () => {
-      const r = await (kind === 'user'
-        ? op === 'add'
-          ? provider.addUserToGroup(memberRef, groupRef, writeCtx)
-          : provider.removeUserFromGroup(memberRef, groupRef, writeCtx)
-        : op === 'add'
-          ? provider.addGroupToGroup(memberRef, groupRef, writeCtx)
-          : provider.removeGroupFromGroup(memberRef, groupRef, writeCtx));
-      return {
-        ok: r.ok,
-        before: r.before ?? null,
-        after: r.after ?? null,
-        errorCode: r.reason ?? null,
-        errorMessage: r.errorMessage ?? null,
-      };
-    },
+    provider,
+    { kind, op, member, group },
+    ctx(actor, req),
+    auditContextFromRequest(req),
   );
 
   if (!result.ok) {
@@ -96,23 +71,10 @@ export async function changeMembership(
     }
   }
 
-  // A user's memberships come from its own memberOf; a nested group's from
-  // the parent group's member.
-  if (kind === 'user') {
-    const after = await app.services.userLiveRefresh.refresh(provider, id);
-    if (after) {
-      await app.services.userLiveRefresh.reconcileDirectMemberships(
-        provider.id,
-        id,
-        after.user.memberOfDns,
-      );
-    }
-  } else {
-    const parent = await provider.getGroup(groupRef);
-    if (parent) {
-      await upsertGroup(app.db, provider.id, parent);
-      await reconcileNestedGroups(app.db, provider.id, parent.objectGuid, parent.memberDns);
-    }
-  }
+  await refreshMembershipCache(
+    { db: app.db, userLiveRefresh: app.services.userLiveRefresh },
+    provider,
+    kind === 'user' ? { kind, memberId: id } : { kind, groupId: body.groupId },
+  );
   return { ok: true, before: result.before, after: result.after };
 }

@@ -7,7 +7,8 @@ import type {
   TakenNames,
   UserCreateStep,
 } from '@openaduc/shared';
-import type { GroupDeleteFacts, RoleGroup } from '../lib/groupDeletion.js';
+import type { GroupDeleteFacts } from '../lib/groupDeletion.js';
+import type { RoleGroup } from '../lib/groupPrivilege.js';
 
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
 // Directory implementation, but routes/services depend on this interface so

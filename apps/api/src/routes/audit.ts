@@ -128,10 +128,15 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
       ];
       const summaries = await app.services.bulkJobs.summaries(jobIds);
       const bulkSummary = (r: (typeof rows)[number]): AuditBulkSummary => {
-        const metadata = r.metadata_json as { action?: unknown; total?: unknown };
+        const metadata = r.metadata_json as {
+          action?: unknown;
+          total?: unknown;
+          subject?: unknown;
+        };
         const job = summaries.get(String(r.bulk_job_id));
         return auditBulkSummarySchema.parse({
           action: metadata.action,
+          subject: metadata.subject ?? null,
           total: metadata.total,
           status: job?.status ?? null,
           pauseReason: job?.pauseReason ?? null,

@@ -10,6 +10,7 @@ import type {
   BulkJobPauseReason,
   BulkJobRow,
   BulkJobRowStatus,
+  BulkJobSubject,
 } from '@openaduc/shared';
 import type { BulkJobRowsTable, BulkJobsTable, DB } from '../../db/types.js';
 import type { ProviderFactory } from '../../providers/registry.js';
@@ -22,8 +23,9 @@ import type { AuditEventInput, AuditService } from '../audit.js';
 import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
 import type { SessionsService } from '../sessions.js';
-import type { UserLiveRefreshService } from '../userLiveRefresh.js';
+import type { MembershipCacheDeps } from '../groupMembershipWrite.js';
 import { BULK_JOB_HANDLERS, type BulkJobHandlers, type BulkRowOutcome } from './handlers.js';
+import { failureMessage } from './rowMessages.js';
 
 export type JobRecord = Selectable<BulkJobsTable>;
 type RowRecord = Selectable<BulkJobRowsTable>;
@@ -45,7 +47,7 @@ export interface BulkJobDeps {
   sessions: Pick<SessionsService, 'findActiveElevated'>;
   credentialCache: Pick<CredentialCacheService, 'get'>;
   providers: Pick<ProviderFactory, 'buildForDirectory'>;
-  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh'>;
+  userLiveRefresh: MembershipCacheDeps['userLiveRefresh'];
 }
 
 /** Enough rows at once to keep a DC busy, not to flood it. */
@@ -56,6 +58,8 @@ const STALE_AFTER = sql<Date>`now() - interval '60 seconds'`;
 const SWEEP_MS = 30_000;
 const STOP_WAIT_MS = 4_000;
 const INSERT_CHUNK = 1_000;
+/** The rows a retry runs again: those with changes still to make. */
+const RETRIED: BulkJobRowStatus[] = ['failed', 'partial'];
 
 /**
  * Bulk actions as server-side jobs, run in-process. A job's rows are
@@ -111,10 +115,23 @@ export class BulkJobService {
     clearTimeout(timer);
   }
 
-  /** Throws a ZodError for a bad request body. */
-  async create(actor: JobActor, action: BulkJobAction, body: unknown): Promise<string> {
+  /**
+   * Throws a ZodError for a bad request body, and BulkJobRequestError for
+   * one that can't start. `authorize` sees what the job acts with before
+   * anything is stored, to refuse what the operator may not do.
+   */
+  async create(
+    actor: JobActor,
+    action: BulkJobAction,
+    body: unknown,
+    authorize?: (subject: BulkJobSubject | null) => Promise<void>,
+  ): Promise<string> {
     const handler = this.handlers[action];
-    const rows = handler.rows(handler.request.parse(body));
+    const request = handler.request.parse(body);
+    const rows = handler.rows(request);
+    const subject =
+      (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
+    await authorize?.(subject);
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
@@ -130,7 +147,13 @@ export class BulkJobService {
     const jobId = await this.db.transaction().execute(async (trx) => {
       const job = await trx
         .insertInto('bulk_jobs')
-        .values({ ...actorColumns(actor), status: 'queued', heartbeat_at: sql`now()`, action })
+        .values({
+          ...actorColumns(actor),
+          status: 'queued',
+          heartbeat_at: sql`now()`,
+          action,
+          subject_json: subject ? JSON.stringify(subject) : null,
+        })
         .returning('id')
         .executeTakeFirstOrThrow();
       for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
@@ -161,7 +184,7 @@ export class BulkJobService {
         action: 'bulk.create',
         result: 'success',
         targetType: 'user',
-        metadata: { action, total: rows.length },
+        metadata: { action, total: rows.length, ...(subject ? { subject } : {}) },
       });
     } catch (err) {
       await this.db.deleteFrom('bulk_jobs').where('id', '=', jobId).execute();
@@ -253,7 +276,7 @@ export class BulkJobService {
     return true;
   }
 
-  /** Run a stopped job's failed rows again. False when it's running or none failed. */
+  /** Run a stopped job's failed and partial rows again. False when it's running or none failed. */
   async retry(job: JobRecord, actor: JobActor): Promise<boolean> {
     const retried = await this.db.transaction().execute(async (trx) => {
       const queued = await trx
@@ -273,7 +296,7 @@ export class BulkJobService {
               .selectFrom('bulk_job_rows')
               .select('id')
               .where('job_id', '=', job.id)
-              .where('status', '=', 'failed'),
+              .where('status', 'in', RETRIED),
           ),
         )
         .executeTakeFirst();
@@ -282,7 +305,7 @@ export class BulkJobService {
         .updateTable('bulk_job_rows')
         .set({ status: 'pending', error_code: null, error_message: null, finished_at: null })
         .where('job_id', '=', job.id)
-        .where('status', '=', 'failed')
+        .where('status', 'in', RETRIED)
         .executeTakeFirst();
       return Number(rows.numUpdatedRows);
     });
@@ -487,8 +510,10 @@ export class BulkJobService {
           targetId: row.target_id,
           targetDn: row.target_dn,
           input: handler.input.parse(row.input_json),
+          before: row.before_json,
+          after: row.after_json,
         },
-        { provider, writeCtx, audit, services: this.deps },
+        { db: this.db, provider, writeCtx, audit, services: this.deps },
       );
     } catch (err) {
       if (err instanceof DirectoryUnavailableError && !wasAudited(err)) {
@@ -526,11 +551,17 @@ export class BulkJobService {
     await this.db
       .updateTable('bulk_job_rows')
       .set({
-        status: outcome.ok ? 'succeeded' : 'failed',
+        status: outcome.ok
+          ? outcome.unchanged
+            ? 'skipped'
+            : 'succeeded'
+          : outcome.partial
+            ? 'partial'
+            : 'failed',
         error_code: outcome.ok ? null : outcome.errorCode,
         error_message: outcome.ok
           ? null
-          : failureMessage(outcome.errorCode, outcome.errorMessage ?? null),
+          : (outcome.message ?? failureMessage(outcome.errorCode, outcome.errorMessage ?? null)),
         before_json: outcome.before ? JSON.stringify(outcome.before) : null,
         after_json: outcome.after ? JSON.stringify(outcome.after) : null,
         ...(outcome.targetDn ? { target_dn: outcome.targetDn } : {}),
@@ -593,6 +624,7 @@ export class BulkJobService {
     return jobs.map((j) => ({
       id: String(j.id),
       action: j.action,
+      subject: j.subject_json,
       status: j.status,
       pauseReason: j.pause_reason,
       actorDisplayName: j.actor_display_name,
@@ -664,22 +696,5 @@ function auditBase(actor: JobActor, jobId: string): Omit<AuditEventInput, 'actio
 }
 
 function emptyCounts(): BulkJobCounts {
-  return { total: 0, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0 };
-}
-
-/** What a failed row says to the operator. */
-function failureMessage(code: string, detail: string | null): string {
-  const reason = detail ? `: ${detail}` : '';
-  switch (code) {
-    case 'not_found':
-      return 'No such user in the directory.';
-    case 'permission_denied':
-      return `The directory refused the change${reason}`;
-    case 'directory_unavailable':
-      return 'No domain controller could be reached.';
-    case 'interrupted':
-      return 'OpenADUC stopped while changing this account. Check it, then retry.';
-    default:
-      return `The change failed${reason}`;
-  }
+  return { total: 0, pending: 0, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 };
 }

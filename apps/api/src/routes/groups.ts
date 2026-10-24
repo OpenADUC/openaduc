@@ -18,11 +18,8 @@ import {
   type GroupSearchResponse,
   type GroupCreateResponse,
 } from '@openaduc/shared';
-import {
-  describeGroupDeleteBlock,
-  groupDeleteBlock,
-  isProtectedGroup,
-} from '../lib/groupDeletion.js';
+import { describeGroupDeleteBlock, groupDeleteBlock } from '../lib/groupDeletion.js';
+import { isProtectedGroup } from '../lib/groupPrivilege.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
