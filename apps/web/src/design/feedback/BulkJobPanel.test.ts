@@ -100,6 +100,29 @@ describe('the bulk job panel', () => {
     expect(buttons(stopped)).toEqual(['Dismiss']);
   });
 
+  it('names the groups a membership job adds to or removes from', () => {
+    const subject = {
+      groups: [
+        { id: 'g1', name: 'Sales' },
+        { id: 'g2', name: 'HR' },
+      ],
+    };
+    expect(
+      text(
+        panel(
+          aJob('running', { succeeded: 2, pending: 40 }, { action: 'user.group.add', subject }),
+        ),
+      ),
+    ).toContain('Adding 42 accounts to Sales and HR…');
+    expect(
+      text(
+        panel(
+          aJob('finished', { succeeded: 40, failed: 2 }, { action: 'user.group.remove', subject }),
+        ),
+      ),
+    ).toContain('Removed 40 of 42 accounts from Sales and HR');
+  });
+
   it('shows why continuing, retrying or stopping failed', () => {
     expect(text(panel(aJob('paused', { pending: 42 }), 'the job has already stopped'))).toContain(
       'the job has already stopped',
