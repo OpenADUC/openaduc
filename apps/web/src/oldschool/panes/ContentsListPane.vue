@@ -209,7 +209,11 @@ const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActio
 
 function userItems(r: Row): CtxItem[] {
   const busy = runningOn(r.id) !== null;
-  const items: CtxItem[] = [{ label: 'Copy…', disabled: true, onSelect: () => undefined }];
+  const items: CtxItem[] = [
+    can('write:user.create')
+      ? { label: 'Copy…', onSelect: () => store.openDialog({ kind: 'copy-user', id: r.id }) }
+      : { label: 'Copy…', disabled: true },
+  ];
   if (can('write:group.membership')) {
     items.push({
       label: 'Add to a group…',

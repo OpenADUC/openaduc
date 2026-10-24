@@ -95,6 +95,22 @@ describe('the Old School contents list', () => {
       message: 'Windows cannot disable object Jane Doe because:\nDC unreachable',
     });
   });
+
+  it('copies a user into Copy Object - User, for operators who may create users', async () => {
+    const { pane, oldSchool } = await openStaff(['read:user', 'write:user.create']);
+
+    await choose(pane, 'Copy…');
+
+    expect(oldSchool.windows.at(-1)!.dialog).toEqual({ kind: 'copy-user', id: 'u1' });
+  });
+
+  it('greys out Copy for operators who may not create users', async () => {
+    const { pane } = await openStaff();
+
+    await pane.get('.os-list-row').trigger('contextmenu');
+    const copy = pane.findAll('[role="menuitem"]').find((i) => i.text() === 'Copy…');
+    expect(copy?.classes()).toContain('disabled');
+  });
 });
 
 describe('a group in the Old School contents list', () => {
