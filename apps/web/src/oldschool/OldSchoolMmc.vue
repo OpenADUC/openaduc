@@ -32,6 +32,7 @@ import ResetComputerDialog from './dialogs/ResetComputerDialog.vue';
 import RenameUserDialog from './dialogs/RenameUserDialog.vue';
 import DeleteUserDialog from './dialogs/DeleteUserDialog.vue';
 import NewGroupDialog from './dialogs/NewGroupDialog.vue';
+import NewUserDialog from './dialogs/NewUserDialog.vue';
 import DeleteGroupDialog from './dialogs/DeleteGroupDialog.vue';
 import AddToGroupDialog from './dialogs/AddToGroupDialog.vue';
 import MessageBoxDialog from './dialogs/MessageBoxDialog.vue';
@@ -47,6 +48,13 @@ const auth = useAuthStore();
 // New Group creates in the selected OU, as ADUC's toolbar button does.
 const newGroupParentDn = computed(() =>
   store.selectedNode.kind === 'ou' && auth.hasCapability('write:group.create')
+    ? store.selectedNode.dn
+    : null,
+);
+
+// New User does the same.
+const newUserParentDn = computed(() =>
+  store.selectedNode.kind === 'ou' && auth.hasCapability('write:user.create')
     ? store.selectedNode.dn
     : null,
 );
@@ -314,7 +322,15 @@ function exitOldSchool(): void {
         >
           <WinIcon name="find" :size="14" />
         </button>
-        <button class="os-tool-btn" type="button" title="New User" disabled>
+        <button
+          class="os-tool-btn"
+          type="button"
+          title="New User"
+          :disabled="!newUserParentDn"
+          @click="
+            newUserParentDn && store.openDialog({ kind: 'new-user', parentDn: newUserParentDn })
+          "
+        >
           <WinIcon name="newuser" :size="14" />
         </button>
         <button
@@ -392,6 +408,12 @@ function exitOldSchool(): void {
         :window-id="w.id"
         :id="w.dialog.id"
         :label="w.dialog.label"
+        @close="store.closeWindow(w.id)"
+      />
+      <NewUserDialog
+        v-else-if="w.dialog.kind === 'new-user'"
+        :window-id="w.id"
+        :parent-dn="w.dialog.parentDn"
         @close="store.closeWindow(w.id)"
       />
       <NewGroupDialog
