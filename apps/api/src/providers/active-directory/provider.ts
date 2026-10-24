@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { LdapTlsMode } from '@openaduc/shared';
+import type { LdapTlsMode, NamingLookups, TakenNames } from '@openaduc/shared';
 import {
   Attribute,
   Change,
@@ -1425,6 +1425,95 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           ? await holder(domainRoot, 'sub', `(sAMAccountName=${escapeLdapFilter(sam)})`)
           : null,
     };
+  }
+
+  async findTakenNames(lookups: NamingLookups): Promise<TakenNames> {
+    return this.withServiceBind(async (client) => {
+      // sAMAccountName and UPN are unique domain-wide, not just in the base DN.
+      const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
+      const search = async (
+        base: string,
+        scope: 'one' | 'sub',
+        clauses: string[],
+        attributes: string[],
+      ) => {
+        const entries: Entry[] = [];
+        // Bounded filters, so a 500-row import doesn't send one huge one.
+        for (let i = 0; i < clauses.length; i += 50) {
+          const { searchEntries } = await client.search(base, {
+            scope,
+            filter: `(|${clauses.slice(i, i + 50).join('')})`,
+            attributes,
+            paged: { pageSize: 500 },
+          });
+          entries.push(...searchEntries);
+        }
+        return entries;
+      };
+
+      const samAccountNames = (
+        await search(
+          domainRoot,
+          'sub',
+          lookups.samAccountNamePrefixes.map((p) => `(sAMAccountName=${escapeLdapFilter(p)}*)`),
+          ['sAMAccountName'],
+        )
+      ).flatMap((e) => asStringArray(e.sAMAccountName));
+
+      const addressEntries = await search(
+        domainRoot,
+        'sub',
+        lookups.upnLocalPrefixes.map((p) => {
+          const v = escapeLdapFilter(p);
+          return `(userPrincipalName=${v}*)(mail=${v}*)(proxyAddresses=smtp:${v}*)`;
+        }),
+        ['userPrincipalName', 'mail', 'proxyAddresses'],
+      );
+      const userPrincipalNames = addressEntries.flatMap((e) => asStringArray(e.userPrincipalName));
+      const mailAddresses = addressEntries.flatMap((e) => [
+        ...asStringArray(e.mail),
+        ...asStringArray(e.proxyAddresses)
+          .filter((a) => /^smtp:/i.test(a))
+          .map((a) => a.slice(5)),
+      ]);
+
+      const cns: { ouDn: string; cn: string }[] = [];
+      const byOu = new Map<string, string[]>();
+      for (const { ouDn, cn } of lookups.cns) byOu.set(ouDn, [...(byOu.get(ouDn) ?? []), cn]);
+      for (const [ouDn, wanted] of byOu) {
+        try {
+          const found = await search(
+            ouDn,
+            'one',
+            wanted.map((cn) => `(cn=${escapeLdapFilter(cn)})`),
+            ['cn'],
+          );
+          for (const e of found) for (const cn of asStringArray(e.cn)) cns.push({ ouDn, cn });
+        } catch (err) {
+          // An OU that doesn't exist yet holds no names; the create checks it.
+          if ((err as { name?: string }).name !== 'NoSuchObjectError') throw err;
+        }
+      }
+      return { samAccountNames, userPrincipalNames, mailAddresses, cns };
+    });
+  }
+
+  async getUpnSuffixes(): Promise<string[]> {
+    return this.withServiceBind(async (client) => {
+      const { searchEntries } = await client.search('', {
+        scope: 'base',
+        filter: '(objectClass=*)',
+        attributes: ['configurationNamingContext'],
+      });
+      const configNc = asString(searchEntries[0]?.configurationNamingContext);
+      if (!configNc) return [];
+      const { searchEntries: partitions } = await client.search(`CN=Partitions,${configNc}`, {
+        scope: 'base',
+        filter: '(objectClass=*)',
+        attributes: ['uPNSuffixes'],
+      });
+      return asStringArray(partitions[0]?.uPNSuffixes);
+    });
   }
 
   /**
