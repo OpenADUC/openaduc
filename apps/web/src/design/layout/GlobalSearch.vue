@@ -904,7 +904,9 @@ const announcement = computed(() => {
     font-size: 13px;
   }
 
+  /* Under the name, leaving the arrow beside it. */
   .gs-row-note {
+    order: 1;
     flex: 1 0 100%;
     padding-left: 40px;
     white-space: normal;
