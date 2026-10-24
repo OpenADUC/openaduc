@@ -8,6 +8,7 @@ import {
   asAdministrator,
   configureDirectory,
   readDirectoryUser,
+  sambaTool,
   startApi,
   type TestApi,
   type TestClient,
@@ -15,7 +16,16 @@ import {
 
 const STAFF_OU = 'OU=Staff,OU=OpenADUC Test,DC=openaduc,DC=test';
 const PASSWORD = 'Brand-new-Start9';
-const NEW_SAMS = ['nina.novak', 'omar.ortiz', 'pia.park', 'quinn.quade', 'rosa.reyes', 'sam.stone'];
+const NEW_SAMS = [
+  'nina.novak',
+  'omar.ortiz',
+  'pia.park',
+  'quinn.quade',
+  'rosa.reyes',
+  'sam.stone',
+  'tia.tran',
+  'uma.ueda',
+];
 
 /** A create request for someone new in Staff, with what's given replacing the defaults. */
 function person(sam: string, over: Partial<UserCreateRequest> = {}): UserCreateRequest {
@@ -111,8 +121,9 @@ describe('creating users', () => {
     const res = await create(
       person('nina.novak', {
         personalEmail: 'nina@example.org',
-        mobile: '+44 7400123456',
-        telephoneNumber: '+44 2079460958',
+        mobile: '+44 7400 123 456',
+        telephoneNumber: 'reception, ext 12',
+        keepPhonesAsTyped: ['telephoneNumber'],
       }),
     );
 
@@ -134,13 +145,14 @@ describe('creating users', () => {
       mail: `nina.novak@${DC.domain}`,
       otherMailbox: 'nina@example.org',
       mobile: '+44 7400123456',
-      telephoneNumber: '+44 2079460958',
+      telephoneNumber: 'reception, ext 12',
       givenName: 'Nina',
       sn: 'Novak',
       displayName: 'Nina Novak',
     });
     expect(entry?.proxyAddresses).toEqual([]);
-    expect(disabled(entry)).toBe(false);
+    // A normal account, enabled, with nothing else set (no PASSWD_NOTREQD).
+    expect(entry?.userAccountControl).toBe('512');
     // Set, and not "must change": a synced user couldn't sign in to Entra.
     expect(Number(entry?.pwdLastSet)).toBeGreaterThan(0);
 
@@ -160,6 +172,10 @@ describe('creating users', () => {
       after_json: expect.objectContaining({
         completed: ['create', 'password', 'enable'],
         remaining: [],
+        account: expect.objectContaining({
+          objectGuid: created.id,
+          usnChanged: expect.any(String),
+        }),
       }),
     });
     const all = await api.app.db
@@ -203,7 +219,7 @@ describe('creating users', () => {
       completed: ['create', 'password'],
       remaining: [],
     });
-    expect(disabled(await directoryUser('quinn.quade'))).toBe(true);
+    expect((await directoryUser('quinn.quade'))?.userAccountControl).toBe('514');
   });
 
   it('refuses names already taken, saying by whom, and writes nothing', async () => {
@@ -231,6 +247,14 @@ describe('creating users', () => {
 
     expect([suffix.statusCode, sam.statusCode, ou.statusCode]).toEqual([400, 400, 400]);
     expect(suffix.json<{ error: { message: string } }>().error.message).toContain('UPN suffixes');
+    expect(await directoryUser('rosa.reyes')).toBeNull();
+  });
+
+  it('refuses a phone number it can’t read unless told to keep it as typed', async () => {
+    const res = await create(person('rosa.reyes', { mobile: 'call me' }));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('call me');
     expect(await directoryUser('rosa.reyes')).toBeNull();
   });
 
@@ -293,7 +317,12 @@ describe('creating users', () => {
       expect((await auditRows('user.create.finish')).at(-1)).toMatchObject({
         result: 'success',
         target_id: id,
-        metadata_json: { steps: ['password', 'enable'], passwordMode: 'set', mustChange: false },
+        metadata_json: {
+          createCorrelationId: expect.any(String),
+          steps: ['password', 'enable'],
+          passwordMode: 'set',
+          mustChange: false,
+        },
       });
     });
 
@@ -305,6 +334,64 @@ describe('creating users', () => {
 
       expect((await operator.post(`/api/users/${id}/finish-create`, body)).statusCode).toBe(409);
       expect((await operator.post(`/api/users/${alice}/finish-create`, body)).statusCode).toBe(409);
+    });
+  });
+
+  describe('finishing later', () => {
+    const unfinished = async (sam: string) => {
+      const res = await create(
+        person(sam, { password: { mode: 'set', password: 'alllowercase', mustChange: false } }),
+      );
+      const created = res.json<UserCreateResponse>();
+      expect(created.remaining).toEqual(['password', 'enable']);
+      return created.id!;
+    };
+    const finish = (id: string) =>
+      operator.post(`/api/users/${id}/finish-create`, {
+        password: { mode: 'set', password: PASSWORD, mustChange: false },
+        enabled: true,
+      });
+
+    it('is refused once the account has been changed since', async () => {
+      const id = await unfinished('tia.tran');
+      sambaTool('user', 'setpassword', 'tia.tran', `--newpassword=${DC.password}`);
+
+      const res = await finish(id);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json<{ error: { message: string } }>().error.message).toMatch(/changed/);
+      expect(await auditRows('user.create.finish')).not.toContainEqual(
+        expect.objectContaining({ target_id: id }),
+      );
+    });
+
+    it('is refused a day after the create', async () => {
+      const id = await unfinished('uma.ueda');
+      // The audit log is append-only, so the day is skipped by recording
+      // the same create a day earlier.
+      const row = await api.app.db
+        .selectFrom('audit_events')
+        .selectAll()
+        .where('action', '=', 'user.create')
+        .where('target_id', '=', id)
+        .executeTakeFirstOrThrow();
+      const { id: _id, ...copy } = row;
+      await api.app.db
+        .insertInto('audit_events')
+        .values({
+          ...copy,
+          timestamp: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+          after_json: JSON.stringify(row.after_json),
+          before_json: row.before_json ? JSON.stringify(row.before_json) : null,
+          metadata_json: JSON.stringify(row.metadata_json),
+        } as never)
+        .execute();
+
+      const res = await finish(id);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json<{ error: { message: string } }>().error.message).toMatch(/24 hours/);
+      expect(disabled(await directoryUser('uma.ueda'))).toBe(true);
     });
   });
 
