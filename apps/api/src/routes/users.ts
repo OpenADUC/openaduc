@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { sql, type RawBuilder, type Selectable } from 'kysely';
 import {
   accountExpiryRequestSchema,
+  bulkGroupMembershipPreviewRequestSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -15,6 +16,7 @@ import {
   userSearchQuerySchema,
   userSearchResponseSchema,
   userUpdateRequestSchema,
+  type BulkGroupMembershipPreview,
   type RecycleBinStatus,
   type UserDeletePreflightResponse,
   type UserDetail,
@@ -29,6 +31,7 @@ import { lookupsFor, matchEntries } from '../lib/userMatch.js';
 import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
+import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
 import {
@@ -1068,6 +1071,25 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
   app.delete('/api/users/:id/groups', {
     config: { policy: { capability: 'write:group.membership', stepUp: true, directory: 'caller' } },
     handler: async (req) => changeMembership(app, req, 'user', 'remove'),
+  });
+
+  // ---- POST /api/users/bulk-groups/preview ------------------------------
+  // What adding the selected users to groups, or removing them, would
+  // change, from the cache, before the job starts. A read sent as POST:
+  // 10,000 ids don't fit a query string.
+  app.post('/api/users/bulk-groups/preview', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<BulkGroupMembershipPreview> => {
+      const body = bulkGroupMembershipPreviewRequestSchema.parse(req.body);
+      const preview = await previewGroupMembership(
+        app.db,
+        req.directoryId!,
+        body,
+        await app.services.authorization.roleGroups(),
+      );
+      if (!preview) throw NotFound('group not found');
+      return preview;
+    },
   });
 
   // ---- POST /api/users/:id/move (modifyDN to a new parent OU) ----------
