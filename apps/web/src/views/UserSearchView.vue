@@ -462,6 +462,7 @@ const canBulkGroups = computed(() => auth.hasCapability('write:group.membership'
 const groupChange = useBulkGroupMembership({
   ids: () => Array.from(selectedIds.value),
   start: startGroupChange,
+  canGrantRoles: () => auth.hasCapability('configure:security'),
 });
 const groupJobPending = computed(
   () =>

@@ -8,6 +8,8 @@ import {
   bulkJobResponseSchema,
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
+  type BulkJobAction,
+  type BulkJobSubject,
 } from '@openaduc/shared';
 import { Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { BulkJobRequestError } from '../services/bulkJobs/errors.js';
@@ -19,7 +21,9 @@ const listQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50)
 /**
  * Bulk actions run as jobs (services/bulkJobs/). Starting one takes its
  * action's capability and step-up, as the single-object route does;
- * continuing or retrying one writes too, so takes them again. A job is its
+ * continuing or retrying one writes too, so takes them again, along with
+ * whatever its subject takes (adding to a role group, configure:security).
+ * A job is its
  * operator's own: anyone else gets 404, and sees the job through the audit
  * log instead.
  */
@@ -36,7 +40,9 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
         },
       },
       handler: async (req, reply) => {
-        const id = await jobs.create(actorFrom(req), action, req.body).catch(refuse);
+        const id = await jobs
+          .create(actorFrom(req), action, req.body, (subject) => requireFor(req, action, subject))
+          .catch(refuse);
         return reply
           .status(202)
           .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
@@ -79,6 +85,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     handler: async (req) => {
       const job = await ownJob(req);
       await app.requireCapability(req, jobs.handlers[job.action].capability);
+      await requireFor(req, job.action, job.subject_json);
       if (!(await jobs.resume(job, actorFrom(req)))) {
         throw app.httpErrors.conflict('only a paused job can be continued');
       }
@@ -91,6 +98,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     handler: async (req) => {
       const job = await ownJob(req);
       await app.requireCapability(req, jobs.handlers[job.action].capability);
+      await requireFor(req, job.action, job.subject_json);
       if (!(await jobs.retry(job, actorFrom(req)))) {
         throw app.httpErrors.conflict('the job is still running, or has no failed rows');
       }
@@ -111,25 +119,40 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     },
   });
 
+  /** What the job's subject takes beyond its action's capability, such as handing out a role. */
+  async function requireFor(
+    req: FastifyRequest,
+    action: BulkJobAction,
+    subject: BulkJobSubject | null,
+  ): Promise<void> {
+    const needs = jobs.handlers[action].requires?.(
+      subject,
+      await app.services.authorization.roleGroups(),
+    );
+    if (needs) await app.requireCapability(req, needs.capability, needs.reason);
+  }
+
+  /** A request the job can't start as asked, as its HTTP error. */
+  function refuse(err: unknown): never {
+    if (err instanceof BulkJobRequestError) {
+      switch (err.code) {
+        case 'group_not_found':
+          throw NotFound(err.message);
+        case 'preview_mismatch':
+          throw Conflict(err.message);
+        case 'protected_unacknowledged':
+          throw app.httpErrors.unprocessableEntity(err.message);
+      }
+    }
+    throw err;
+  }
+
   async function ownJob(req: FastifyRequest) {
     const { id } = jobParamSchema.parse(req.params);
     const job = await jobs.find(String(id), req.directoryId!, req.actor!.session.actorUserId);
     if (!job) throw NotFound('bulk job not found');
     return job;
   }
-}
-
-/** A request the job can't start as asked, as its HTTP error. */
-function refuse(err: unknown): never {
-  if (err instanceof BulkJobRequestError) {
-    switch (err.code) {
-      case 'group_not_found':
-        throw NotFound(err.message);
-      case 'preview_mismatch':
-        throw Conflict(err.message);
-    }
-  }
-  throw err;
 }
 
 function actorFrom(req: FastifyRequest): JobActor {

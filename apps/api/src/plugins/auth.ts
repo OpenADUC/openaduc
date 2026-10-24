@@ -70,9 +70,10 @@ declare module 'fastify' {
     routePolicies: readonly RoutePolicyEntry[];
     /**
      * For a capability only some requests to a route need, on top of its
-     * policy's. Refuses and audits the denial the way the policy guard does.
+     * policy's. Refuses and audits the denial the way the policy guard does;
+     * `reason` says why this request needs it, to the caller and the audit.
      */
-    requireCapability(req: FastifyRequest, capability: Capability): Promise<void>;
+    requireCapability(req: FastifyRequest, capability: Capability, reason?: string): Promise<void>;
   }
   interface FastifyContextConfig {
     policy?: RoutePolicy;
@@ -116,10 +117,13 @@ export default fp(async (app) => {
   // preHandler it runs after the global hooks (CSRF).
   const routePolicies: RoutePolicyEntry[] = [];
   app.decorate('routePolicies', routePolicies);
-  app.decorate('requireCapability', async (req: FastifyRequest, capability: Capability) => {
-    if (!req.actor) throw SessionRequired();
-    await requireActorCapability(req, req.actor, capability);
-  });
+  app.decorate(
+    'requireCapability',
+    async (req: FastifyRequest, capability: Capability, reason?: string) => {
+      if (!req.actor) throw SessionRequired();
+      await requireActorCapability(req, req.actor, capability, reason);
+    },
+  );
 
   app.addHook('onRoute', (route) => {
     const policy = route.config?.policy;
@@ -149,6 +153,7 @@ export default fp(async (app) => {
     req: FastifyRequest,
     actor: ResolvedActor,
     capability: Capability,
+    reason?: string,
   ): Promise<void> {
     if (app.services.authorization.has(actor.session.capabilities, capability)) return;
     // Audit the denial — Phase 5 wires this through the request middleware,
@@ -166,10 +171,14 @@ export default fp(async (app) => {
         correlationId: req.correlationId,
         providerId: actor.session.directoryId,
         targetType: 'system',
-        metadata: { requiredCapability: capability, route: req.routeOptions.url ?? req.url },
+        metadata: {
+          requiredCapability: capability,
+          route: req.routeOptions.url ?? req.url,
+          ...(reason ? { reason } : {}),
+        },
       })
       .catch((err) => req.log.error({ err }, 'audit insert failed for authz.deny'));
-    throw Forbidden('missing required capability');
+    throw Forbidden(reason ?? 'missing required capability');
   }
 
   function requireStepUp(actor: ResolvedActor): void {

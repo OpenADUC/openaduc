@@ -252,7 +252,7 @@ describe('the user list, adding the selection to groups', () => {
     const running: BulkJob = {
       id: '8',
       action: 'user.group.add',
-      subject: { groups: [{ id: 'g1', name: 'Sales' }] },
+      subject: { groups: [{ id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales' }] },
       status: 'running',
       pauseReason: null,
       actorDisplayName: 'OpenADUC Operator',
@@ -289,6 +289,8 @@ describe('the user list, adding the selection to groups', () => {
     expect(text).toContain('Already members (1)');
     expect(api.bulkJobs.startGroupChange).not.toHaveBeenCalled();
 
+    expect(button(page, 'Add to group').attributes('disabled')).toBeDefined();
+    await page.get('#bg-ack').setValue(true);
     await button(page, 'Add to group').trigger('click');
     await flushPromises();
     expect(api.bulkJobs.startGroupChange).toHaveBeenCalledExactlyOnceWith({
@@ -296,6 +298,7 @@ describe('the user list, adding the selection to groups', () => {
       ids: ['jdoe', 'bsmith'],
       groupIds: ['g1'],
       previewToken: 'tok',
+      acknowledgeProtected: true,
     });
     expect(page.get('.bulk-job').text()).toContain('Adding 2 accounts to Sales…');
   });

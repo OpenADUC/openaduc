@@ -11,6 +11,7 @@ import type {
 import {
   asAdministrator,
   configureDirectory,
+  DC,
   readDirectoryUser,
   reseedDirectory,
   setGroupMember,
@@ -20,17 +21,18 @@ import {
 } from './harness.js';
 import { previewToken } from '../../src/services/groupMembershipPreview.js';
 
-type Fixture = 'alice' | 'bob' | 'carol' | 'dave' | 'admin';
+type Fixture = 'alice' | 'bob' | 'carol' | 'dave' | 'guest';
 const SAM: Record<Fixture, string> = {
   alice: 'alice.anders',
   bob: 'bob.baker',
   carol: 'carol.chen',
   dave: 'dave.diaz',
-  admin: 'oa.admin',
+  // Outside the OU oa.operator may change; Domain Guests is its primary group.
+  guest: 'Guest',
 };
 
 const ENGINEERING = 'CN=Engineering,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC=test';
-const DOMAIN_ADMINS = 'CN=Domain Admins,CN=Users,DC=openaduc,DC=test';
+const DOMAIN_GUESTS = 'CN=Domain Guests,CN=Users,DC=openaduc,DC=test';
 
 interface AuditRow {
   action: string;
@@ -63,7 +65,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
   let operator: TestClient;
   let users: Record<Fixture, string>;
   let groups: Record<
-    'engineering' | 'allStaff' | 'domainAdmins' | 'domainUsers' | 'operators',
+    'engineering' | 'allStaff' | 'domainAdmins' | 'domainGuests' | 'domainUsers' | 'operators',
     string
   >;
 
@@ -91,6 +93,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
       engineering: await groupId('Engineering'),
       allStaff: await groupId('All Staff'),
       domainAdmins: await groupId('Domain Admins'),
+      domainGuests: await groupId('Domain Guests'),
       domainUsers: await groupId('Domain Users'),
       operators: await groupId('OpenADUC Operators'),
     };
@@ -247,7 +250,12 @@ describe('adding users to groups, or removing them, in bulk', () => {
     /** Preview, then start the job on what was previewed, as the UI does. */
     async function start(op: 'add' | 'remove', ids: string[], groupIds: string[]) {
       const { previewToken } = await preview(op, ids, groupIds);
-      const res = await operator.post(pathOf(op), { ids, groupIds, previewToken });
+      const res = await operator.post(pathOf(op), {
+        ids,
+        groupIds,
+        previewToken,
+        acknowledgeProtected: true,
+      });
       expect(res.statusCode).toBe(202);
       return res.json<{ job: BulkJob }>().job;
     }
@@ -279,34 +287,34 @@ describe('adding users to groups, or removing them, in bulk', () => {
     it('adds each user to every group, and a partly done row names what it did and didn’t', async () => {
       const queued = await start(
         'add',
-        [users.admin, users.carol, missingUser],
-        [groups.engineering, groups.domainAdmins],
+        [users.guest, users.carol, missingUser],
+        [groups.engineering, groups.domainGuests],
       );
       addJob = queued.id;
       expect(queued).toMatchObject({
         action: 'user.group.add',
         subject: {
           groups: [
-            { id: groups.engineering, name: 'Engineering' },
-            { id: groups.domainAdmins, name: 'Domain Admins' },
+            { id: groups.engineering, name: 'Engineering', distinguishedName: ENGINEERING },
+            { id: groups.domainGuests, name: 'Domain Guests', distinguishedName: DOMAIN_GUESTS },
           ],
         },
       });
 
       const job = await finished(queued.id);
 
-      // oa.admin is a Domain Admin already; Carol's add to it was refused.
+      // Domain Guests is Guest's primary group already; Carol's add to it was refused.
       expect(job).toMatchObject({
         status: 'finished',
         counts: { total: 3, succeeded: 1, partial: 1, failed: 1, skipped: 0 },
       });
-      const [admin, carol] = [await dnOf('oa.admin'), await dnOf('carol.chen')];
-      expect(await directoryMembers(ENGINEERING)).toEqual(expect.arrayContaining([admin, carol]));
-      expect(await directoryMembers(DOMAIN_ADMINS)).not.toContain(carol);
+      const [guest, carol] = [await dnOf('Guest'), await dnOf('carol.chen')];
+      expect(await directoryMembers(ENGINEERING)).toEqual(expect.arrayContaining([guest, carol]));
+      expect(await directoryMembers(DOMAIN_GUESTS)).not.toContain(carol);
       const [partial] = await rowsWith(job.id, 'partial');
       expect(partial).toMatchObject({ targetId: users.carol, errorCode: 'permission_denied' });
       expect(partial!.errorMessage).toMatch(
-        /^Added to Engineering\. Not added to Domain Admins: the directory refused the change/,
+        /^Added to Engineering\. Not added to Domain Guests: the directory refused the change/,
       );
       expect(await rowsWith(job.id, 'failed')).toEqual([
         expect.objectContaining({
@@ -317,8 +325,8 @@ describe('adding users to groups, or removing them, in bulk', () => {
       ]);
 
       // The cache shows the adds straight away.
-      const after = await preview('add', [users.admin, users.carol], [groups.engineering]);
-      expect(names(after.groups[0]!.unchanged.users)).toEqual(['carol', 'admin']);
+      const after = await preview('add', [users.guest, users.carol], [groups.engineering]);
+      expect(names(after.groups[0]!.unchanged.users)).toEqual(['carol', 'guest']);
     });
 
     it('audits every user and group, changed or not, as the single-user route does', async () => {
@@ -333,15 +341,16 @@ describe('adding users to groups, or removing them, in bulk', () => {
         e.before?.isMember ?? null,
       ]);
       expect(heading).toEqual(['bulk.create', 'success', null, undefined, null]);
-      // Rows run a few at a time, so in no set order. oa.admin's Domain
-      // Admins add is a no-op, recorded with before and after alike.
+      // Rows run a few at a time, so in no set order. Guest's Domain
+      // Guests add is a no-op (its primary group), recorded with before
+      // and after alike.
       expect(rows).toHaveLength(5);
       expect(rows).toEqual(
         expect.arrayContaining([
-          ['user.group.add', 'success', users.admin, 'Engineering', false],
-          ['user.group.add', 'success', users.admin, 'Domain Admins', true],
+          ['user.group.add', 'success', users.guest, 'Engineering', false],
+          ['user.group.add', 'success', users.guest, 'Domain Guests', true],
           ['user.group.add', 'success', users.carol, 'Engineering', false],
-          ['user.group.add', 'failure', users.carol, 'Domain Admins', null],
+          ['user.group.add', 'failure', users.carol, 'Domain Guests', null],
           ['user.group.add', 'failure', missingUser, undefined, null],
         ]),
       );
@@ -363,8 +372,12 @@ describe('adding users to groups, or removing them, in bulk', () => {
             action: 'user.group.add',
             subject: {
               groups: [
-                { id: groups.engineering, name: 'Engineering' },
-                { id: groups.domainAdmins, name: 'Domain Admins' },
+                { id: groups.engineering, name: 'Engineering', distinguishedName: ENGINEERING },
+                {
+                  id: groups.domainGuests,
+                  name: 'Domain Guests',
+                  distinguishedName: DOMAIN_GUESTS,
+                },
               ],
             },
             status: 'finished',
@@ -387,7 +400,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
         expect.arrayContaining([
           ['success', 'Engineering', false],
           ['success', 'Engineering', true],
-          ['failure', 'Domain Admins', null],
+          ['failure', 'Domain Guests', null],
         ]),
       );
       expect(carol).toHaveLength(4);
@@ -420,7 +433,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
 
     it('removes them again, and skips those not in the group', async () => {
       const job = await finished(
-        (await start('remove', [users.admin, users.carol, users.dave], [groups.engineering])).id,
+        (await start('remove', [users.guest, users.carol, users.dave], [groups.engineering])).id,
       );
 
       expect(job).toMatchObject({
@@ -428,7 +441,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
         counts: { succeeded: 2, skipped: 1, failed: 0 },
       });
       expect(await directoryMembers(ENGINEERING)).toEqual(
-        expect.not.arrayContaining([await dnOf('oa.admin'), await dnOf('carol.chen')]),
+        expect.not.arrayContaining([await dnOf('Guest'), await dnOf('carol.chen')]),
       );
       const events = await jobEvents(job.id);
       expect(
@@ -504,6 +517,77 @@ describe('adding users to groups, or removing them, in bulk', () => {
       });
       expect(remove.statusCode).toBe(409);
       expect(await count()).toBe(before);
+    });
+
+    it('takes an acknowledgement to add users to a group AD protects', async () => {
+      const ids = [users.carol];
+      const { previewToken: token } = await preview('add', ids, [groups.domainAdmins]);
+      const before = (await operator.get('/api/bulk-jobs?limit=50')).json<{ jobs: BulkJob[] }>()
+        .jobs.length;
+
+      const res = await operator.post(pathOf('add'), {
+        ids,
+        groupIds: [groups.domainAdmins],
+        previewToken: token,
+      });
+
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({
+        error: { message: expect.stringMatching(/Domain Admins gives them admin rights in AD/) },
+      });
+      expect(
+        (await operator.get('/api/bulk-jobs?limit=50')).json<{ jobs: BulkJob[] }>().jobs,
+      ).toHaveLength(before);
+    });
+
+    it('takes configure:security to add members to a role group, in bulk or one at a time', async () => {
+      const denials = () =>
+        api.app.db
+          .selectFrom('audit_events')
+          .select(['metadata_json'])
+          .where('action', '=', 'authz.deny')
+          .orderBy('id')
+          .execute();
+      const already = (await denials()).length;
+      const { previewToken: token } = await preview('add', [users.bob], [groups.operators]);
+
+      const bulk = await operator.post(pathOf('add'), {
+        ids: [users.bob],
+        groupIds: [groups.operators],
+        previewToken: token,
+      });
+      const single = await operator.post(`/api/users/${users.bob}/groups`, {
+        groupId: groups.operators,
+      });
+
+      for (const res of [bulk, single]) {
+        expect(res.statusCode).toBe(403);
+        expect(res.json()).toMatchObject({
+          error: {
+            message:
+              'Adding members to OpenADUC Operators gives them OpenADUC’s Operator role, which takes the configure:security capability.',
+          },
+        });
+      }
+      const denied = (await denials()).slice(already);
+      expect(denied.map((d) => d.metadata_json)).toEqual([
+        expect.objectContaining({ requiredCapability: 'configure:security' }),
+        expect.objectContaining({ requiredCapability: 'configure:security' }),
+      ]);
+      expect(await directoryMembers(DC.groups.operators)).not.toContain(await dnOf('bob.baker'));
+
+      // An admin may; anyone with the membership capability may take members out.
+      const admin = api.client();
+      await admin.signIn(api, 'oa.admin');
+      await admin.stepUp();
+      expect(
+        (await admin.post(`/api/users/${users.bob}/groups`, { groupId: groups.operators }))
+          .statusCode,
+      ).toBe(200);
+      expect(
+        (await operator.delete(`/api/users/${users.bob}/groups`, { groupId: groups.operators }))
+          .statusCode,
+      ).toBe(200);
     });
   });
 });

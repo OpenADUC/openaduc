@@ -11,6 +11,7 @@ import {
   type Capability,
 } from '@openaduc/shared';
 import type { DB } from '../../db/types.js';
+import { isProtectedGroup, type RoleGroup } from '../../lib/groupPrivilege.js';
 import { rawScalarValue } from '../../lib/rawAttributes.js';
 import {
   DirectoryUnavailableError,
@@ -20,9 +21,11 @@ import {
 import type { AuditEventInput, AuditService } from '../audit.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import {
+  membershipRequirement,
   refreshMembershipCache,
   writeGroupMembership,
   type MembershipCacheDeps,
+  type MembershipRequirement,
 } from '../groupMembershipWrite.js';
 import { previewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
@@ -98,6 +101,11 @@ export interface BulkJobHandler<Request = unknown, Input = unknown> {
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },
   ): Promise<BulkJobSubject>;
+  /** A capability the job's subject takes beyond `capability`, checked at start, continue and retry. */
+  requires?(
+    subject: BulkJobSubject | null,
+    roleGroups: readonly RoleGroup[],
+  ): MembershipRequirement | null;
   input: z.ZodType<Input>;
   run(
     row: {
@@ -176,7 +184,10 @@ function groupMembershipHandler(
       return ids.map((id) => ({ targetId: id.toLowerCase(), input }));
     },
     input: groupIdsInputSchema,
-    async prepare({ ids: userIds, groupIds, previewToken: token }, { db, directoryId }) {
+    async prepare(
+      { ids: userIds, groupIds, previewToken: token, acknowledgeProtected },
+      { db, directoryId },
+    ) {
       if (token !== previewToken(op, userIds, groupIds)) {
         throw new BulkJobRequestError(
           'preview_mismatch',
@@ -185,14 +196,27 @@ function groupMembershipHandler(
       }
       const ids = groupIds.map((id) => id.toLowerCase());
       const found = await findCachedGroupsById(db, directoryId, ids);
+      const groups = ids.map((id) => {
+        const group = found.get(id);
+        if (!group) throw new BulkJobRequestError('group_not_found', 'group not found');
+        return group;
+      });
+      const guarded = op === 'add' ? groups.find(isProtectedGroup) : undefined;
+      if (guarded && !acknowledgeProtected) {
+        throw new BulkJobRequestError(
+          'protected_unacknowledged',
+          `Adding users to ${guarded.name} gives them admin rights in AD. Confirm that they need them.`,
+        );
+      }
       return {
-        groups: ids.map((id) => {
-          const group = found.get(id);
-          if (!group) throw new BulkJobRequestError('group_not_found', 'group not found');
-          return { id, name: group.name };
-        }),
+        groups: groups.map((g) => ({
+          id: g.id.toLowerCase(),
+          name: g.name,
+          distinguishedName: g.distinguishedName,
+        })),
       };
     },
+    requires: (subject, roleGroups) => membershipRequirement(op, subject?.groups ?? [], roleGroups),
     async run(row, ctx) {
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };

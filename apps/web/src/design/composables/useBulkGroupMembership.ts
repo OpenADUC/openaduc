@@ -38,6 +38,8 @@ export interface GroupPreviewLine {
   unchangedLabel: string;
   /** How many of those the preview doesn't list. */
   unlisted: number;
+  /** Why the operator can't make this change, when they can't. */
+  blocked: string | null;
 }
 
 /** A membership job as previewed, ready to start. */
@@ -46,11 +48,14 @@ export interface GroupChange {
   ids: string[];
   groupIds: string[];
   previewToken: string;
+  /** The operator ticked that the users gain admin rights in AD. */
+  acknowledgeProtected: boolean;
 }
 
 export function describeGroupPreview(
   op: BulkMembershipOp,
   group: BulkGroupPreviewGroup,
+  canGrantRoles = true,
 ): GroupPreviewLine {
   const { changes, unchanged, indirect } = group;
   const summary =
@@ -71,6 +76,10 @@ export function describeGroupPreview(
     warning: group.privilege ? privilegeNote(group.privilege) : null,
     unchangedLabel: op === 'add' ? 'Already members' : 'Not members',
     unlisted: unchanged.count - unchanged.users.length,
+    blocked:
+      op === 'add' && group.privilege?.reason === 'role' && !canGrantRoles
+        ? 'Adding members hands out an OpenADUC role, which takes the configure:security capability. Ask an admin.'
+        : null,
   };
 }
 
@@ -79,6 +88,8 @@ export function useBulkGroupMembership(options: {
   ids: () => string[];
   /** Start the job on what was previewed; useBulkActions prompts step-up first. */
   start: (change: GroupChange) => void;
+  /** Whether the operator may add members to a group mapped to an OpenADUC role. */
+  canGrantRoles?: () => boolean;
 }) {
   const visible = ref(false);
   const op = ref<BulkMembershipOp>('add');
@@ -101,11 +112,32 @@ export function useBulkGroupMembership(options: {
   const canPreview = computed(() => chosen.value.length > 0 && count.value > 0);
   const lines = computed(() =>
     preview.value
-      ? preview.value.groups.map((g) => describeGroupPreview(preview.value!.op, g))
+      ? preview.value.groups.map((g) =>
+          describeGroupPreview(preview.value!.op, g, options.canGrantRoles?.() ?? true),
+        )
       : [],
   );
   // Nothing to start when every user is already as asked in every group.
   const changes = computed(() => lines.value.reduce((n, l) => n + l.group.changes, 0));
+  /** The groups AD protects that an add would put these users in. */
+  const protectedGroups = computed(() =>
+    preview.value?.op === 'add'
+      ? lines.value.filter((l) => l.group.privilege?.reason === 'protected').map((l) => l.group)
+      : [],
+  );
+  const acknowledged = ref(false);
+  const acknowledgement = computed(() =>
+    protectedGroups.value.length === 0
+      ? null
+      : `I understand these users gain admin rights in AD through ${groupNames(protectedGroups.value)}.`,
+  );
+  const canConfirm = computed(
+    () =>
+      preview.value !== null &&
+      changes.value > 0 &&
+      lines.value.every((l) => !l.blocked) &&
+      (acknowledgement.value === null || acknowledged.value),
+  );
 
   const title = computed(() => {
     const who = accounts(count.value);
@@ -125,6 +157,7 @@ export function useBulkGroupMembership(options: {
     previews.begin();
     preview.value = null;
     previewed = null;
+    acknowledged.value = false;
     previewing.value = false;
     previewError.value = null;
   }
@@ -186,7 +219,7 @@ export function useBulkGroupMembership(options: {
 
   function confirm(): void {
     const shown = preview.value;
-    if (!shown || !previewed || changes.value === 0) return;
+    if (!shown || !previewed || !canConfirm.value) return;
     const { ids, groupIds } = previewed;
     const now = new Set(options.ids());
     if (now.size !== ids.length || ids.some((id) => !now.has(id))) {
@@ -194,8 +227,15 @@ export function useBulkGroupMembership(options: {
       previewError.value = 'The selection changed since the preview. Preview it again.';
       return;
     }
+    const change: GroupChange = {
+      op: shown.op,
+      ids,
+      groupIds,
+      previewToken: shown.previewToken,
+      acknowledgeProtected: acknowledgement.value !== null,
+    };
     close();
-    options.start({ op: shown.op, ids, groupIds, previewToken: shown.previewToken });
+    options.start(change);
   }
 
   return {
@@ -219,6 +259,9 @@ export function useBulkGroupMembership(options: {
     previewError,
     lines,
     changes,
+    acknowledged,
+    acknowledgement,
+    canConfirm,
     open,
     close,
     setOp,

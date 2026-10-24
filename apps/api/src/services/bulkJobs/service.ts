@@ -10,6 +10,7 @@ import type {
   BulkJobPauseReason,
   BulkJobRow,
   BulkJobRowStatus,
+  BulkJobSubject,
 } from '@openaduc/shared';
 import type { BulkJobRowsTable, BulkJobsTable, DB } from '../../db/types.js';
 import type { ProviderFactory } from '../../providers/registry.js';
@@ -114,13 +115,23 @@ export class BulkJobService {
     clearTimeout(timer);
   }
 
-  /** Throws a ZodError for a bad request body. */
-  async create(actor: JobActor, action: BulkJobAction, body: unknown): Promise<string> {
+  /**
+   * Throws a ZodError for a bad request body, and BulkJobRequestError for
+   * one that can't start. `authorize` sees what the job acts with before
+   * anything is stored, to refuse what the operator may not do.
+   */
+  async create(
+    actor: JobActor,
+    action: BulkJobAction,
+    body: unknown,
+    authorize?: (subject: BulkJobSubject | null) => Promise<void>,
+  ): Promise<string> {
     const handler = this.handlers[action];
     const request = handler.request.parse(body);
     const rows = handler.rows(request);
     const subject =
       (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
+    await authorize?.(subject);
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
