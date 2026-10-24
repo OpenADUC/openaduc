@@ -35,6 +35,7 @@ import { auditContextFromRequest, recordUserView, withAudit } from '../services/
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
+import { writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -849,31 +850,13 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
       if (!beforeRefresh) throw NotFound('user not found');
 
-      const result = await withAudit(
-        app.services.audit,
-        {
-          ...auditContextFromRequest(req),
-          action: 'user.update',
-          actorAuthMethod: 'ad-password',
-          providerId: provider.id,
-          targetType: 'user',
-          targetId: beforeRefresh.user.objectGuid,
-          targetDn: beforeRefresh.user.distinguishedName,
-          metadata: { fields: Object.keys(body.patch) },
-        },
-        async () => {
-          const r = await provider.updateUserAttributes(
-            { kind: 'objectGuid', value: id },
-            body.patch,
-            ctx(actor, req),
-          );
-          return {
-            ok: r.ok,
-            before: r.before ?? null,
-            after: r.after ?? null,
-            errorCode: r.reason ?? null,
-          };
-        },
+      const result = await writeUserAttributes(
+        app.services,
+        provider,
+        beforeRefresh.user,
+        body.patch,
+        ctx(actor, req),
+        auditContextFromRequest(req),
       );
 
       if (!result.ok) {
@@ -882,9 +865,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         }
         throw app.httpErrors.badGateway(`update failed: ${result.errorCode ?? 'unknown'}`);
       }
-
-      // Refresh cache so subsequent reads show the new values.
-      await app.services.userLiveRefresh.refresh(provider, id);
 
       return {
         ok: true,
