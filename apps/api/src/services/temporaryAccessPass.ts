@@ -15,19 +15,21 @@ import {
   type GroupLike,
   type RoleGroup,
 } from '../lib/groupPrivilege.js';
+import {
+  allPages,
+  findEntraUser,
+  listOf,
+  tenantLastSync,
+  type GraphReader,
+} from './entraLookup.js';
 import { GraphPermissionError, type GraphResponse } from './graphClient.js';
 
 // Issuing a Temporary Access Pass to an AD user's Entra twin. Whoever holds
 // a pass can sign in as the user, so a pass is never issued to anyone who
 // administers AD, OpenADUC or Entra: that would let a helpdesk operator
 // become one. Every check that can't be completed refuses.
-//
-// The Entra user is found by the AD account's objectSid, which Connect Sync
-// writes to onPremisesSecurityIdentifier. A UPN match would be unsafe: a
-// cloud-only account can hold the UPN an AD account has been given.
 
-export type TapGraph = {
-  getJson<T>(path: string, opts?: { headers?: Record<string, string> }): Promise<GraphResponse<T>>;
+export type TapGraph = GraphReader & {
   postJson<T>(path: string, body: unknown): Promise<GraphResponse<T>>;
 };
 
@@ -82,9 +84,6 @@ const ELIGIBILITIES_PATH =
 const ROLE_HEADERS = { 'Accept-Language': 'en-US' };
 const passesPath = (entraUserId: string) =>
   `/users/${encodeURIComponent(entraUserId)}/authentication/temporaryAccessPassMethods`;
-// Guards against a runaway nextLink chain. More than this fails closed: the
-// user is refused as one whose roles couldn't be checked.
-const MAX_PAGES = 50;
 // The policy changes rarely; a pass checked against one a minute old is
 // still checked again by Entra when it's created.
 const POLICY_TTL_MS = 60_000;
@@ -130,9 +129,6 @@ const createdPassSchema = z.object({
   lifetimeInMinutes: z.number().int(),
   isUsableOnce: z.boolean(),
 });
-
-const listOf = <T extends z.ZodType>(item: T) =>
-  z.object({ value: z.array(item), '@odata.nextLink': z.string().optional() });
 
 const membershipSchema = z.object({ id: z.string(), '@odata.type': z.string().optional() });
 const principalSchema = z.object({ principalId: z.string() });
@@ -325,16 +321,6 @@ async function readPolicy(graph: TapGraph, now: Date): Promise<GraphPolicy> {
   return policy;
 }
 
-async function findEntraUser(graph: TapGraph, sid: string): Promise<string | null> {
-  // Filtering on onPremisesSecurityIdentifier is an advanced query.
-  const res = await graph.getJson(
-    `/users?$filter=onPremisesSecurityIdentifier eq '${sid}'&$select=id&$count=true`,
-    { headers: { ConsistencyLevel: 'eventual' } },
-  );
-  const users = listOf(z.object({ id: z.string() })).parse(res.data).value;
-  return users[0]?.id ?? null;
-}
-
 type EntraRoles =
   | { status: 'none'; groupIds: Set<string> }
   | { status: 'holds' }
@@ -383,42 +369,11 @@ async function entraRoles(graph: TapGraph, entraUserId: string): Promise<EntraRo
   }
 }
 
-/** Every item across a nextLink chain; null past MAX_PAGES. */
-async function allPages<T extends z.ZodType>(
-  graph: TapGraph,
-  first: string,
-  item: T,
-  headers?: Record<string, string>,
-): Promise<z.infer<T>[] | null> {
-  const items: z.infer<T>[] = [];
-  let next: string | undefined = first;
-  for (let i = 0; next && i < MAX_PAGES; i++) {
-    const page = listOf(item).parse(
-      (await graph.getJson(next, headers ? { headers } : undefined)).data,
-    );
-    items.push(...page.value);
-    next = page['@odata.nextLink'];
-  }
-  return next ? null : items;
-}
-
 function inScope(policy: GraphPolicy, groupIds: Set<string>): boolean | null {
   if (!policy.includeTargets) return null;
   const included = policy.includeTargets.some((t) => t.id === 'all_users' || groupIds.has(t.id));
   const excluded = (policy.excludeTargets ?? []).some((t) => groupIds.has(t.id));
   return included && !excluded;
-}
-
-async function tenantLastSync(graph: TapGraph): Promise<string | null> {
-  try {
-    const res = await graph.getJson<{ value?: { onPremisesLastSyncDateTime?: string | null }[] }>(
-      '/organization?$select=onPremisesLastSyncDateTime',
-    );
-    const at = res.data?.value?.[0]?.onPremisesLastSyncDateTime;
-    return at ? new Date(at).toISOString() : null;
-  } catch {
-    return null;
-  }
 }
 
 function isSpent(pass: z.infer<typeof passSchema>, now: Date): boolean {
