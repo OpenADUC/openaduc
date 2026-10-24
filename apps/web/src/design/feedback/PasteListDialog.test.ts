@@ -47,13 +47,12 @@ const button = (w: ReturnType<typeof mount>, label: string) =>
 describe('the paste a list dialog', () => {
   it('finds the pasted users, asks who an ambiguous entry means, and selects them', async () => {
     const dialog = mount(PasteListDialog, {
-      props: { visible: true, selected: new Set(['someone-else']) },
+      props: { visible: true, selected: new Set(['someone-else']), isLoaded: () => true },
       global: { plugins: [PrimeVue], stubs: { teleport: true } },
     });
     await flushPromises();
 
     await dialog.get('textarea').setValue('jdoe\nJohn Smith\nnobody');
-    expect(dialog.text()).toContain('3 entries');
     await button(dialog, 'Find users')!.trigger('click');
     await flushPromises();
 
@@ -77,7 +76,7 @@ describe('the paste a list dialog', () => {
 
   it('can add the users to what is already selected', async () => {
     const dialog = mount(PasteListDialog, {
-      props: { visible: true, selected: new Set(['someone-else']) },
+      props: { visible: true, selected: new Set(['someone-else']), isLoaded: () => true },
       global: { plugins: [PrimeVue], stubs: { teleport: true } },
     });
     await flushPromises();
@@ -88,5 +87,27 @@ describe('the paste a list dialog', () => {
     await button(dialog, 'Add to the 1 selected')!.trigger('click');
     const [selected] = dialog.emitted<[Set<string>]>('update:selected')!.at(-1)!;
     expect([...selected]).toEqual(['someone-else', 'jdoe']);
+  });
+
+  it('says how many matches are disabled or missing from the loaded list', async () => {
+    match.mockResolvedValueOnce({
+      results: [
+        { entry: 'old', status: 'matched', user: person('old', { enabled: false }) },
+        { entry: 'jdoe', status: 'matched', user: person('jdoe') },
+        { entry: 'new', status: 'matched', user: person('new') },
+      ],
+    });
+    const dialog = mount(PasteListDialog, {
+      props: { visible: true, selected: new Set<string>(), isLoaded: (id) => id !== 'new' },
+      global: { plugins: [PrimeVue], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    await dialog.get('textarea').setValue('old\njdoe\nnew');
+    await button(dialog, 'Find users')!.trigger('click');
+    await flushPromises();
+
+    expect(dialog.get('[role="status"]').text()).toBe(
+      '2 users found from 3 entries, 1 of them disabled. 1 more user isn’t in the loaded list. Refresh the list to include them.',
+    );
   });
 });

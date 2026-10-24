@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Selecting users from a pasted list ("here are 37 names from HR"): the
-// operator pastes emails, logon names, UPNs or display names, the server
-// matches them all in one request, and the matched users become the
-// selection for the list's bulk actions.
-//
 // An entry that could mean several people counts once the operator picks
-// one; until then it's skipped, like an entry that matched nobody.
+// one; until then it's skipped, like an entry that matched nobody. A
+// matched user the list hasn't loaded (the cache changed since) is left
+// out of the selection, since the bulk actions work from loaded rows.
 
 import { computed, ref, type Ref } from 'vue';
-import { MAX_USER_MATCH_ENTRIES, type UserMatchResult } from '@openaduc/shared';
+import {
+  MAX_USER_MATCH_ENTRIES,
+  type UserMatchCandidate,
+  type UserMatchResult,
+} from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
@@ -16,7 +17,10 @@ import { parsePastedList } from '../lib/pastedList.js';
 
 type Of<S extends UserMatchResult['status']> = Extract<UserMatchResult, { status: S }>;
 
-export function usePastedListSelection(opts: { selectedIds: Ref<Set<string>> }) {
+export function usePastedListSelection(opts: {
+  selectedIds: Ref<Set<string>>;
+  isLoaded: (id: string) => boolean;
+}) {
   const text = ref('');
   const phase = ref<'editing' | 'matching' | 'review'>('editing');
   const error = ref<string | null>(null);
@@ -37,14 +41,21 @@ export function usePastedListSelection(opts: { selectedIds: Ref<Set<string>> }) 
     () => ambiguous.value.filter((r) => !picks.value.has(r.entry)).length,
   );
 
-  const selection = computed(() => {
-    const ids = new Set(matched.value.map((r) => r.user.id));
+  // Everyone the matches and picks name, loaded or not.
+  const found = computed(() => {
+    const users = new Map<string, UserMatchCandidate>();
+    for (const r of matched.value) users.set(r.user.id, r.user);
     for (const r of ambiguous.value) {
-      const id = picks.value.get(r.entry);
-      if (id) ids.add(id);
+      const user = r.candidates.find((c) => c.id === picks.value.get(r.entry));
+      if (user) users.set(user.id, user);
     }
-    return [...ids];
+    return [...users.values()];
   });
+  const notLoaded = computed(() => found.value.filter((u) => !opts.isLoaded(u.id)).length);
+  const selection = computed(() => found.value.filter((u) => opts.isLoaded(u.id)).map((u) => u.id));
+  const disabled = computed(
+    () => found.value.filter((u) => !u.enabled && opts.isLoaded(u.id)).length,
+  );
 
   async function match(): Promise<void> {
     if (entries.value.length === 0 || tooMany.value || phase.value === 'matching') return;
@@ -71,7 +82,6 @@ export function usePastedListSelection(opts: { selectedIds: Ref<Set<string>> }) 
     picks.value = next;
   }
 
-  /** Back to the paste, to fix it and match again. */
   function edit(): void {
     guard.begin();
     phase.value = 'editing';
@@ -85,7 +95,6 @@ export function usePastedListSelection(opts: { selectedIds: Ref<Set<string>> }) 
     error.value = null;
   }
 
-  /** Make the matched users the selection, or add them to it. */
   function apply(mode: 'replace' | 'add'): void {
     opts.selectedIds.value = new Set([
       ...(mode === 'add' ? opts.selectedIds.value : []),
@@ -106,6 +115,8 @@ export function usePastedListSelection(opts: { selectedIds: Ref<Set<string>> }) 
     unresolved,
     picks,
     selection,
+    notLoaded,
+    disabled,
     match,
     pick,
     edit,
