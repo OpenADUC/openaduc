@@ -1565,8 +1565,12 @@ watch(user, (u) => {
           <EmptyState
             v-if="user.groupMemberships.length === 0"
             icon="pi pi-users"
-            title="No memberships in cache"
-            message="Run a sync if this seems wrong."
+            title="Not a member of any groups"
+            :message="
+              user.freshness.isStale
+                ? 'The cache is stale. Run a sync if this seems wrong.'
+                : 'Apart from their primary group, usually Domain Users.'
+            "
           />
           <EmptyState
             v-else-if="groupsFiltered.length === 0"
