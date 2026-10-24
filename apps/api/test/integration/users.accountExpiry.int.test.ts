@@ -79,6 +79,33 @@ describe('setting when a user’s account expires', () => {
     ]);
   });
 
+  it('audits setting the expiry it already has as unchanged, without writing it', async () => {
+    const expiresAt = '2031-03-01T05:00:00.000Z';
+    // Written as another offset: the same moment.
+    await setUserAttribute('bob.baker', 'accountExpires', [toFiletime(expiresAt)]);
+    try {
+      const res = await operator.post(`/api/users/${bob}/account-expiry`, {
+        expiresAt: '2031-03-01T06:00:00.000+01:00',
+      });
+      expect(res.statusCode).toBe(200);
+      const event = await api.app.db
+        .selectFrom('audit_events')
+        .select(['result', 'metadata_json', 'before_json', 'after_json'])
+        .where('action', '=', 'user.accountExpiry.set')
+        .where('target_id', '=', bob)
+        .orderBy('id', 'desc')
+        .executeTakeFirstOrThrow();
+      expect(event).toEqual({
+        result: 'success',
+        metadata_json: { expiresAt, unchanged: true },
+        before_json: { accountExpiresAt: expiresAt },
+        after_json: { accountExpiresAt: expiresAt },
+      });
+    } finally {
+      await setUserAttribute('bob.baker', 'accountExpires', [NEVER]);
+    }
+  });
+
   it('refuses an auditor, and an operator who hasn’t stepped up', async () => {
     const auditor = api.client();
     await auditor.signIn(api, 'oa.auditor');

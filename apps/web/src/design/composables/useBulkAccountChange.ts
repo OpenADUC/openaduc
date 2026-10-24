@@ -116,7 +116,6 @@ const OPS: { [K in BulkAccountOp]: AccountOpCopy<K> } = {
 // The table's entries, typed loosely so any op's can be called.
 const copy = (op: BulkAccountOp) => OPS[op] as AccountOpCopy<BulkAccountOp>;
 
-/** How each change is offered in the dialog. */
 export const accountOpLabel = (op: BulkAccountOp): string => OPS[op].label;
 
 /** What a note in the preview says about the users it lists. */
@@ -259,7 +258,6 @@ export function useBulkAccountChange(options: {
     forgetPreview();
   }
 
-  /** Expire at the end of `day`. */
   function setEndOf(day: Date): void {
     endOf.value = day;
     never.value = false;
