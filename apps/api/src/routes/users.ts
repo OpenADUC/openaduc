@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { FastifyInstance } from 'fastify';
-import { sql } from 'kysely';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { sql, type RawBuilder, type Selectable } from 'kysely';
 import {
   accountExpiryRequestSchema,
   csvRow,
@@ -19,18 +19,20 @@ import {
   type UserDeletePreflightResponse,
   type UserDetail,
   type UserMatchResponse,
+  type UserMatchResult,
   type UserSearchResponse,
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
 import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
-import { matchEntries, matchKey } from '../lib/userMatch.js';
-import { NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
+import { lookupsFor, matchEntries } from '../lib/userMatch.js';
+import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { rawArrayValues, rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import type { UserCacheRecordsTable } from '../db/types.js';
 import { directoryRefusal } from './directoryRefusal.js';
 import { changeMembership } from './groupMembership.js';
 import { ctx } from './writeContext.js';
@@ -471,14 +473,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const result: UserSearchResponse = {
         freshness: await listFreshness(app.db, provider.id, 'users'),
         rows: rows.map((r) => ({
-          id: r.object_guid,
-          samAccountName: r.sam_account_name ?? '',
-          userPrincipalName: r.user_principal_name,
-          displayName: r.display_name,
-          email: r.email,
-          department: r.department,
-          title: r.title,
-          enabled: r.enabled,
+          ...cachedUserIdentity(r),
           locked: r.locked,
           passwordNeverExpires: r.password_never_expires,
           passwordMustChange: r.password_must_change,
@@ -499,37 +494,51 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         pageSize: q.pageSize,
       };
 
-      // Optional search auditing.
-      if (await app.services.settings.get<boolean>('audit.search_enabled', false)) {
-        await app.services.audit
-          .recordEvent({
-            ...auditContextFromRequest(req),
-            action: 'user.search',
-            result: 'success',
-            actorAuthMethod: 'ad-password',
-            providerId: provider.id,
-            targetType: 'user',
-            metadata: { query: q, returned: result.rows.length, total: result.total },
-          })
-          .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
-      }
+      await recordSearchAudit(app, req, provider.id, {
+        query: q,
+        returned: result.rows.length,
+        total: result.total,
+      });
 
       return userSearchResponseSchema.parse(result);
     },
   });
 
   // ---- POST /api/users/match -------------------------------------------
-  // A pasted list of people, matched against the cache in one go. A read:
-  // POST only because a list of 1,000 entries doesn't fit a query string.
+  // A read sent as POST: a list of 1,000 entries doesn't fit a query string.
   app.post('/api/users/match', {
     config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<UserMatchResponse> => {
       const body = userMatchRequestSchema.parse(req.body);
       const provider = await app.services.providers.buildForRequest(req);
-      const keys = [...new Set(body.entries.map(matchKey).filter((k) => k !== null))];
-      const smtpKeys = keys.filter((k) => k.includes('@')).map((k) => `smtp:${k}`);
+      const lookups = lookupsFor(body.entries);
+      if (lookups.length > MAX_USER_MATCH_LOOKUPS) {
+        throw BadRequest('Too many entries. Match up to 1,000 at a time.');
+      }
 
+      // Postgres folds case for both the lookups and the cached values, so
+      // the two always agree (JS and Postgres lowercase some letters
+      // differently).
+      const folded = new Map(
+        lookups.length === 0
+          ? []
+          : (
+              await sql<{ lookup: string; key: string }>`
+                select lookup, lower(lookup) as key from unnest(${lookups}::text[]) as lookup
+              `.execute(app.db)
+            ).rows.map((r) => [r.lookup, r.key]),
+      );
+      const keys = [...new Set(folded.values())];
+      const smtpKeys = keys.filter((k) => k.includes('@')).map((k) => `smtp:${k}`);
       const proxies = sql`raw_attributes_json -> 'proxyAddresses'`;
+      const proxyList = sql`jsonb_array_elements_text(
+        case jsonb_typeof(${proxies})
+          when 'array' then ${proxies}
+          when 'string' then jsonb_build_array(${proxies})
+          else '[]'::jsonb
+        end
+      )`;
+
       const rows =
         keys.length === 0
           ? []
@@ -539,71 +548,51 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
               .where('deleted_at', 'is', null)
               .where((eb) =>
                 eb.or([
-                  eb(sql`lower(sam_account_name)`, '=', sql<string>`any(${keys}::text[])`),
-                  eb(sql`lower(user_principal_name)`, '=', sql<string>`any(${keys}::text[])`),
-                  eb(sql`lower(email)`, '=', sql<string>`any(${keys}::text[])`),
-                  eb(sql`lower(display_name)`, '=', sql<string>`any(${keys}::text[])`),
-                  sql<boolean>`exists (
-                    select 1 from jsonb_array_elements_text(
-                      case jsonb_typeof(${proxies})
-                        when 'array' then ${proxies}
-                        when 'string' then jsonb_build_array(${proxies})
-                        else '[]'::jsonb
-                      end
-                    ) as p(address)
-                    where lower(p.address) = any(${smtpKeys}::text[])
-                  )`,
+                  inKeys('sam_account_name', keys),
+                  inKeys('user_principal_name', keys),
+                  inKeys('email', keys),
+                  inKeys('display_name', keys),
+                  ...(smtpKeys.length > 0
+                    ? [
+                        sql<boolean>`exists (
+                          select 1 from ${proxyList} as p(address)
+                          where lower(p.address) = any(${smtpKeys}::text[])
+                        )`,
+                      ]
+                    : []),
                 ]),
               )
+              .selectAll()
               .select([
-                'object_guid',
-                'sam_account_name',
-                'user_principal_name',
-                'display_name',
-                'email',
-                'department',
-                'title',
-                'enabled',
-                'distinguished_name',
-                sql<unknown>`${proxies}`.as('proxy_addresses'),
+                sql<string[]>`array_remove(array[
+                  lower(sam_account_name), lower(user_principal_name), lower(email)
+                ], null) || array(
+                  select lower(substr(p.address, 6)) from ${proxyList} as p(address)
+                  where lower(p.address) like 'smtp:%'
+                )`.as('identifier_keys'),
+                sql<string | null>`lower(display_name)`.as('display_name_key'),
               ])
               .execute();
 
       const results = matchEntries(
         body.entries,
         rows.map((r) => ({
-          id: r.object_guid,
-          samAccountName: r.sam_account_name ?? '',
-          userPrincipalName: r.user_principal_name,
-          displayName: r.display_name,
-          email: r.email,
-          department: r.department,
-          title: r.title,
-          enabled: r.enabled,
+          ...cachedUserIdentity(r),
           distinguishedName: r.distinguished_name,
-          proxyAddresses: rawArrayValues(r.proxy_addresses),
+          identifierKeys: r.identifier_keys,
+          displayNameKey: r.display_name_key,
         })),
+        (lookup) => folded.get(lookup)!,
       );
 
-      if (await app.services.settings.get<boolean>('audit.search_enabled', false)) {
-        const count = (status: string) => results.filter((r) => r.status === status).length;
-        await app.services.audit
-          .recordEvent({
-            ...auditContextFromRequest(req),
-            action: 'user.search',
-            result: 'success',
-            actorAuthMethod: 'ad-password',
-            providerId: provider.id,
-            targetType: 'user',
-            metadata: {
-              pastedList: results.map((r) => r.entry),
-              matched: count('matched'),
-              ambiguous: count('ambiguous'),
-              unmatched: count('unmatched'),
-            },
-          })
-          .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
-      }
+      const count = (status: UserMatchResult['status']) =>
+        results.filter((r) => r.status === status).length;
+      await recordSearchAudit(app, req, provider.id, {
+        pastedList: results.map((r) => r.entry),
+        matched: count('matched'),
+        ambiguous: count('ambiguous'),
+        unmatched: count('unmatched'),
+      });
 
       return userMatchResponseSchema.parse({ results });
     },
@@ -1473,6 +1462,50 @@ async function toggleEnabled(
   }
   await app.services.userLiveRefresh.refresh(provider, id);
   return { ok: true, before: result.before, after: result.after };
+}
+
+// Splitting comma lists server-side can turn 1,000 entries into more
+// lookups; this bounds the query's key array.
+const MAX_USER_MATCH_LOOKUPS = 5_000;
+
+/** `lower(column)` is one of `keys` (already lowercased by Postgres). */
+function inKeys(column: string, keys: string[]): RawBuilder<boolean> {
+  return sql<boolean>`lower(${sql.ref(column)}) = any(${keys}::text[])`;
+}
+
+/** The fields every user listing shares, from a cache row. */
+function cachedUserIdentity(r: Selectable<UserCacheRecordsTable>) {
+  return {
+    id: r.object_guid,
+    samAccountName: r.sam_account_name ?? '',
+    userPrincipalName: r.user_principal_name,
+    displayName: r.display_name,
+    email: r.email,
+    department: r.department,
+    title: r.title,
+    enabled: r.enabled,
+  };
+}
+
+/** Records a user search when the `audit.search_enabled` setting is on. */
+async function recordSearchAudit(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  providerId: number,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  if (!(await app.services.settings.get<boolean>('audit.search_enabled', false))) return;
+  await app.services.audit
+    .recordEvent({
+      ...auditContextFromRequest(req),
+      action: 'user.search',
+      result: 'success',
+      actorAuthMethod: 'ad-password',
+      providerId,
+      targetType: 'user',
+      metadata,
+    })
+    .catch((err) => req.log.error({ err }, 'audit insert failed for user.search'));
 }
 
 function dateOrNull(v: Date | string | null): string | null {

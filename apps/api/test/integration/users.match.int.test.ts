@@ -113,6 +113,29 @@ describe('POST /api/users/match', () => {
     ]);
   });
 
+  it('reads "Last, First" as a name, and a comma list as entries', async () => {
+    const results = await match(operator, ['Anders, Alice', 'carol.chen, bob.baker, nobody']);
+
+    expect(results.map((r) => [r.entry, matched(r)])).toEqual([
+      ['Anders, Alice', ids['alice.anders']],
+      ['carol.chen', ids['carol.chen']],
+      ['bob.baker', ids['bob.baker']],
+      ['nobody', { entry: 'nobody', status: 'unmatched' }],
+    ]);
+  });
+
+  it('matches whatever case the entry is in, folded the way the database folds it', async () => {
+    await api.app.db
+      .updateTable('user_cache_records')
+      .set({ display_name: 'İpek Élodie' })
+      .where('object_guid', '=', ids['carol.chen']!)
+      .execute();
+
+    // JS lowercases İ to two code points; Postgres's lower() may not.
+    const results = await match(operator, ['İPEK ÉLODIE']);
+    expect(results.map(matched)).toEqual([ids['carol.chen']]);
+  });
+
   it('refuses more entries than one request may match', async () => {
     const entries = Array.from({ length: 1001 }, (_, i) => `user${i}`);
     const res = await operator.post('/api/users/match', { entries });
