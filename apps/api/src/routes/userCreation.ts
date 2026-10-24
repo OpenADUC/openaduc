@@ -35,6 +35,7 @@ import {
   findCachedGroupsById,
   type CachedGroup,
 } from '../services/groupCache.js';
+import { membershipRequirement } from '../services/groupMembershipWrite.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
 import { findCachedUser, upsertUser } from '../services/userCache.js';
@@ -73,6 +74,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       if (!ou) throw BadRequest('OU not found in directory cache');
       const { found: groups, missing } = await cachedGroups(provider.id, body.groups ?? []);
       if (missing[0]) throw BadRequest(`group ${missing[0]} not found in directory cache`);
+      await requireRoleGrant(req, groups);
       const managerId = body.organisation?.managerId;
       const manager = managerId
         ? await findCachedUser(app.db, provider.id, { id: managerId })
@@ -244,6 +246,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       const { found: groups, missing: gone } = steps.includes('groups')
         ? await cachedGroups(provider.id, progress.groupsLeft)
         : { found: [], missing: [] };
+      await requireRoleGrant(req, groups);
       const finish = await finishFor(provider, {
         password: body.password,
         groups,
@@ -376,6 +379,16 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
         privilege: groupPrivilege(g, roleGroups),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Adding the account to a role group hands out the role, as adding any member does. */
+  async function requireRoleGrant(req: FastifyRequest, groups: readonly GroupToAdd[]) {
+    const needs = membershipRequirement(
+      'add',
+      groups,
+      await app.services.authorization.roleGroups(),
+    );
+    if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 
   /** The groups asked for, in the order asked, and the ids the cache doesn't have. */

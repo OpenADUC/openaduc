@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { UserCopySource, UserCreateRequest, UserCreateResponse } from '@openaduc/shared';
+import {
+  ROLE_CAPABILITIES,
+  type UserCopySource,
+  type UserCreateRequest,
+  type UserCreateResponse,
+} from '@openaduc/shared';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DC,
@@ -20,7 +25,7 @@ const ENGINEERING_DN = 'CN=Engineering,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC
 // Outside OU=OpenADUC Test, so oa.operator can't change its members, and
 // flagged the way AdminSDHolder flags an administrative group.
 const ADMINS_DN = 'CN=Copy Test Admins,CN=Users,DC=openaduc,DC=test';
-const NEW_SAMS = ['vera.vance', 'walt.west', 'xena.xu', 'yara.york', 'zane.zhu'];
+const NEW_SAMS = ['uma.urban', 'vera.vance', 'walt.west', 'xena.xu', 'yara.york', 'zane.zhu'];
 
 // What Alice has that a copy takes, and what it doesn't.
 const ALICE_ORGANISATION: Record<string, string> = {
@@ -473,5 +478,60 @@ describe('copying a user', () => {
       });
       expect((await directoryUser('zane.zhu'))?.userAccountControl).toBe('512');
     });
+  });
+
+  it('takes configure:security to add the copy to a role group, on create and on finish', async () => {
+    const groupId = async (name: string) =>
+      (await operator.get(`/api/groups?q=${encodeURIComponent(name)}`))
+        .json<{ rows: { id: string; name: string }[] }>()
+        .rows.find((g) => g.name === name)!.id;
+    const [auditors, domainAdmins] = [
+      await groupId('OpenADUC Auditors'),
+      await groupId('Domain Admins'),
+    ];
+    const denials = async () =>
+      (await auditRows('authz.deny')).filter(
+        (r) => r.metadata_json['requiredCapability'] === 'configure:security',
+      ).length;
+    const before = await denials();
+
+    const refused = await operator.post('/api/users', copyOfAlice('uma.urban', [auditors]));
+
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({
+      error: {
+        message:
+          'Adding members to OpenADUC Auditors gives them OpenADUC’s Auditor role, which takes the configure:security capability.',
+      },
+    });
+    expect(await directoryUser('uma.urban')).toBeNull();
+    expect(await denials()).toBe(before + 1);
+
+    // An operator who briefly may grant roles starts a copy whose add to
+    // Domain Admins (the admin role's group) AD refuses, so it's left to finish.
+    await api.app.db
+      .updateTable('admin_sessions')
+      .set({
+        capabilities_json: JSON.stringify([...ROLE_CAPABILITIES.operator, 'configure:security']),
+      })
+      .where('actor_username', '=', `oa.operator@${DC.domain}`)
+      .where('revoked_at', 'is', null)
+      .execute();
+    const started = await operator.post('/api/users', copyOfAlice('uma.urban', [domainAdmins]));
+    expect(started.statusCode, started.body).toBe(200);
+    const unfinished = started.json<UserCreateResponse>();
+    expect(unfinished.remaining).toEqual(['groups', 'enable']);
+    await operator.signIn(api, 'oa.operator');
+    await operator.stepUp();
+
+    const finish = await operator.post(`/api/users/${unfinished.id}/finish-create`, {
+      enabled: true,
+    });
+
+    expect(finish.statusCode).toBe(403);
+    expect(finish.json()).toMatchObject({
+      error: { message: expect.stringMatching(/Domain Admins .*configure:security/) },
+    });
+    expect(await denials()).toBe(before + 2);
   });
 });
