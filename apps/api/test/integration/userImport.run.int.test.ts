@@ -25,7 +25,15 @@ import {
 
 const STAFF_OU = 'OU=Staff,OU=OpenADUC Test,DC=openaduc,DC=test';
 const DOMAIN_GUESTS = 'CN=Domain Guests,CN=Users,DC=openaduc,DC=test';
-const NEW_SAMS = ['ivy.ingram', 'kit.kemp', 'max.mendez', 'gus.grant', 'hal.hayes', 'ray.rand'];
+const NEW_SAMS = [
+  'ivy.ingram',
+  'kit.kemp',
+  'max.mendez',
+  'gus.grant',
+  'hal.hayes',
+  'ray.rand',
+  'ona.oates',
+];
 const SHARED_PASSWORD = 'Shared-start-Pass7';
 
 function row(sam: string, over: Partial<ImportRow> = {}): ImportRow {
@@ -187,6 +195,26 @@ describe('running an import', () => {
       ['Domain Guests', 'failure'],
       ['Domain Guests', 'success'],
     ]);
+  });
+
+  it('doesn’t create an account twice when the run stopped before recording its row', async () => {
+    const queued = await run(request([row('ona.oates')]));
+    const job = await finishedJob(operator, queued.id);
+    expect(job.counts.succeeded).toBe(1);
+    // As the sweep leaves a row whose run died mid-way.
+    await api.app.db
+      .updateTable('bulk_job_rows')
+      .set({ status: 'failed', error_code: 'interrupted', after_json: null, target_id: null })
+      .where('job_id', '=', job.id)
+      .execute();
+
+    expect((await operator.post(`/api/bulk-jobs/${job.id}/retry`)).statusCode).toBe(200);
+    const after = await finishedJob(operator, job.id);
+
+    expect(after.counts).toMatchObject({ succeeded: 1, failed: 0 });
+    const [ona] = (await view(job.id)).rows;
+    expect(ona).toMatchObject({ status: 'succeeded', id: expect.any(String) });
+    expect(await audits({ action: 'user.create', bulkJobId: job.id })).toHaveLength(1);
   });
 
   it('creates a manager the import also creates before the people they manage', async () => {

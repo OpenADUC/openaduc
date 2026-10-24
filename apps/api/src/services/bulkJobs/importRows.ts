@@ -15,6 +15,7 @@ import {
   type ImportStep,
   type UserCreateStep,
 } from '@openaduc/shared';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import {
   DirectoryUnavailableError,
@@ -205,7 +206,7 @@ async function runImportRow(
 ): Promise<BulkRowOutcome> {
   const { input } = row;
   const { provider } = ctx;
-  const earlier = progressOf(row.after);
+  const earlier = progressOf(row.after) ?? (await createdBefore(input, ctx));
   const failures: Failure[] = [];
   const planned = accountSteps(input.options.enabled);
 
@@ -290,6 +291,37 @@ async function runImportRow(
     partial: true,
     audited: true,
     ...fields,
+  };
+}
+
+/**
+ * What a run that stopped before recording the row (the process died, or
+ * the row failed after the create) did, from its audit row: the account it
+ * created, if it did, so the row isn't created twice.
+ */
+async function createdBefore(
+  input: RowInput,
+  ctx: BulkRowContext,
+): Promise<ImportRowProgress | null> {
+  const dn = childDn('CN', input.cn, input.ouDn);
+  const create = await ctx.db
+    .selectFrom('audit_events')
+    .select(['target_id', 'target_dn', 'correlation_id', 'after_json'])
+    .where('bulk_job_id', '=', ctx.jobId)
+    .where('action', '=', 'user.create')
+    .where(sql<string>`lower(target_dn)`, '=', dn.toLowerCase())
+    .where(sql<boolean>`after_json->'completed' ? 'create'`)
+    .orderBy('id', 'desc')
+    .executeTakeFirst();
+  if (!create) return null;
+  const completed = create.after_json?.['completed'];
+  return {
+    id: create.target_id,
+    distinguishedName: create.target_dn ?? dn,
+    createCorrelationId: create.correlation_id,
+    completed: Array.isArray(completed) ? (completed as ImportStep[]) : ['create'],
+    groups: [],
+    failed: [],
   };
 }
 
