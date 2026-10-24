@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
-import type { GroupPrivilege } from './userCreate.js';
+import { groupPrivilegeSchema } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
 export const BULK_JOB_ACTIONS = [
@@ -76,57 +76,79 @@ export const bulkJobCreateRequestSchema = z.object({
 });
 export type BulkJobCreateRequest = z.infer<typeof bulkJobCreateRequestSchema>;
 
-/** Adding users to groups, or removing them from groups: one row per user. */
-export const bulkGroupMembershipRequestSchema = bulkJobCreateRequestSchema.extend({
-  groupIds: uniqueGuids(MAX_BULK_GROUPS, 'groupIds'),
-});
-export type BulkGroupMembershipRequest = z.infer<typeof bulkGroupMembershipRequestSchema>;
-
 export const BULK_MEMBERSHIP_OPS = ['add', 'remove'] as const;
 export type BulkMembershipOp = (typeof BULK_MEMBERSHIP_OPS)[number];
 
+const groupSelection = {
+  ids: uniqueGuids(MAX_BULK_JOB_ROWS, 'ids'),
+  groupIds: uniqueGuids(MAX_BULK_GROUPS, 'groupIds'),
+};
+
 /** What a membership job would change, asked before starting it. */
-export const bulkGroupMembershipPreviewRequestSchema = bulkGroupMembershipRequestSchema.extend({
+export const bulkGroupMembershipPreviewRequestSchema = z.object({
   op: z.enum(BULK_MEMBERSHIP_OPS),
+  ...groupSelection,
 });
 export type BulkGroupMembershipPreviewRequest = z.infer<
   typeof bulkGroupMembershipPreviewRequestSchema
 >;
 
-export interface BulkGroupPreviewUser {
-  id: string;
-  name: string;
-}
+/**
+ * Adding users to groups, or removing them from groups: one row per user.
+ * `previewToken` is the preview's, so the job runs on exactly the users
+ * and groups the operator saw it for.
+ */
+export const bulkGroupMembershipRequestSchema = z.object({
+  ...groupSelection,
+  previewToken: z.string().min(1),
+});
+export type BulkGroupMembershipRequest = z.infer<typeof bulkGroupMembershipRequestSchema>;
+
+/** How many users a preview lists in each group's lists; it counts them all. */
+export const PREVIEW_LIST_LIMIT = 50;
+
+export const bulkGroupPreviewUserSchema = z.object({ id: z.string(), name: z.string() });
+export type BulkGroupPreviewUser = z.infer<typeof bulkGroupPreviewUserSchema>;
+
+/** Some users, the first PREVIEW_LIST_LIMIT by name, and how many there are in all. */
+const previewUsersSchema = z.object({
+  count: z.number().int(),
+  users: z.array(bulkGroupPreviewUserSchema),
+});
 
 /** One group in a membership job's preview, read from the cache. */
-export interface BulkGroupPreviewGroup {
-  id: string;
-  name: string;
-  distinguishedName: string;
+export const bulkGroupPreviewGroupSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  distinguishedName: z.string(),
   /** Null for a group that grants no administrative rights. */
-  privilege: GroupPrivilege | null;
+  privilege: groupPrivilegeSchema.nullable(),
   /** How many of the users the job would add to it, or remove from it. */
-  changes: number;
+  changes: z.number().int(),
   /**
    * The users it would leave alone, already as the job would leave them:
    * members already (for an add, the group being their primary group
    * included), or not direct members (for a remove).
    */
-  unchanged: BulkGroupPreviewUser[];
+  unchanged: previewUsersSchema,
   /**
    * Members only through a nested group, or for a remove through their
    * primary group: an add makes them direct members, and a remove leaves
    * them members.
    */
-  indirect: BulkGroupPreviewUser[];
-}
+  indirect: previewUsersSchema,
+});
+export type BulkGroupPreviewGroup = z.infer<typeof bulkGroupPreviewGroupSchema>;
 
-export interface BulkGroupMembershipPreview {
-  op: BulkMembershipOp;
-  groups: BulkGroupPreviewGroup[];
+export const bulkGroupMembershipPreviewSchema = z.object({
+  op: z.enum(BULK_MEMBERSHIP_OPS),
+  groups: z.array(bulkGroupPreviewGroupSchema),
   /** Users asked for that the cache doesn't know; their rows would fail. */
-  unknownIds: string[];
-}
+  unknownCount: z.number().int(),
+  /** Starting the job takes this back. */
+  previewToken: z.string(),
+});
+export type BulkGroupMembershipPreview = z.infer<typeof bulkGroupMembershipPreviewSchema>;
 
 export const bulkJobCountsSchema = z.object({
   total: z.number().int(),

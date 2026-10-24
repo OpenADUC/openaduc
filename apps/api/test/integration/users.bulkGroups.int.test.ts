@@ -18,6 +18,7 @@ import {
   type TestApi,
   type TestClient,
 } from './harness.js';
+import { previewToken } from '../../src/services/groupMembershipPreview.js';
 
 type Fixture = 'alice' | 'bob' | 'carol' | 'dave' | 'admin';
 const SAM: Record<Fixture, string> = {
@@ -118,8 +119,8 @@ describe('adding users to groups, or removing them, in bulk', () => {
     name: g.name,
     privilege: g.privilege,
     changes: g.changes,
-    unchanged: names(g.unchanged),
-    indirect: names(g.indirect),
+    unchanged: names(g.unchanged.users),
+    indirect: names(g.indirect.users),
   });
 
   describe('the preview', () => {
@@ -132,7 +133,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
       );
 
       expect(result.op).toBe('add');
-      expect(result.unknownIds).toEqual([missing]);
+      expect(result.unknownCount).toBe(1);
       expect(result.groups.map(summary)).toEqual([
         {
           name: 'Engineering',
@@ -219,7 +220,10 @@ describe('adding users to groups, or removing them, in bulk', () => {
       const auditor = api.client();
       await auditor.signIn(api, 'oa.auditor');
       const read = await preview('add', [users.alice], [groups.engineering], auditor);
-      expect(names(read.groups[0]!.unchanged)).toEqual(['alice']);
+      expect(read.groups[0]!.unchanged).toEqual({
+        count: 1,
+        users: [expect.objectContaining({ id: users.alice })],
+      });
       const nothingWritten = await api.app.db
         .selectFrom('audit_events')
         .select('action')
@@ -237,9 +241,13 @@ describe('adding users to groups, or removing them, in bulk', () => {
       await auditor.signIn(api, 'oa.auditor');
     });
 
+    const pathOf = (op: 'add' | 'remove') =>
+      `/api/users/${op === 'add' ? 'bulk-add-to-groups' : 'bulk-remove-from-groups'}`;
+
+    /** Preview, then start the job on what was previewed, as the UI does. */
     async function start(op: 'add' | 'remove', ids: string[], groupIds: string[]) {
-      const path = op === 'add' ? 'bulk-add-to-groups' : 'bulk-remove-from-groups';
-      const res = await operator.post(`/api/users/${path}`, { ids, groupIds });
+      const { previewToken } = await preview(op, ids, groupIds);
+      const res = await operator.post(pathOf(op), { ids, groupIds, previewToken });
       expect(res.statusCode).toBe(202);
       return res.json<{ job: BulkJob }>().job;
     }
@@ -310,7 +318,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
 
       // The cache shows the adds straight away.
       const after = await preview('add', [users.admin, users.carol], [groups.engineering]);
-      expect(names(after.groups[0]!.unchanged)).toEqual(['carol', 'admin']);
+      expect(names(after.groups[0]!.unchanged.users)).toEqual(['carol', 'admin']);
     });
 
     it('audits every user and group, changed or not, as the single-user route does', async () => {
@@ -446,7 +454,7 @@ describe('adding users to groups, or removing them, in bulk', () => {
 
     it('takes the group-membership capability and a step-up, and groups the directory has', async () => {
       await auditor.stepUp();
-      const body = { ids: [users.bob], groupIds: [groups.allStaff] };
+      const body = { ids: [users.bob], groupIds: [groups.allStaff], previewToken: 'x' };
       expect((await auditor.post('/api/users/bulk-add-to-groups', body)).statusCode).toBe(403);
 
       const unelevated = api.client();
@@ -456,9 +464,11 @@ describe('adding users to groups, or removing them, in bulk', () => {
 
       const before = (await operator.get('/api/bulk-jobs?limit=50')).json<{ jobs: BulkJob[] }>()
         .jobs.length;
+      const gone = randomUUID();
       const unknown = await operator.post('/api/users/bulk-add-to-groups', {
         ids: [users.bob],
-        groupIds: [randomUUID()],
+        groupIds: [gone],
+        previewToken: previewToken('add', [users.bob], [gone]),
       });
       expect(unknown.statusCode).toBe(404);
       expect(
@@ -467,8 +477,33 @@ describe('adding users to groups, or removing them, in bulk', () => {
       const tooMany = await operator.post('/api/users/bulk-add-to-groups', {
         ids: [users.bob],
         groupIds: Array.from({ length: 21 }, () => randomUUID()),
+        previewToken: 'x',
       });
       expect(tooMany.statusCode).toBe(400);
+    });
+
+    it('runs only on the users and groups previewed', async () => {
+      const { previewToken: token } = await preview('add', [users.bob], [groups.allStaff]);
+      const count = async () =>
+        (await operator.get('/api/bulk-jobs?limit=50')).json<{ jobs: BulkJob[] }>().jobs.length;
+      const before = await count();
+
+      for (const body of [
+        { ids: [users.bob, users.alice], groupIds: [groups.allStaff] },
+        { ids: [users.bob], groupIds: [groups.allStaff, groups.engineering] },
+      ]) {
+        const res = await operator.post(pathOf('add'), { ...body, previewToken: token });
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ error: { message: expect.stringMatching(/Preview/) } });
+      }
+      // A remove isn't the add previewed either.
+      const remove = await operator.post(pathOf('remove'), {
+        ids: [users.bob],
+        groupIds: [groups.allStaff],
+        previewToken: token,
+      });
+      expect(remove.statusCode).toBe(409);
+      expect(await count()).toBe(before);
     });
   });
 });

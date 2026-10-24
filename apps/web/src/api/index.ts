@@ -7,6 +7,7 @@ import type {
   AuditBulkSummary,
   BulkGroupMembershipPreview,
   BulkGroupMembershipPreviewRequest,
+  BulkGroupMembershipRequest,
   BulkJob,
   BulkJobAction,
   BulkJobRow,
@@ -685,14 +686,13 @@ export const api = {
         body: JSON.stringify({ ids }),
       });
     },
-    startGroupChange(
-      op: BulkMembershipOp,
-      ids: string[],
-      groupIds: string[],
-    ): Promise<{ job: BulkJob }> {
+    startGroupChange({
+      op,
+      ...body
+    }: { op: BulkMembershipOp } & BulkGroupMembershipRequest): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath(`user.group.${op}`), {
         method: 'POST',
-        body: JSON.stringify({ ids, groupIds }),
+        body: JSON.stringify(body),
       });
     },
     /** The operator's own jobs in this directory, newest first. */

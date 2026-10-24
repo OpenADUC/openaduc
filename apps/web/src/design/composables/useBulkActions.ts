@@ -10,10 +10,11 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type { BulkJob, BulkMembershipOp } from '@openaduc/shared';
+import type { BulkJob } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { accounts, BULK_VERBS, bulkJobActive, bulkJobTarget } from '../lib/bulkJob.js';
+import type { GroupChange } from './useBulkGroupMembership.js';
 
 /** The bulk actions that change the accounts themselves. */
 export type BulkAction = 'disable' | 'enable' | 'unlock';
@@ -221,12 +222,11 @@ export function useBulkActions(opts: {
     write(() => api.bulkJobs.start(`user.${action}`, ids), true);
   }
 
-  /** Add the selection to these groups, or remove it from them, once the operator has seen the preview. */
-  function startGroupChange(op: BulkMembershipOp, groupIds: string[]): void {
-    const ids = Array.from(opts.selectedIds.value);
-    if (ids.length === 0 || groupIds.length === 0) return;
+  /** Add users to groups, or remove them, as the operator previewed it. */
+  function startGroupChange(change: GroupChange): void {
+    if (change.ids.length === 0 || change.groupIds.length === 0) return;
     bulkErrors.value = new Map();
-    write(() => api.bulkJobs.startGroupChange(op, ids, groupIds), true);
+    write(() => api.bulkJobs.startGroupChange(change), true);
   }
 
   function continueJob(): void {

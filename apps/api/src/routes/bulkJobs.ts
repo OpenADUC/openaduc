@@ -9,7 +9,7 @@ import {
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
 } from '@openaduc/shared';
-import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { BulkJobRequestError } from '../services/bulkJobs/errors.js';
 import type { JobActor } from '../services/bulkJobs/service.js';
 
@@ -125,6 +125,8 @@ function refuse(err: unknown): never {
     switch (err.code) {
       case 'group_not_found':
         throw NotFound(err.message);
+      case 'preview_mismatch':
+        throw Conflict(err.message);
     }
   }
   throw err;
