@@ -221,6 +221,7 @@ export const importRequestSchema = z
     });
   });
 export type ImportRequest = z.input<typeof importRequestSchema>;
+export type CheckedImportRequest = z.output<typeof importRequestSchema>;
 
 export type ImportCheckIssueKind =
   | 'unusable'
