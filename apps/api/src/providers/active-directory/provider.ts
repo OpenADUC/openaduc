@@ -816,22 +816,92 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       : this.findComputerEntry(client, identifier);
   }
 
-  /**
-   * Flip the ACCOUNTDISABLE bit (0x2) of `userAccountControl`. Reads the
-   * current UAC value from the live entry so we don't clobber other bits
-   * (DONT_EXPIRE_PASSWORD, WORKSTATION_TRUST_ACCOUNT, etc).
-   */
-  private async toggleAccountDisable(
+  /** Flip the ACCOUNTDISABLE bit (0x2) of `userAccountControl`. */
+  private toggleAccountDisable(
     kind: AccountKind,
     id: DirectoryObjectIdentifier,
     ctx: WriteContext,
     disable: boolean,
   ): Promise<MutationResult> {
+    return this.setAccountControlFlag(kind, id, ctx, {
+      flag: UAC.ACCOUNTDISABLE,
+      on: disable,
+      snapshot: (uac) => ({ enabled: (uac & UAC.ACCOUNTDISABLE) === 0 }),
+      refuse: kind === 'computer' && disable ? protectedComputer : undefined,
+    });
+  }
+
+  requirePasswordChange(
+    userId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const target = await this.findUserEntry(client, userId);
+        if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
+        const before = normalizeUser(target);
+        await client.modify(
+          before.distinguishedName,
+          new Change({
+            operation: 'replace',
+            modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
+          }),
+        );
+        const afterEntry = await this.findUserEntry(client, userId);
+        const after = afterEntry ? normalizeUser(afterEntry) : null;
+        return {
+          ok: true,
+          before: {
+            passwordMustChange: before.passwordMustChange,
+            passwordLastSetAt: before.passwordLastSetAt?.toISOString() ?? null,
+          },
+          after: {
+            passwordMustChange: after ? after.passwordMustChange : true,
+            passwordLastSetAt: after?.passwordLastSetAt?.toISOString() ?? null,
+          },
+        };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  setPasswordNeverExpires(
+    userId: DirectoryObjectIdentifier,
+    neverExpires: boolean,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.setAccountControlFlag('user', userId, ctx, {
+      flag: UAC.DONT_EXPIRE_PASSWORD,
+      on: neverExpires,
+      snapshot: (uac) => ({ passwordNeverExpires: (uac & UAC.DONT_EXPIRE_PASSWORD) !== 0 }),
+    });
+  }
+
+  /**
+   * Set or clear one bit of `userAccountControl`. Reads the current value
+   * from the live entry so we don't clobber the other bits
+   * (DONT_EXPIRE_PASSWORD, WORKSTATION_TRUST_ACCOUNT, etc). Before and
+   * after are the bit as `snapshot` names it, with the whole value.
+   */
+  private async setAccountControlFlag(
+    kind: AccountKind,
+    id: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+    write: {
+      flag: number;
+      on: boolean;
+      snapshot: (uac: number) => Record<string, unknown>;
+      refuse?: ((entry: Entry) => MutationResult | null) | undefined;
+    },
+  ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
         const target = await this.findAccountEntry(client, kind, id);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: `${kind} not found` };
-        const refused = kind === 'computer' && disable ? protectedComputer(target) : null;
+        const refused = write.refuse?.(target) ?? null;
         if (refused) return refused;
         const dn = asString(target.distinguishedName) ?? target.dn;
         const uacNum = userAccountControlOf(target);
@@ -842,15 +912,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             errorMessage: 'unparseable userAccountControl',
           };
         }
-        const enabled = (uacNum & UAC.ACCOUNTDISABLE) === 0;
-        const nextUac = disable ? uacNum | UAC.ACCOUNTDISABLE : uacNum & ~UAC.ACCOUNTDISABLE;
+        const nextUac = write.on ? uacNum | write.flag : uacNum & ~write.flag;
+        const before = { ...write.snapshot(uacNum), userAccountControl: uacNum };
         if (nextUac === uacNum) {
           // Idempotent no-op.
-          return {
-            ok: true,
-            before: { enabled, userAccountControl: uacNum },
-            after: { enabled, userAccountControl: uacNum },
-          };
+          return { ok: true, before, after: before };
         }
 
         await client.modify(dn, accountControlChange(nextUac));
@@ -858,17 +924,15 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         const afterEntry = await this.findAccountEntry(client, kind, id);
         return {
           ok: true,
-          before: { enabled, userAccountControl: uacNum },
+          before,
           after: {
-            enabled: afterEntry
-              ? (userAccountControlOf(afterEntry) & UAC.ACCOUNTDISABLE) === 0
-              : !disable,
+            ...write.snapshot(afterEntry ? userAccountControlOf(afterEntry) : nextUac),
             userAccountControl: nextUac,
           },
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz = /no write|insuff/i.test(message);
+        const isAuthz = err instanceof InsufficientAccessError || /no write|insuff/i.test(message);
         return {
           ok: false,
           reason: isAuthz ? 'permission_denied' : 'directory_error',
@@ -1155,7 +1219,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz = /no write|insuff|access/i.test(message);
+        const isAuthz =
+          err instanceof InsufficientAccessError || /no write|insuff|access/i.test(message);
         return {
           ok: false,
           reason: isAuthz ? 'permission_denied' : 'directory_error',
