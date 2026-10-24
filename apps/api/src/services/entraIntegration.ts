@@ -20,10 +20,39 @@ export const ENTRA_FEATURE_KEYS = [
   'mfaRegistration',
   'teamsAdminWebhook',
   'passwordExpiryNotifications',
+  'temporaryAccessPass',
 ] as const;
 export type EntraFeatureKey = (typeof ENTRA_FEATURE_KEYS)[number];
 
 export type EntraFeatureFlags = Partial<Record<EntraFeatureKey, boolean>>;
+
+/**
+ * The application permissions a feature needs that the connection test
+ * checks, each met by any one of its names (the first is the narrowest).
+ */
+const FEATURE_PERMISSIONS: Partial<Record<EntraFeatureKey, readonly (readonly string[])[]>> = {
+  temporaryAccessPass: [
+    ['UserAuthMethod-TAP.ReadWrite.All', 'UserAuthenticationMethod.ReadWrite.All'],
+    ['Policy.Read.AuthenticationMethod', 'Policy.ReadWrite.AuthenticationMethod'],
+    ['User.Read.All', 'User.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
+  ],
+};
+
+/** The narrowest permission for each need of the turned-on features that isn't granted. */
+export function missingPermissions(
+  features: EntraFeatureFlags,
+  granted: readonly string[],
+): string[] {
+  const have = new Set(granted);
+  const missing = new Set<string>();
+  for (const key of ENTRA_FEATURE_KEYS) {
+    if (!features[key]) continue;
+    for (const anyOf of FEATURE_PERMISSIONS[key] ?? []) {
+      if (!anyOf.some((p) => have.has(p))) missing.add(anyOf[0]!);
+    }
+  }
+  return [...missing];
+}
 
 export interface EntraIntegrationSummary {
   id: number;

@@ -27,3 +27,5 @@ export * from './schemas/userCreate.js';
 export * from './userCreation.js';
 export * from './schemas/userImport.js';
 export * from './userImport.js';
+export * from './schemas/temporaryAccessPass.js';
+export * from './temporaryAccessPass.js';

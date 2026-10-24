@@ -72,9 +72,38 @@ export class GraphClient {
    * with a hint about the most likely missing permission so the operator
    * sees something more useful than "Forbidden".
    */
-  async getJson<T = unknown>(path: string): Promise<GraphResponse<T>> {
-    const res = await this.request(path, { method: 'GET' });
+  async getJson<T = unknown>(
+    path: string,
+    opts: { headers?: Record<string, string> } = {},
+  ): Promise<GraphResponse<T>> {
+    const res = await this.request(path, { method: 'GET', ...opts });
     return await readJson<T>(res, path);
+  }
+
+  /** Issue a JSON POST against Graph. Errors as `getJson`. */
+  async postJson<T = unknown>(path: string, body: unknown): Promise<GraphResponse<T>> {
+    const res = await this.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await readJson<T>(res, path);
+  }
+
+  /**
+   * The application permissions admin consent has granted, from the access
+   * token's `roles` claim, so a missing one can be named without calling
+   * the API it guards (some of which write).
+   */
+  async grantedPermissions(): Promise<string[]> {
+    const token = await this.getToken();
+    try {
+      const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
+      const roles: unknown = payload?.roles;
+      return Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string') : [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -288,6 +317,15 @@ function permissionHintForPath(status: number, path: string, code: string | null
     }
     if (path.includes('/photo')) {
       return 'User.Read.All (Application) is required to read user photos';
+    }
+    if (path.includes('/temporaryAccessPassMethods')) {
+      return 'UserAuthMethod-TAP.ReadWrite.All (Application) is required to issue Temporary Access Passes';
+    }
+    if (path.includes('/authenticationMethodsPolicy')) {
+      return 'Policy.Read.AuthenticationMethod (Application) is required to read the Temporary Access Pass policy';
+    }
+    if (path.startsWith('/users')) {
+      return 'User.Read.All (Application) is required to find users and their roles';
     }
     if (path.includes('/organization')) {
       return 'Directory.Read.All (Application) is required for the /organization probe';
