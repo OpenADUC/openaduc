@@ -8,6 +8,13 @@ import { z } from 'zod';
 /** Graph's own bounds on any pass's lifetime, whatever the tenant allows. */
 export const TAP_LIFETIME_BOUNDS = { min: 10, max: 43_200 } as const;
 
+/**
+ * How far ahead a pass may start. Graph documents no limit; this keeps a
+ * pass for an onboarding class within reach without minting one months
+ * ahead of anyone needing it.
+ */
+export const TAP_MAX_START_DAYS = 30;
+
 export const tapPolicySchema = z.object({
   defaultLifetimeMinutes: z.number().int(),
   minLifetimeMinutes: z.number().int(),
@@ -32,8 +39,10 @@ export type ExistingTap = z.infer<typeof existingTapSchema>;
 export const tapRefusalReasonSchema = z.enum([
   /** In a group AD protects, or one mapped to OpenADUC's admin role. */
   'privileged',
-  /** Holds a Microsoft Entra administrator role. */
+  /** Holds, or is eligible for, a Microsoft Entra role. */
   'entraAdminRole',
+  /** Entra wouldn't say which roles the user holds or is eligible for. */
+  'entraRolesUnknown',
   /** The user's groups couldn't be read, so they can't be cleared. */
   'membershipUnknown',
   /** The tenant has Temporary Access Pass turned off. */
@@ -47,6 +56,11 @@ export const tapPreflightSchema = z.discriminatedUnion('status', [
     status: z.literal('ready'),
     policy: tapPolicySchema,
     existing: existingTapSchema.nullable(),
+    /**
+     * The user is among the policy's targets, so Entra accepts their pass;
+     * null when the policy doesn't say.
+     */
+    inPolicyScope: z.boolean().nullable(),
   }),
   z.object({
     status: z.literal('refused'),

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { lifetimeLabel, tapRequestProblem } from './temporaryAccessPass.js';
+import { lifetimeLabel, tapExpiresAt, tapRequestProblem } from './temporaryAccessPass.js';
 import type { TapPolicy } from './schemas/temporaryAccessPass.js';
 
 const policy: TapPolicy = {
@@ -42,6 +42,20 @@ describe('tapRequestProblem', () => {
       'The pass can’t start in the past.',
     );
     expect(tapRequestProblem(policy, at('2026-10-30T09:00:00Z'), now)).toBeNull();
+  });
+
+  it('refuses a start more than 30 days ahead', () => {
+    const at = (iso: string) => ({ ...request, startsAt: iso });
+    expect(tapRequestProblem(policy, at('2026-11-23T12:00:00Z'), now)).toBeNull();
+    expect(tapRequestProblem(policy, at('2026-11-23T12:01:00Z'), now)).toBe(
+      'The pass can start at most 30 days from now.',
+    );
+  });
+});
+
+describe('tapExpiresAt', () => {
+  it('counts the lifetime from the start', () => {
+    expect(tapExpiresAt('2026-10-24T12:00:00Z', 90).toISOString()).toBe('2026-10-24T13:30:00.000Z');
   });
 });
 

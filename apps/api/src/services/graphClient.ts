@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger } from 'fastify';
+import { TAP_PERMISSIONS } from '@openaduc/shared';
 import type { EntraIntegrationCreds, EntraIntegrationService } from './entraIntegration.js';
 
 // Microsoft Graph client built around the OAuth 2.0 client-credentials
@@ -46,6 +47,8 @@ export class GraphPermissionError extends Error {
     public readonly statusCode: number,
     public readonly graphCode: string | null,
     public readonly hint: string | null,
+    /** Graph's own explanation, without the status and path. */
+    public readonly graphMessage: string | null = null,
   ) {
     super(message);
     this.name = 'GraphPermissionError';
@@ -298,15 +301,19 @@ async function readJson<T>(res: Response, path: string): Promise<GraphResponse<T
 async function raiseFromError(res: Response, path: string): Promise<never> {
   let message = `Graph ${res.status} on ${path}`;
   let code: string | null = null;
+  let graphMessage: string | null = null;
   try {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
-    if (body?.error?.message) message = `${message}: ${body.error.message}`;
+    if (body?.error?.message) {
+      graphMessage = body.error.message;
+      message = `${message}: ${graphMessage}`;
+    }
     if (body?.error?.code) code = body.error.code;
   } catch {
     /* fallthrough */
   }
   const hint = permissionHintForPath(res.status, path, code);
-  throw new GraphPermissionError(message, res.status, code, hint);
+  throw new GraphPermissionError(message, res.status, code, hint, graphMessage);
 }
 
 function permissionHintForPath(status: number, path: string, code: string | null): string | null {
@@ -319,13 +326,16 @@ function permissionHintForPath(status: number, path: string, code: string | null
       return 'User.Read.All (Application) is required to read user photos';
     }
     if (path.includes('/temporaryAccessPassMethods')) {
-      return 'UserAuthMethod-TAP.ReadWrite.All (Application) is required to issue Temporary Access Passes';
+      return `${TAP_PERMISSIONS.issue.name} (Application) is required to issue Temporary Access Passes`;
     }
     if (path.includes('/authenticationMethodsPolicy')) {
-      return 'Policy.Read.AuthenticationMethod (Application) is required to read the Temporary Access Pass policy';
+      return `${TAP_PERMISSIONS.policy.name} (Application) is required to read the Temporary Access Pass policy`;
+    }
+    if (path.includes('/roleManagement/')) {
+      return `${TAP_PERMISSIONS.roles.name} (Application) is required to read Entra role assignments and eligibilities`;
     }
     if (path.startsWith('/users')) {
-      return 'User.Read.All (Application) is required to find users and their roles';
+      return `${TAP_PERMISSIONS.users.name} (Application) is required to find users and their groups`;
     }
     if (path.includes('/organization')) {
       return 'Directory.Read.All (Application) is required for the /organization probe';
