@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { LdapTlsMode, NamingLookups, TakenNames } from '@openaduc/shared';
+import {
+  type LdapTlsMode,
+  type NamingLookups,
+  type TakenNames,
+  escapeRdnValueRfc,
+} from '@openaduc/shared';
 import {
   Attribute,
   Change,
@@ -81,7 +86,6 @@ import {
   USER_ATTRS_FULL,
   asString,
   asStringArray,
-  escapeRdnValueRfc,
   groupTypeValue,
   leafRdn,
   normalizeComputer,
