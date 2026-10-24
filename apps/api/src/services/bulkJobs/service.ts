@@ -22,13 +22,9 @@ import type { AuditEventInput, AuditService } from '../audit.js';
 import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
 import type { SessionsService } from '../sessions.js';
-import type { UserLiveRefreshService } from '../userLiveRefresh.js';
-import {
-  BULK_JOB_HANDLERS,
-  failureMessage,
-  type BulkJobHandlers,
-  type BulkRowOutcome,
-} from './handlers.js';
+import type { MembershipCacheDeps } from '../groupMembershipWrite.js';
+import { BULK_JOB_HANDLERS, type BulkJobHandlers, type BulkRowOutcome } from './handlers.js';
+import { failureMessage } from './rowMessages.js';
 
 export type JobRecord = Selectable<BulkJobsTable>;
 type RowRecord = Selectable<BulkJobRowsTable>;
@@ -50,7 +46,7 @@ export interface BulkJobDeps {
   sessions: Pick<SessionsService, 'findActiveElevated'>;
   credentialCache: Pick<CredentialCacheService, 'get'>;
   providers: Pick<ProviderFactory, 'buildForDirectory'>;
-  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
+  userLiveRefresh: MembershipCacheDeps['userLiveRefresh'];
 }
 
 /** Enough rows at once to keep a DC busy, not to flood it. */

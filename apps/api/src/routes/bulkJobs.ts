@@ -10,6 +10,7 @@ import {
   bulkJobRowsResponseSchema,
 } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { BulkJobRequestError } from '../services/bulkJobs/errors.js';
 import type { JobActor } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -35,7 +36,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
         },
       },
       handler: async (req, reply) => {
-        const id = await jobs.create(actorFrom(req), action, req.body);
+        const id = await jobs.create(actorFrom(req), action, req.body).catch(refuse);
         return reply
           .status(202)
           .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
@@ -116,6 +117,17 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     if (!job) throw NotFound('bulk job not found');
     return job;
   }
+}
+
+/** A request the job can't start as asked, as its HTTP error. */
+function refuse(err: unknown): never {
+  if (err instanceof BulkJobRequestError) {
+    switch (err.code) {
+      case 'group_not_found':
+        throw NotFound(err.message);
+    }
+  }
+  throw err;
 }
 
 function actorFrom(req: FastifyRequest): JobActor {

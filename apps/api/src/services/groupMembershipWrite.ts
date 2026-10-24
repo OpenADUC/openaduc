@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
+import type { BulkMembershipOp } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import type {
   DirectoryObjectIdentifier,
@@ -11,9 +12,15 @@ import { withAudit, type WriteOpResult } from './auditContext.js';
 import { reconcileNestedGroups, upsertGroup, type CachedGroup } from './groupCache.js';
 import type { UserLiveRefreshService } from './userLiveRefresh.js';
 
+/** What refreshing the cache after a membership change needs. */
+export interface MembershipCacheDeps {
+  db: Kysely<DB>;
+  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
+}
+
 export interface MembershipChange {
   kind: 'user' | 'group';
-  op: 'add' | 'remove';
+  op: BulkMembershipOp;
   member: { objectGuid: string; distinguishedName: string };
   group: Pick<CachedGroup, 'id' | 'distinguishedName' | 'name'>;
 }
@@ -72,10 +79,7 @@ export async function writeGroupMembership(
  * the parent group's member.
  */
 export async function refreshMembershipCache(
-  deps: {
-    db: Kysely<DB>;
-    userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
-  },
+  deps: MembershipCacheDeps,
   provider: DirectoryProvider,
   change: { kind: 'user'; memberId: string } | { kind: 'group'; groupId: string },
 ): Promise<void> {
