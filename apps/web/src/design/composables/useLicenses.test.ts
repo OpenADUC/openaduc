@@ -53,12 +53,12 @@ describe('useGroupLicenses', () => {
     const licensed = useLicensedGroupsStore();
     groupLicenses.mockResolvedValueOnce({
       status: 'synced',
-      licenses: [{ ...e3, disabledPlans: 0 }],
+      licenses: [{ ...e3, disabledPlanCount: 0 }],
       processingState: 'ProcessingComplete',
     });
     const read = useGroupLicenses();
     await read.load('g1');
-    expect(licensed.licensesOf('g1')).toEqual([{ ...e3, disabledPlans: 0 }]);
+    expect(licensed.licensesOf('g1')).toEqual([{ ...e3, disabledPlanCount: 0 }]);
 
     groupLicenses.mockResolvedValueOnce({ status: 'unsynced', lastSyncAt: null });
     await read.load('g1');

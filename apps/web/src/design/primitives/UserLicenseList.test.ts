@@ -11,7 +11,12 @@ vi.mock('../../api/index.js', () => ({ api: { users: { licenses } } }));
 
 const { default: UserLicenseList } = await import('./UserLicenseList.vue');
 
-const assignment = { state: 'active' as const, error: null, disabledPlans: 0, lastUpdatedAt: null };
+const assignment = {
+  state: 'active' as const,
+  error: null,
+  disabledPlanCount: 0,
+  lastUpdatedAt: null,
+};
 
 async function show(answer: UserLicenses) {
   licenses.mockResolvedValue(answer);
@@ -35,7 +40,7 @@ describe('UserLicenseList', () => {
           skuPartNumber: 'SPE_E3',
           name: 'Microsoft 365 E3',
           assignments: [
-            { ...assignment, group: null, disabledPlans: 2 },
+            { ...assignment, group: null, disabledPlanCount: 2 },
             {
               ...assignment,
               group: { entraGroupId: 'entra-eng', name: 'Engineering', groupId: 'g-eng' },

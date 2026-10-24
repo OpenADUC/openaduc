@@ -21,6 +21,7 @@ beforeEach(() => {
   licensed.mockReset().mockResolvedValue({
     enabled: true,
     refreshedAt: '2026-10-24T11:00:00Z',
+    refreshFailed: false,
     groups: [
       { id: 'g-eng', licenses: [e3] },
       { id: 'g-design', licenses: [visio, e3] },

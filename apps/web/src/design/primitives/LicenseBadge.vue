@@ -1,10 +1,8 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-// Marks a group that grants a Microsoft license, wherever a group is
-// picked, so an operator sees that adding someone to it licenses them.
-// From the shared licensed-groups cache: nothing per group is fetched.
 import { computed, onMounted } from 'vue';
 import { useLicensedGroupsStore } from '../../stores/licensedGroups.js';
+import { LICENSE_ICON } from '../lib/licenses.js';
 
 const props = defineProps<{ groupId: string }>();
 
@@ -22,7 +20,7 @@ const title = computed(
 
 <template>
   <span v-if="licenses.length" class="badge badge-green license-badge" :title="title">
-    <i class="pi pi-id-card" aria-hidden="true" />
+    <i :class="['pi', LICENSE_ICON]" aria-hidden="true" />
     <span class="license-badge-label">{{ label }}</span>
   </span>
 </template>

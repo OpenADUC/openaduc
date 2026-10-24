@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-// The Microsoft licenses a group grants its members through group-based
-// licensing, read live from Entra. Group pickers' badges follow it.
 import { watch } from 'vue';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import { useGroupLicenses } from '../composables/useLicenses.js';
-import { fmtAbsolute, fmtRelative } from '../lib/format.js';
+import { plansOffText } from '../lib/licenses.js';
+import LicenseName from './LicenseName.vue';
+import LicenseUnsynced from './LicenseUnsynced.vue';
 
 const props = defineProps<{ groupId: string; name: string }>();
 
@@ -22,7 +22,6 @@ const PROCESSING: Record<string, string> = {
   QueuedForProcessing: 'Entra is about to update its members’ licenses.',
   ProcessingInProgress: 'Entra is updating its members’ licenses.',
 };
-const plans = (n: number) => `${n} service plan${n === 1 ? '' : 's'} turned off`;
 </script>
 
 <template>
@@ -34,14 +33,11 @@ const plans = (n: number) => `${n} service plan${n === 1 ? '' : 's'} turned off`
       <Button label="Try again" size="small" text @click="load(groupId)" />
     </Message>
 
-    <p v-else-if="licenses?.status === 'unsynced'" class="hint">
-      {{ name }} isn’t in Microsoft Entra yet, so grants no licenses. It appears when Connect Sync
-      next runs<template v-if="licenses.lastSyncAt"
-        >; the tenant last synced {{ fmtRelative(licenses.lastSyncAt) }} ({{
-          fmtAbsolute(licenses.lastSyncAt)
-        }})</template
-      >.
-    </p>
+    <LicenseUnsynced
+      v-else-if="licenses?.status === 'unsynced'"
+      :name="name"
+      :last-sync-at="licenses.lastSyncAt"
+    />
 
     <template v-else-if="licenses?.status === 'synced'">
       <p v-if="licenses.licenses.length === 0" class="hint">
@@ -51,11 +47,10 @@ const plans = (n: number) => `${n} service plan${n === 1 ? '' : 's'} turned off`
         <p class="glic-intro">Members get these through the group:</p>
         <ul class="glic-list">
           <li v-for="l in licenses.licenses" :key="l.skuId" class="glic-item">
-            <span class="glic-name">{{ l.name }}</span>
-            <span v-if="l.skuPartNumber && l.skuPartNumber !== l.name" class="glic-part mono">{{
-              l.skuPartNumber
-            }}</span>
-            <span v-if="l.disabledPlans > 0" class="hint">· {{ plans(l.disabledPlans) }}</span>
+            <LicenseName :license="l" />
+            <span v-if="l.disabledPlanCount > 0" class="hint"
+              >· {{ plansOffText(l.disabledPlanCount) }}</span
+            >
           </li>
         </ul>
       </template>
@@ -87,15 +82,5 @@ const plans = (n: number) => `${n} service plan${n === 1 ? '' : 's'} turned off`
   align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.glic-name {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.glic-part {
-  font-size: 11px;
-  color: var(--text-3);
 }
 </style>
