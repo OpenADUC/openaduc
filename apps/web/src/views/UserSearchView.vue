@@ -1,5 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
+import { useBulkAccountChange } from '../design/composables/useBulkAccountChange.js';
 import { useBulkActions, type BulkAction } from '../design/composables/useBulkActions.js';
 import { useBulkAttributeEdit } from '../design/composables/useBulkAttributeEdit.js';
 import { useBulkGroupMembership } from '../design/composables/useBulkGroupMembership.js';
@@ -21,7 +22,15 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
-import { csvRow, type UserCreateResponse, type UserSummary } from '@openaduc/shared';
+import {
+  BULK_ACCOUNT_ACTIONS,
+  BULK_ACCOUNT_OPS,
+  csvRow,
+  type BulkAccountOp,
+  type Capability,
+  type UserCreateResponse,
+  type UserSummary,
+} from '@openaduc/shared';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -30,6 +39,7 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import BulkAccountDialog from '../design/feedback/BulkAccountDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import BulkEditDialog from '../design/feedback/BulkEditDialog.vue';
 import BulkGroupsDialog from '../design/feedback/BulkGroupsDialog.vue';
@@ -453,6 +463,7 @@ const {
   startBulk,
   startGroupChange,
   startAttributeEdit,
+  startAccountChange,
   continueJob,
   retryFailed,
   stopJob,
@@ -477,6 +488,30 @@ const attributeEdit = useBulkAttributeEdit({
   ids: () => Array.from(selectedIds.value),
   start: startAttributeEdit,
 });
+
+// Each account change takes the capability its single-user write does.
+const BULK_ACCOUNT_CAPABILITIES: Record<BulkAccountOp, Capability> = {
+  move: 'write:user.move',
+  accountExpiry: 'write:user.enableDisable',
+  mustChangePassword: 'write:user.resetPassword',
+  clearPasswordNeverExpires: 'write:user.enableDisable',
+};
+const allowedAccountOps = computed(() =>
+  BULK_ACCOUNT_OPS.filter((op) => auth.hasCapability(BULK_ACCOUNT_CAPABILITIES[op])),
+);
+const accountSettingOps = computed(() => allowedAccountOps.value.filter((op) => op !== 'move'));
+const canBulkMove = computed(() => allowedAccountOps.value.includes('move'));
+const accountChange = useBulkAccountChange({
+  ids: () => Array.from(selectedIds.value),
+  start: startAccountChange,
+  allowed: () => allowedAccountOps.value,
+});
+const accountJobPending = computed(
+  () =>
+    pendingBulkAction.value !== null &&
+    pendingBulkAction.value !== 'user.move' &&
+    (Object.values(BULK_ACCOUNT_ACTIONS) as string[]).includes(pendingBulkAction.value),
+);
 
 const BULK_ICONS: Record<BulkAction, string> = {
   disable: 'pi pi-ban',
@@ -529,7 +564,8 @@ const canBulkAct = computed(
     canBulkUnlock.value ||
     canBulkDelete.value ||
     canBulkGroups.value ||
-    canBulkEdit.value,
+    canBulkEdit.value ||
+    allowedAccountOps.value.length > 0,
 );
 const pasteListOpen = ref(false);
 
@@ -857,6 +893,26 @@ onMounted(() => {
             @click="attributeEdit.open()"
           />
           <Button
+            v-if="canBulkMove"
+            label="Move…"
+            icon="pi pi-folder-open"
+            severity="secondary"
+            size="small"
+            :loading="bulkRunning && pendingBulkAction === 'user.move'"
+            :disabled="bulkRunning"
+            @click="accountChange.open('move')"
+          />
+          <Button
+            v-if="accountSettingOps.length > 0"
+            label="Account…"
+            icon="pi pi-id-card"
+            severity="secondary"
+            size="small"
+            :loading="bulkRunning && accountJobPending"
+            :disabled="bulkRunning"
+            @click="accountChange.open(accountSettingOps[0]!)"
+          />
+          <Button
             v-if="canBulkDelete"
             label="Delete…"
             icon="pi pi-trash"
@@ -913,6 +969,7 @@ onMounted(() => {
 
     <BulkGroupsDialog :workflow="groupChange" :hidden-count="hiddenSelectedCount" />
     <BulkEditDialog :workflow="attributeEdit" :hidden-count="hiddenSelectedCount" />
+    <BulkAccountDialog :workflow="accountChange" :hidden-count="hiddenSelectedCount" />
 
     <PasteListDialog
       v-model:visible="pasteListOpen"

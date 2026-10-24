@@ -60,6 +60,28 @@ describe('ActivityFeed', () => {
     expect(details).toEqual(['To: Staff', 'To: OU=Labs,DC=corp']);
   });
 
+  it('says a bulk account change left a user already as asked alone', () => {
+    const page = feed([
+      anEvent({
+        id: '1',
+        action: 'user.move',
+        metadata: { targetOuName: 'Staff', unchanged: true },
+      }),
+      anEvent({ id: '2', action: 'user.passwordMustChange.set', metadata: { unchanged: true } }),
+      anEvent({ id: '3', action: 'user.passwordNeverExpires.clear' }),
+    ]);
+
+    expect(page.findAll('.af-title').map((t) => t.text())).toEqual([
+      'Moved to OU',
+      'Must change password at next sign-in',
+      'Password set to expire',
+    ]);
+    expect(page.findAll('.af-detail').map((d) => d.text())).toEqual([
+      'Already as asked; nothing changed',
+      'Already as asked; nothing changed',
+    ]);
+  });
+
   it('names the computer actions', () => {
     const page = feed(
       ['computer.disable', 'computer.enable', 'computer.account.reset'].map((action, i) =>
