@@ -30,11 +30,12 @@ import {
   mappingProblems,
   namingRequestOf,
   parseTable,
-  resolveManager,
+  resolveManagers,
+  addressConflicts,
   reviewImportRow,
   ruleFor,
   startingPlacement,
-  type BatchAccount,
+  type PlannedAccount,
   type BucketPlacement,
   type DirectoryPolicy,
   type GroupSummary,
@@ -57,11 +58,13 @@ import {
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
+import { decodeCsv, isWorkbook } from '../lib/csvFile.js';
 import {
   IMPORT_STEPS,
   clearDraft,
   loadDraft,
   saveDraft,
+  type DraftOwner,
   type ImportDraft,
   type ImportStep,
   type TypedNames,
@@ -123,10 +126,38 @@ export interface RowDeviation {
   deviation: NamingDeviation;
 }
 
+/**
+ * A check of the directory run after a pause, keeping only the latest
+ * one's answer. `prepare` says what to ask, or null to ask nothing.
+ */
+function delayedCheck<T>(
+  prepare: () => (() => Promise<T>) | null,
+  settle: (answer: T) => void,
+  fail: (err: unknown) => void,
+): () => void {
+  const guard = latestRequest();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return () => {
+    clearTimeout(timer);
+    const isCurrent = guard.begin();
+    const ask = prepare();
+    if (!ask) return;
+    timer = setTimeout(async () => {
+      try {
+        const answer = await ask();
+        if (isCurrent()) settle(answer);
+      } catch (err) {
+        if (isCurrent()) fail(err);
+      }
+    }, CHECK_DELAY_MS);
+  };
+}
+
 export function useUserImport() {
   const auth = useAuthStore();
   const draft = reactive<ImportDraft>(blankDraft(null, DEFAULT_NEW_USER_SETTINGS));
   const directoryId = ref<number | null>(null);
+  const owner = ref<DraftOwner | null>(null);
   const naming = ref<NamingSettings | null>(null);
   const settings = ref<NewUserSettings>({ ...DEFAULT_NEW_USER_SETTINGS });
   const policy = ref<DirectoryPolicy | null>(null);
@@ -137,14 +168,16 @@ export function useUserImport() {
   const password = ref('');
 
   /**
-   * Load the directory's settings and resume the draft, unless it's
-   * still empty and the import was started from an OU.
+   * Load the directory's settings and resume the draft. Started from an
+   * OU, that OU becomes the start OU: buckets the operator hasn't placed
+   * follow it, a resumed draft's included.
    */
   async function start(startOuDn: string | null = null): Promise<void> {
     const id = auth.actor?.directoryId ?? null;
     directoryId.value = id;
+    owner.value = id && auth.actor ? { directoryId: id, actorId: auth.actor.actorId } : null;
     loadError.value = null;
-    if (!id) return;
+    if (!id || !owner.value) return;
     loading.value = true;
     try {
       const [n, u, p, r] = await Promise.all([
@@ -165,22 +198,22 @@ export function useUserImport() {
     } finally {
       loading.value = false;
     }
-    const saved = loadDraft(id);
-    const fresh = !saved || (!saved.table && startOuDn !== null);
-    Object.assign(draft, fresh ? blankDraft(startOuDn, settings.value) : saved);
+    const saved = loadDraft(owner.value);
+    Object.assign(draft, saved ?? blankDraft(startOuDn, settings.value));
+    if (startOuDn) draft.startOuDn = startOuDn;
   }
 
   watch(
     draft,
     () => {
-      if (directoryId.value) saveDraft(directoryId.value, draft);
+      if (owner.value) saveDraft(owner.value, draft);
     },
     { deep: true },
   );
 
   /** Forget the draft and start again from the source. */
   function startOver(): void {
-    if (directoryId.value) clearDraft(directoryId.value);
+    if (owner.value) clearDraft(owner.value);
     Object.assign(draft, blankDraft(draft.startOuDn, settings.value));
     password.value = '';
     forgetCheck();
@@ -202,7 +235,6 @@ export function useUserImport() {
     forgetCheck();
   }
 
-  /** Rows pasted from a spreadsheet. */
   function paste(text: string): void {
     sourceError.value = null;
     if (text.trim()) useTable(text, null);
@@ -211,15 +243,12 @@ export function useUserImport() {
   /** A CSV file dropped or picked. Excel workbooks are refused: save them as CSV. */
   async function readFile(file: File): Promise<void> {
     sourceError.value = null;
-    const bytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-    // .xlsx and .ods are zip archives; .xls is an OLE compound file.
-    const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-    const ole = bytes[0] === 0xd0 && bytes[1] === 0xcf;
-    if (zip || ole || /\.(xlsx|xlsm|xls|ods|numbers)$/i.test(file.name)) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (isWorkbook(bytes) || /\.(xlsx|xlsm|xls|ods|numbers)$/i.test(file.name)) {
       sourceError.value = `${file.name} is a workbook. Save it as CSV first, or copy the rows from Excel and paste them.`;
       return;
     }
-    useTable(await file.text(), file.name);
+    useTable(decodeCsv(bytes), file.name);
   }
 
   const sourceProblems = computed(() => {
@@ -278,6 +307,10 @@ export function useUserImport() {
     );
   };
 
+  /** A row as the operator knows it: its spreadsheet row and the person's name. */
+  const rowRef = (row: number) => ({ row, line: lineOf(row), name: nameOf(row) });
+
+  /** Leave any row out of the import, whatever its state. */
   function exclude(row: number): void {
     if (!excluded.value.has(row)) draft.excluded = [...draft.excluded, row];
   }
@@ -390,69 +423,62 @@ export function useUserImport() {
   const people = shallowRef<ImportPerson[] | null>(null);
   const checkedLookupsKey = ref<string | null>(null);
   const reviewError = ref<string | null>(null);
-  const nameChecks = latestRequest();
-  const lookupChecks = latestRequest();
-  let namesTimer: ReturnType<typeof setTimeout> | undefined;
-  let lookupsTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function checkNames(): void {
-    clearTimeout(namesTimer);
-    const isCurrent = nameChecks.begin();
-    const id = directoryId.value;
-    if (!reviewing.value || !id) return;
-    const key = namesKey.value;
-    const requests = namingRequests.value;
-    namesTimer = setTimeout(async () => {
-      try {
-        const r =
+  const checkNames = delayedCheck(
+    () => {
+      const id = directoryId.value;
+      if (!reviewing.value || !id) return null;
+      const key = namesKey.value;
+      const requests = namingRequests.value;
+      return async () => ({
+        key,
+        requests,
+        answers:
           requests.length === 0
-            ? { suggestions: [] }
-            : await api.directories.naming.check(id, {
-                names: requests.map(({ request }) => ({
-                  ...request.name,
-                  ...(request.ouDn ? { ouDn: request.ouDn } : {}),
-                  overrides: request.overrides,
-                })),
-              });
-        if (!isCurrent()) return;
-        suggestions.value = new Map(requests.map(({ row }, i) => [row, r.suggestions[i]!]));
-        checkedNamesKey.value = key;
-        reviewError.value = null;
-      } catch (err) {
-        if (isCurrent()) reviewError.value = errorMessage(err, 'Couldn’t check the names');
-      }
-    }, CHECK_DELAY_MS);
-  }
+            ? []
+            : (
+                await api.directories.naming.check(id, {
+                  names: requests.map(({ request }) => ({
+                    ...request.name,
+                    ...(request.ouDn ? { ouDn: request.ouDn } : {}),
+                    overrides: request.overrides,
+                  })),
+                })
+              ).suggestions,
+      });
+    },
+    ({ key, requests, answers }) => {
+      suggestions.value = new Map(requests.map(({ row }, i) => [row, answers[i]!]));
+      checkedNamesKey.value = key;
+      reviewError.value = null;
+    },
+    (err) => (reviewError.value = errorMessage(err, 'Couldn’t check the names')),
+  );
 
-  function lookUp(): void {
-    clearTimeout(lookupsTimer);
-    const isCurrent = lookupChecks.begin();
-    if (!reviewing.value) return;
-    const key = lookupsKey.value;
-    const body = lookups.value;
-    lookupsTimer = setTimeout(async () => {
-      try {
-        const r = await api.users.import.lookup(body);
-        if (!isCurrent()) return;
-        people.value = r.people;
-        checkedLookupsKey.value = key;
-        reviewError.value = null;
-      } catch (err) {
-        if (isCurrent()) {
-          reviewError.value = errorMessage(
-            err,
-            'Couldn’t look for people already in the directory',
-          );
-        }
-      }
-    }, CHECK_DELAY_MS);
-  }
+  const lookUp = delayedCheck(
+    () => {
+      if (!reviewing.value) return null;
+      const key = lookupsKey.value;
+      const body = lookups.value;
+      return async () => ({ key, found: (await api.users.import.lookup(body)).people });
+    },
+    ({ key, found }) => {
+      people.value = found;
+      checkedLookupsKey.value = key;
+      reviewError.value = null;
+    },
+    (err) =>
+      (reviewError.value = errorMessage(err, 'Couldn’t look for people already in the directory')),
+  );
 
   watch([namesKey, reviewing], checkNames);
   watch([lookupsKey, reviewing], lookUp);
 
-  function retryReview(): void {
+  /** Ask the directory again: after an error, or a final check that found it changed. */
+  function recheckReview(): void {
     reviewError.value = null;
+    checkedNamesKey.value = null;
+    checkedLookupsKey.value = null;
     checkNames();
     lookUp();
   }
@@ -482,36 +508,51 @@ export function useUserImport() {
   const reviews = computed(() => {
     const found = lookupsCurrent.value ? people.value : null;
     const current = namesCurrent.value ? suggestions.value : new Map<number, NamingSuggestion>();
-    const out = new Map<number, ReviewedRow>();
-    const first = new Map<number, ImportRowReview>();
-    const context = (row: number, manager: ManagerMatch) => ({
-      suggestion: current.get(row) ?? null,
-      approved: approvedByRow.value.get(row) ?? new Set<string>(),
-      people: found,
-      manager,
-      phoneCountry: settings.value.phoneCountry,
-    });
-    for (const row of included.value) {
-      first.set(row, reviewImportRow(values.value[row]!, context(row, { kind: 'none' })));
-    }
-    const batch: BatchAccount[] = included.value.flatMap((row) => {
+    const rows = included.value;
+    const review = (
+      row: number,
+      manager: ManagerMatch = { kind: 'none' },
+      conflicts: readonly string[] = [],
+    ) =>
+      reviewImportRow(values.value[row]!, {
+        suggestion: current.get(row) ?? null,
+        approved: approvedByRow.value.get(row) ?? new Set<string>(),
+        people: found,
+        manager,
+        conflicts,
+        phoneCountry: settings.value.phoneCountry,
+      });
+    const existing = new Set(rows.filter((row) => review(row).existing));
+    const accounts: PlannedAccount[] = rows.flatMap((row) => {
       const s = current.get(row);
-      if (!s || first.get(row)!.existing) return [];
+      if (!s || existing.has(row)) return [];
       const email = values.value[row]!.email || null;
       return [{ index: row, email, upn: s.upn, samAccountName: s.samAccountName }];
     });
-    for (const row of included.value) {
-      const v = values.value[row]!;
-      const manager = found
-        ? resolveManager(v.manager, row, batch, found)
-        : { kind: 'none' as const };
-      out.set(row, {
-        review: v.manager ? reviewImportRow(v, context(row, manager)) : first.get(row)!,
-        suggestion: current.get(row) ?? null,
-        manager,
-      });
-    }
-    return out;
+    const conflicts = found
+      ? addressConflicts(accounts, found, lineOf)
+      : new Map<number, string[]>();
+    const managers = found
+      ? resolveManagers(
+          rows.map((row) => ({ index: row, manager: values.value[row]!.manager })),
+          accounts,
+          found,
+          lineOf,
+        )
+      : new Map<number, ManagerMatch>();
+    return new Map<number, ReviewedRow>(
+      rows.map((row) => {
+        const manager = managers.get(row) ?? { kind: 'none' };
+        return [
+          row,
+          {
+            review: review(row, manager, conflicts.get(row)),
+            suggestion: current.get(row) ?? null,
+            manager,
+          },
+        ];
+      }),
+    );
   });
 
   const rowsOf = (status: ImportRowReview['status']) =>
@@ -523,12 +564,9 @@ export function useUserImport() {
 
   const deviationsOf = (pick: (d: NamingDeviation) => boolean): RowDeviation[] =>
     toCreate.value.flatMap((row) =>
-      (reviews.value.get(row)?.suggestion?.deviations ?? []).filter(pick).map((deviation) => ({
-        row,
-        line: lineOf(row),
-        name: nameOf(row),
-        deviation,
-      })),
+      (reviews.value.get(row)?.suggestion?.deviations ?? [])
+        .filter(pick)
+        .map((deviation) => ({ ...rowRef(row), deviation })),
     );
   /** Approved together, with Approve all; each value can be typed instead. */
   const truncations = computed(() => deviationsOf((d) => d.kind === 'truncated'));
@@ -548,28 +586,24 @@ export function useUserImport() {
 
   const blockedRows = computed(() =>
     rowsOf('blocked').map((row) => ({
-      row,
-      line: lineOf(row),
-      name: nameOf(row),
+      ...rowRef(row),
       blockers: reviews.value.get(row)!.review.blockers,
     })),
   );
   const warnedRows = computed(() =>
     toCreate.value.flatMap((row) => {
       const warnings = reviews.value.get(row)?.review.warnings ?? [];
-      return warnings.length ? [{ row, line: lineOf(row), name: nameOf(row), warnings }] : [];
+      return warnings.length ? [{ ...rowRef(row), warnings }] : [];
     }),
   );
   /** Rows that are someone already in the directory: skipped, as an import only creates. */
   const skipped = computed(() =>
     included.value.flatMap((row) => {
       const existing = reviews.value.get(row)?.review.existing;
-      return existing ? [{ row, line: lineOf(row), name: nameOf(row), existing }] : [];
+      return existing ? [{ ...rowRef(row), existing }] : [];
     }),
   );
-  const excludedRows = computed(() =>
-    draft.excluded.map((row) => ({ row, line: lineOf(row), name: nameOf(row) })),
-  );
+  const excludedRows = computed(() => draft.excluded.map(rowRef));
 
   /** What a name field shows: the typed value, else the check's. */
   function nameValue(row: number, field: keyof TypedNames): string {
@@ -596,14 +630,40 @@ export function useUserImport() {
 
   // ---- Buckets, as placed --------------------------------------------------
 
+  /**
+   * What running the import remembers for a bucket: a placement the
+   * operator chose replaces its rule, or becomes one. One it only started
+   * with (the OU the import was started from) leaves a rule as it is.
+   */
+  function rememberedAs(
+    key: string,
+    placement: BucketPlacement,
+    rule: PlacementRule | null,
+  ): 'new' | 'update' | 'keep' | null {
+    if (!groupBy.value || !placement.ouDn) return null;
+    if (!rule) return 'new';
+    if (!draft.placements[key]) return 'keep';
+    const sameGroups =
+      rule.groups.length === placement.groups.length &&
+      rule.groups.every((g) => placement.groups.some((p) => p.id === g.id));
+    return rule.ouDn.toLowerCase() === placement.ouDn.toLowerCase() && sameGroups
+      ? 'keep'
+      : 'update';
+  }
+
   const buckets = computed(() =>
-    allBuckets.value.map((b) => ({
-      ...b,
-      placement: placementOf(b.key),
-      rule: ruleFor(rules.value, groupBy.value, b),
-      /** The rows the import creates. */
-      creating: b.rows.filter((r) => !reviews.value.get(r)?.review.existing).length,
-    })),
+    allBuckets.value.map((b) => {
+      const placement = placementOf(b.key);
+      const rule = ruleFor(rules.value, groupBy.value, b);
+      return {
+        ...b,
+        placement,
+        rule,
+        /** The rows the import creates. */
+        creating: b.rows.filter((r) => !reviews.value.get(r)?.review.existing).length,
+        remember: rememberedAs(b.key, placement, rule),
+      };
+    }),
   );
   const bucketProblems = computed(() =>
     buckets.value
@@ -668,21 +728,26 @@ export function useUserImport() {
 
   const checking = ref(false);
   const checkError = ref<string | null>(null);
-  const checkResult = shallowRef<ImportCheckResponse | null>(null);
-  const checkedKey = ref<string | null>(null);
+  /** The last check, with the rows it was about. */
+  const lastCheck = shallowRef<{ key: string; rows: number[]; answer: ImportCheckResponse } | null>(
+    null,
+  );
   const rulesError = ref<string | null>(null);
   const acknowledgedProtected = ref(false);
 
   function forgetCheck(): void {
-    checkResult.value = null;
-    checkedKey.value = null;
+    lastCheck.value = null;
     checkError.value = null;
     rulesError.value = null;
     acknowledgedProtected.value = false;
   }
 
   /** The check's answer, while the import is still as it was checked. */
-  const result = computed(() => (checkedKey.value === requestKey.value ? checkResult.value : null));
+  const result = computed(() =>
+    lastCheck.value?.key === requestKey.value ? lastCheck.value.answer : null,
+  );
+  /** The import changed since the last check, so its answer is only a guide. */
+  const checkStale = computed(() => !!lastCheck.value && !result.value);
 
   function runCheck(): void {
     if (!importRequest.value || checking.value) return;
@@ -691,18 +756,17 @@ export function useUserImport() {
 
   async function commitCheck(): Promise<void> {
     const body = importRequest.value;
-    const id = directoryId.value;
-    if (!body || !id || checking.value) return;
+    if (!body || checking.value) return;
     const key = requestKey.value;
+    const rows = [...toCreate.value];
     checking.value = true;
     checkError.value = null;
-    rulesError.value = null;
     try {
-      const r = await api.users.import.check(body);
-      checkResult.value = r;
-      checkedKey.value = key;
+      const answer = await api.users.import.check(body);
+      lastCheck.value = { key, rows, answer };
       acknowledgedProtected.value = false;
-      if (r.problems.length === 0) await saveRules(id);
+      // What changed in the directory shows in the review too, to fix there.
+      if (answer.problems.length > 0) recheckReview();
     } catch (err) {
       if (auth.retryAfterStepUp(err, commitCheck)) return;
       checkError.value = errorMessage(err, 'Couldn’t run the final check');
@@ -711,15 +775,23 @@ export function useUserImport() {
     }
   }
 
-  /** Remember where each bucket went, for the next import grouped by this column. */
-  async function saveRules(id: number): Promise<void> {
+  /**
+   * Remember where each bucket went, for the next import grouped by this
+   * column: the run (#153) calls this once it starts. Not at the final
+   * check, so an import abandoned there leaves the rules as they were.
+   */
+  async function rememberPlacements(): Promise<void> {
+    const id = directoryId.value;
     const column = groupBy.value;
-    if (!column) return;
-    const placed = buckets.value.filter((b) => b.creating > 0 && b.placement.ouDn);
-    if (placed.length === 0) return;
+    if (!id || !column) return;
+    const changed = buckets.value.filter(
+      (b) => b.creating > 0 && (b.remember === 'new' || b.remember === 'update'),
+    );
+    if (changed.length === 0) return;
+    rulesError.value = null;
     try {
       const saved = await api.directories.placementRules.save(id, {
-        rules: placed.map((b) => ({
+        rules: changed.map((b) => ({
           column,
           value: b.key === '' ? '' : b.label,
           ouDn: b.placement.ouDn!,
@@ -734,15 +806,11 @@ export function useUserImport() {
 
   /** A check issue with the row it's about, as the spreadsheet numbers it. */
   const describeIssue = (issue: ImportCheckIssue) => {
-    const row = issue.row === null ? null : (toCreate.value[issue.row] ?? null);
-    return {
-      ...issue,
-      line: row === null ? null : lineOf(row),
-      name: row === null ? null : nameOf(row),
-    };
+    const row = issue.row === null ? null : (lastCheck.value?.rows[issue.row] ?? null);
+    return { ...issue, ...(row === null ? { row: null, line: null, name: null } : rowRef(row)) };
   };
-  const checkProblems = computed(() => result.value?.problems.map(describeIssue) ?? []);
-  const checkWarnings = computed(() => result.value?.warnings.map(describeIssue) ?? []);
+  const checkProblems = computed(() => lastCheck.value?.answer.problems.map(describeIssue) ?? []);
+  const checkWarnings = computed(() => lastCheck.value?.answer.warnings.map(describeIssue) ?? []);
   const protectedGroups = computed(() => result.value?.protectedGroups ?? []);
   /** Passed, and the operator acknowledged any group AD protects: ready for the run (#153). */
   const ready = computed(
@@ -810,7 +878,7 @@ export function useUserImport() {
     nameOf,
     pending,
     reviewError,
-    retryReview,
+    retryReview: recheckReview,
     reviews,
     toCreate,
     truncations,
@@ -854,6 +922,8 @@ export function useUserImport() {
     checking,
     checkError,
     result,
+    checkStale,
+    rememberPlacements,
     checkProblems,
     checkWarnings,
     protectedGroups,

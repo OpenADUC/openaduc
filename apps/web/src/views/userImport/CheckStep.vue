@@ -8,6 +8,7 @@
 import { computed } from 'vue';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
+import type { ImportCheckIssueKind } from '@openaduc/shared';
 import type { useUserImport } from '../../design/composables/useUserImport.js';
 import { fmtAbsolute } from '../../design/lib/format.js';
 
@@ -18,17 +19,25 @@ const {
   checking,
   checkError,
   result,
+  checkStale,
   checkProblems,
   checkWarnings,
   protectedGroups,
   acknowledgedProtected,
-  rulesError,
   ready,
 } = w;
 
 const count = computed(() => importRequest.value?.rows.length ?? 0);
 const people = (n: number) => (n === 1 ? '1 person' : `${n} people`);
 const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(', '));
+/** Where a problem is fixed: OUs and groups in Buckets, the rest in Review names. */
+const fixIn = (kind: ImportCheckIssueKind) =>
+  kind === 'ou_missing' || kind === 'group_missing' || kind === 'role_group'
+    ? ('buckets' as const)
+    : kind === 'password'
+      ? ('options' as const)
+      : ('names' as const);
+const FIX_LABEL = { names: 'Review names', buckets: 'Buckets', options: 'Options' };
 </script>
 
 <template>
@@ -37,8 +46,12 @@ const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(
       {{ people(count) }} to create. The final check asks the directory again whether each name is
       still free and each OU, group and manager still there. It changes nothing.
     </p>
+    <Message v-if="!importRequest" severity="warn" :closable="false" class="ck-msg">
+      Some rows need another look before the check.
+      <Button label="Review names" size="small" text @click="w.goTo('names')" />
+    </Message>
     <Button
-      :label="result ? 'Check again' : 'Run the final check'"
+      :label="result || checkStale ? 'Check again' : 'Run the final check'"
       icon="pi pi-shield"
       :loading="checking"
       :disabled="!importRequest"
@@ -48,21 +61,37 @@ const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(
       {{ checkError }}
     </Message>
 
-    <template v-if="result">
-      <p class="hint ck-when">Checked {{ fmtAbsolute(result.checkedAt) }}</p>
+    <template v-if="result || checkStale">
+      <p class="hint ck-when">
+        <template v-if="checkStale">You’ve changed the import since the last check. </template>
+        <template v-else-if="result">Checked {{ fmtAbsolute(result.checkedAt) }}</template>
+      </p>
       <section v-if="checkProblems.length" class="ck-section">
         <h3 class="ck-title ck-bad">Changed since the review ({{ checkProblems.length }})</h3>
+        <p class="ck-note">The review has asked the directory again, so they show there too.</p>
         <ul class="ck-list">
           <li v-for="(p, i) in checkProblems" :key="i">
             <span v-if="p.line" class="ck-line">Row {{ p.line }} · {{ p.name }}</span>
             {{ p.message }}
+            <span class="ck-actions">
+              <Button
+                :label="FIX_LABEL[fixIn(p.kind)]"
+                size="small"
+                text
+                @click="w.goTo(fixIn(p.kind))"
+              />
+              <Button
+                v-if="p.row !== null"
+                label="Leave out"
+                size="small"
+                text
+                severity="secondary"
+                :aria-label="`Leave row ${p.line} out`"
+                @click="w.exclude(p.row)"
+              />
+            </span>
           </li>
         </ul>
-        <p class="ck-note">
-          Go back to fix them: names in Review names, OUs and groups in Buckets.
-          <Button label="Review names" size="small" text @click="w.goTo('names')" />
-          <Button label="Buckets" size="small" text @click="w.goTo('buckets')" />
-        </p>
       </section>
       <section v-if="checkWarnings.length" class="ck-section">
         <h3 class="ck-title ck-warn">Worth a look ({{ checkWarnings.length }})</h3>
@@ -73,16 +102,15 @@ const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(
           </li>
         </ul>
       </section>
-      <label v-if="protectedGroups.length && !checkProblems.length" class="ck-ack">
-        <input v-model="acknowledgedProtected" type="checkbox" />
-        <span>I understand these users gain admin rights in AD through {{ groupNames }}.</span>
-      </label>
-      <Message v-if="rulesError" severity="warn" :closable="false" class="ck-msg">
-        {{ rulesError }}. The next import won’t be prefilled from this one.
-      </Message>
-      <p v-if="!checkProblems.length" class="ck-ok">
-        <i class="pi pi-check-circle" aria-hidden="true" /> Ready to import {{ people(count) }}.
-      </p>
+      <template v-if="result && !checkProblems.length">
+        <label v-if="protectedGroups.length" class="ck-ack">
+          <input v-model="acknowledgedProtected" type="checkbox" />
+          <span>I understand these users gain admin rights in AD through {{ groupNames }}.</span>
+        </label>
+        <p class="ck-ok">
+          <i class="pi pi-check-circle" aria-hidden="true" /> Ready to import {{ people(count) }}.
+        </p>
+      </template>
     </template>
 
     <div class="ck-run">
@@ -139,6 +167,10 @@ const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(
   font-size: 11.5px;
   color: var(--text-3);
   margin-right: 4px;
+}
+
+.ck-actions {
+  white-space: nowrap;
 }
 
 .ck-note {
