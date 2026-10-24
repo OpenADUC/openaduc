@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { AuditEventRow } from '../../api/index.js';
+import { lifetimeLabel } from '@openaduc/shared';
 import { expiryText } from '../lib/accountExpiry.js';
 import { fmtAbsolute, fmtRelative } from '../lib/format.js';
 import EmptyState from './EmptyState.vue';
@@ -37,6 +38,11 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
   'user.password.reset': {
     title: 'Password reset',
     iconClass: 'pi pi-key',
+    tone: 'tone-amber',
+  },
+  'user.tap.issue': {
+    title: 'Temporary Access Pass issued',
+    iconClass: 'pi pi-ticket',
     tone: 'tone-amber',
   },
   'user.accountExpiry.set': {
@@ -131,6 +137,9 @@ function detailFor(e: AuditEventRow): string {
     return `To: ${String(md.copySamAccountName)}`;
   }
   if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
+  if (e.action === 'user.tap.issue' && typeof md.lifetimeMinutes === 'number') {
+    return `${lifetimeLabel(md.lifetimeMinutes)}, ${md.isUsableOnce ? 'one-time' : 'multi-use'}`;
+  }
   if (e.action === 'user.accountExpiry.set' && 'expiresAt' in md) {
     return expiryText(md.expiresAt ? String(md.expiresAt) : null, true);
   }
