@@ -940,13 +940,7 @@ export const api = {
       remove(id: number): Promise<{ ok: boolean }> {
         return apiFetch(`/directories/${id}/entra`, { method: 'DELETE' });
       },
-      test(id: number): Promise<{
-        ok: boolean;
-        message: string;
-        tenantDisplayName: string | null;
-        /** Permissions a turned-on feature needs that the app registration lacks. */
-        missingPermissions: string[];
-      }> {
+      test(id: number): Promise<EntraTestResponse> {
         return apiFetch(`/directories/${id}/entra/test`, { method: 'POST' });
       },
       /**
