@@ -85,8 +85,6 @@ const toast = useToast();
 
 const { setHero, compact: heroCompact, heroHeight } = useStickyHeader();
 const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
-// On a phone the primary actions leave the header for a bar along the
-// bottom, where a thumb reaches them.
 const { isMobile } = useResponsive();
 
 const kindLabel = computed(() => capitalize(props.kind));

@@ -851,8 +851,6 @@ const announcement = computed(() => {
   color: var(--text-3);
 }
 
-/* A phone: the trigger is thumb-sized, a user's actions wrap under the
-   name, and the keyboard hints go. */
 @media (max-width: 767.98px) {
   .gs-trigger {
     min-height: var(--tap-target);
