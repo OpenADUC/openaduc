@@ -1237,7 +1237,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
             cn: plan.newCn,
           },
           parentDn(user.distinguishedName),
-          user.objectGuid,
+          { exceptObjectGuid: user.objectGuid },
         );
         if (conflict) return { ok: false, reason: 'conflict', errorMessage: conflict, before };
 
@@ -1350,103 +1350,82 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Look for another object already holding a value an account would take.
-   * Searches the whole domain naming context, not just the configured base
-   * DN, because sAMAccountName, UPN and email must be unique domain-wide;
-   * the CN only among `parentDn`'s children. Returns a message naming the
-   * clash, or null. A holder outside the base DN isn't named.
+   * Who already holds each name an object would take, other than the
+   * object itself. sAMAccountName, UPN and email are searched across the
+   * whole domain naming context, not just the configured base DN, because
+   * they must be unique domain-wide; the CN only among `parentDn`'s
+   * children. A holder outside the base DN comes back with a null `dn`:
+   * the operator has no business seeing what lives there.
    */
-  private async findNameClash(
+  private async nameClashes(
     client: Client,
-    names: {
-      samAccountName?: string | null;
-      userPrincipalName?: string | null;
-      email?: string | null;
-      cn?: string | null;
-    },
+    names: Partial<Record<ClashAttribute, string | null | undefined>>,
     parentDn: string | null,
     exceptObjectGuid?: string,
-  ): Promise<string | null> {
+  ): Promise<Partial<Record<ClashAttribute, { dn: string | null }>>> {
     const domainRoot = await this.domainRoot(client);
-    const checks: { label: string; base: string; scope: 'sub' | 'one'; filter: string }[] = [];
-    if (names.samAccountName) {
-      checks.push({
-        label: `logon name "${names.samAccountName}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(sAMAccountName=${escapeLdapFilter(names.samAccountName)})`,
-      });
-    }
-    if (names.userPrincipalName) {
-      checks.push({
-        label: `UPN "${names.userPrincipalName}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(userPrincipalName=${escapeLdapFilter(names.userPrincipalName)})`,
-      });
-    }
-    if (names.email) {
-      const v = escapeLdapFilter(names.email);
-      checks.push({
-        label: `email address "${names.email}"`,
-        base: domainRoot,
-        scope: 'sub',
-        filter: `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
-      });
-    }
-    if (names.cn) {
-      checks.push({
-        label: `name "${names.cn}" in this OU`,
-        base: parentDn ?? domainRoot,
-        scope: 'one',
-        filter: `(cn=${escapeLdapFilter(names.cn)})`,
-      });
-    }
-
-    for (const check of checks) {
-      const { searchEntries } = await client.search(check.base, {
-        scope: check.scope,
-        filter: check.filter,
-        attributes: ['objectGUID', 'distinguishedName'],
-        explicitBufferAttributes: BINARY_ATTRS,
-      });
+    const filters: Record<ClashAttribute, (v: string) => string> = {
+      samAccountName: (v) => `(sAMAccountName=${v})`,
+      userPrincipalName: (v) => `(userPrincipalName=${v})`,
+      email: (v) => `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
+      cn: (v) => `(cn=${v})`,
+    };
+    const holders: Partial<Record<ClashAttribute, { dn: string | null }>> = {};
+    for (const attribute of CLASH_ORDER) {
+      const value = names[attribute]?.trim();
+      if (!value) continue;
+      const { searchEntries } = await client.search(
+        attribute === 'cn' ? (parentDn ?? domainRoot) : domainRoot,
+        {
+          scope: attribute === 'cn' ? 'one' : 'sub',
+          filter: filters[attribute](escapeLdapFilter(value)),
+          attributes: ['objectGUID', 'distinguishedName'],
+          explicitBufferAttributes: BINARY_ATTRS,
+        },
+      );
       const other = searchEntries.find((e) => {
         const guid = e.objectGUID;
         return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === exceptObjectGuid);
       });
       if (other) {
-        return isDnWithin(other.dn, this.config.baseDn)
-          ? `the ${check.label} is already used by ${other.dn}`
-          : `the ${check.label} is already used elsewhere in the domain`;
+        holders[attribute] = { dn: isDnWithin(other.dn, this.config.baseDn) ? other.dn : null };
       }
+    }
+    return holders;
+  }
+
+  /** The first of `names` already held, as a message naming the holder, or null. */
+  private async findNameClash(
+    client: Client,
+    names: Partial<Record<ClashAttribute, string | null | undefined>>,
+    parentDn: string | null,
+    options: { exceptObjectGuid?: string; samLabel?: string } = {},
+  ): Promise<string | null> {
+    const holders = await this.nameClashes(client, names, parentDn, options.exceptObjectGuid);
+    const label: Record<ClashAttribute, string> = {
+      samAccountName: options.samLabel ?? 'logon name',
+      userPrincipalName: 'UPN',
+      email: 'email address',
+      cn: 'name',
+    };
+    for (const attribute of CLASH_ORDER) {
+      const holder = holders[attribute];
+      if (!holder) continue;
+      const where = attribute === 'cn' ? 'in this OU' : 'elsewhere in the domain';
+      return `the ${label[attribute]} "${names[attribute]!.trim()}" is already used ${holder.dn ? `by ${holder.dn}` : where}`;
     }
     return null;
   }
 
   async findNameHolders(input: NewObjectNames): Promise<NameHolders> {
-    return this.withServiceBind((client) => this.nameHolders(client, input));
-  }
-
-  private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
-    // A holder outside the base DN is reported without its DN: the
-    // operator has no business seeing what lives there.
-    const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
-      const [entry] = await this.searchAny(client, base, scope, [filter], ['distinguishedName']);
-      if (!entry) return null;
-      return { dn: isDnWithin(entry.dn, this.config.baseDn) ? entry.dn : null };
-    };
-    const cn = input.cn?.trim();
-    const sam = input.samAccountName?.trim();
-    return {
-      cn: cn ? await holder(input.parentDn, 'one', `(cn=${escapeLdapFilter(cn)})`) : null,
-      samAccountName: sam
-        ? await holder(
-            await this.domainRoot(client),
-            'sub',
-            `(sAMAccountName=${escapeLdapFilter(sam)})`,
-          )
-        : null,
-    };
+    return this.withServiceBind(async (client) => {
+      const holders = await this.nameClashes(
+        client,
+        { cn: input.cn, samAccountName: input.samAccountName },
+        input.parentDn,
+      );
+      return { cn: holders.cn ?? null, samAccountName: holders.samAccountName ?? null };
+    });
   }
 
   async findTakenNames(lookups: NamingLookups): Promise<TakenNames> {
@@ -1552,27 +1531,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   ): Promise<MutationResult & { group?: DirectoryGroup }> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const holders = await this.nameHolders(client, {
-          parentDn: parentDn(input.dn) ?? '',
-          cn: input.cn,
-          samAccountName: input.samAccountName,
-        });
-        const usedBy = (h: { dn: string | null }, where: string) =>
-          h.dn ? `already used by ${h.dn}` : `already used ${where}`;
-        if (holders.cn) {
-          return {
-            ok: false,
-            reason: 'conflict',
-            errorMessage: `the name "${input.cn}" is ${usedBy(holders.cn, 'in this OU')}`,
-          };
-        }
-        if (holders.samAccountName) {
-          return {
-            ok: false,
-            reason: 'conflict',
-            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is ${usedBy(holders.samAccountName, 'elsewhere in the domain')}`,
-          };
-        }
+        const clash = await this.findNameClash(
+          client,
+          { cn: input.cn, samAccountName: input.samAccountName },
+          parentDn(input.dn),
+          { samLabel: 'pre-Windows 2000 name' },
+        );
+        if (clash) return { ok: false, reason: 'conflict', errorMessage: clash };
 
         const attrs: Record<string, string | string[]> = {
           objectClass: ['top', 'group'],
@@ -3038,14 +3003,22 @@ function userAccountControlOf(entry: Entry): number {
   return value ? Number.parseInt(String(value), 10) : 0;
 }
 
-/**
- * Map an LDAP write failure to a MutationResult reason by result code
- * rather than by message text, which varies across DC versions.
- */
+type ClashAttribute = 'samAccountName' | 'userPrincipalName' | 'email' | 'cn';
+const CLASH_ORDER: readonly ClashAttribute[] = [
+  'samAccountName',
+  'userPrincipalName',
+  'email',
+  'cn',
+];
+
 function withUser(user: DirectoryUser | undefined): { user?: DirectoryUser } {
   return user ? { user } : {};
 }
 
+/**
+ * Map an LDAP write failure to a MutationResult reason by result code
+ * rather than by message text, which varies across DC versions.
+ */
 function classifyWriteError(err: unknown): MutationResult {
   const errorMessage = err instanceof Error ? err.message : 'write failed';
   if (err instanceof InsufficientAccessError) {
