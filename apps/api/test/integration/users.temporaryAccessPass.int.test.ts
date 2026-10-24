@@ -156,6 +156,11 @@ describe('Issue TAP', () => {
     await api?.close();
   });
 
+  it('is offered on the user’s page', async () => {
+    const res = await operator.get(`/api/users/${users['alice.anders']!.id}`);
+    expect(res.json()).toMatchObject({ user: { entra: { temporaryAccessPass: true } } });
+  });
+
   it('reads the tenant policy’s limits for a synced user', async () => {
     const { res, body } = await preflight(operator, 'alice.anders');
     expect(res.statusCode).toBe(200);
@@ -295,6 +300,8 @@ describe('Issue TAP', () => {
       const { res, body } = await preflight(operator, 'alice.anders');
       expect(res.statusCode).toBe(409);
       expect(body).toMatchObject({ error: { code: 'tap_not_enabled' } });
+      const page = await operator.get(`/api/users/${users['alice.anders']!.id}`);
+      expect(page.json()).toMatchObject({ user: { entra: { temporaryAccessPass: false } } });
     } finally {
       await api.app.services.entraIntegration.update(api.directoryId!, {
         features: { temporaryAccessPass: true },
