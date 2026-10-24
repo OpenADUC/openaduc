@@ -35,6 +35,17 @@ const feed = (events: AuditEventRow[]) =>
   mount(ActivityFeed, { props: { events }, global: { plugins: [PrimeVue] } });
 
 describe('ActivityFeed', () => {
+  it('names the fields an edit wrote, or says it changed nothing', () => {
+    const page = feed([
+      anEvent({ id: '1', action: 'user.update', metadata: { fields: ['department', 'title'] } }),
+      anEvent({ id: '2', action: 'user.update', metadata: { unchanged: true } }),
+      anEvent({ id: '3', action: 'user.update', metadata: { fields: [] } }),
+    ]);
+
+    const details = page.findAll('.af-detail').map((d) => d.text());
+    expect(details).toEqual(['Fields: department, title', 'Already as asked; nothing changed']);
+  });
+
   it('says which OU a user or computer was moved to', () => {
     const page = feed([
       anEvent({

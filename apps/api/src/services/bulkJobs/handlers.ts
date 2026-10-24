@@ -2,8 +2,10 @@
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
+  bulkAttributeChangesSchema,
   bulkGroupMembershipRequestSchema,
   bulkJobCreateRequestSchema,
+  bulkUserAttributesRequestSchema,
   type BulkGroupMembershipRequest,
   type BulkJobAction,
   type BulkJobSubject,
@@ -19,6 +21,15 @@ import {
   type WriteContext,
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
+import {
+  attributesPreviewToken,
+  changesSubject,
+  fieldChanges,
+  liveValues,
+  patchFor,
+  resolveChanges,
+  rowSnapshots,
+} from '../bulkAttributes.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import {
   membershipRequirement,
@@ -30,7 +41,7 @@ import {
 import { previewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
 import { BulkJobRequestError } from './errors.js';
-import { failureMessage } from './rowMessages.js';
+import { UserAttributeRefusal, writeUserAttributes } from '../userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -56,6 +67,8 @@ export type BulkRowOutcome =
       ok: true;
       /** Nothing needed changing: the row is skipped rather than succeeded. */
       unchanged?: boolean;
+      /** Why a skipped row was left alone, when it's not that it was as asked. */
+      reason?: { code: string; message: string };
       before: Record<string, unknown> | null;
       after: Record<string, unknown> | null;
       targetDn?: string;
@@ -384,10 +397,93 @@ function membershipFailure(
   }
 }
 
+const attributesInputSchema = z.object({ changes: bulkAttributeChangesSchema });
+
+/**
+ * Edit each user's attributes, one row per user. A row reads the user
+ * live and writes only the fields not already as asked, in one change
+ * audited as the single-user edit is; a user with none to change is
+ * skipped, audited as a no-op. A user who'd become their own manager is
+ * skipped, and says so.
+ */
+function userAttributesHandler(): BulkJobHandler<
+  z.infer<typeof bulkUserAttributesRequestSchema>,
+  z.infer<typeof attributesInputSchema>
+> {
+  return {
+    action: 'user.update',
+    capability: 'write:user.attributes',
+    request: bulkUserAttributesRequestSchema,
+    rows: ({ ids, changes }) =>
+      ids.map((id) => ({ targetId: id.toLowerCase(), input: { changes } })),
+    input: attributesInputSchema,
+    async prepare({ ids, changes, previewToken: token }, { db, directoryId }) {
+      if (token !== attributesPreviewToken(ids, changes)) {
+        throw new BulkJobRequestError(
+          'preview_mismatch',
+          'The users or changes aren’t the ones previewed. Preview the change again.',
+        );
+      }
+      return { attributes: changesSubject(await resolveChanges(db, directoryId, changes)) };
+    },
+    async run(row, ctx) {
+      const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
+      if (!live) return { ok: false, errorCode: 'not_found', audited: false };
+      const { user } = live;
+      const targetDn = user.distinguishedName;
+      const kept = { before: row.before, after: row.after, targetDn };
+      try {
+        // The manager's DN as it is now, should it have moved since the job started.
+        const resolved = await resolveChanges(ctx.db, ctx.provider.id, row.input.changes);
+        const { changes } = fieldChanges(liveValues(user), resolved);
+        const result = await writeUserAttributes(
+          ctx.services,
+          ctx.provider,
+          user,
+          patchFor(changes),
+          ctx.writeCtx,
+          ctx.audit,
+        );
+        if (!result.ok) {
+          return {
+            ok: false,
+            errorCode: result.errorCode ?? 'directory_error',
+            errorMessage: result.errorMessage ?? null,
+            audited: true,
+            targetDn,
+          };
+        }
+        if (changes.length === 0) return { ok: true, unchanged: true, ...kept };
+        return { ok: true, ...rowSnapshots(changes), targetDn };
+      } catch (err) {
+        if (err instanceof UserAttributeRefusal && err.code === 'self_manager') {
+          return {
+            ok: true,
+            unchanged: true,
+            reason: { code: err.code, message: err.message },
+            ...kept,
+          };
+        }
+        if (err instanceof UserAttributeRefusal || err instanceof BulkJobRequestError) {
+          return {
+            ok: false,
+            errorCode: err.code,
+            message: 'The manager is no longer a user in the directory.',
+            audited: false,
+            targetDn,
+          };
+        }
+        throw err;
+      }
+    },
+  };
+}
+
 export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.disable': userAccountHandler(DISABLE_USER, 'write:user.enableDisable'),
   'user.enable': userAccountHandler(ENABLE_USER, 'write:user.enableDisable'),
   'user.unlock': userAccountHandler(UNLOCK_USER, 'write:user.unlock'),
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
+  'user.update': userAttributesHandler(),
 };

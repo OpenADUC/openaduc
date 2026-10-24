@@ -54,4 +54,31 @@ describe('editing a user’s attributes', () => {
       .execute();
     expect(audit).toEqual([{ result: 'success' }, { result: 'success' }]);
   });
+
+  it('audits the values an edit changed, before and after', async () => {
+    const operator = api.client();
+    await operator.signIn(api, 'oa.operator');
+    await operator.stepUp();
+    const search = await operator.get('/api/users?q=alice.anders');
+    const alice = search.json<{ rows: { id: string }[] }>().rows[0]!;
+
+    await operator.patch(`/api/users/${alice.id}`, { patch: { company: 'Initech' } });
+    const res = await operator.patch(`/api/users/${alice.id}`, { patch: { company: 'Globex' } });
+
+    expect(res.statusCode).toBe(200);
+    const [event] = await api.app.db
+      .selectFrom('audit_events')
+      .select(['before_json', 'after_json', 'metadata_json'])
+      .where('action', '=', 'user.update')
+      .where('target_id', '=', alice.id)
+      .orderBy('id', 'desc')
+      .limit(1)
+      .execute();
+    expect(event).toMatchObject({
+      before_json: { company: 'Initech' },
+      after_json: { company: 'Globex' },
+      metadata_json: { fields: ['company'] },
+    });
+    await operator.patch(`/api/users/${alice.id}`, { patch: { company: null } });
+  });
 });

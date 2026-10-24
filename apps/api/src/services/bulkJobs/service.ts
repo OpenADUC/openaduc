@@ -558,9 +558,9 @@ export class BulkJobService {
           : outcome.partial
             ? 'partial'
             : 'failed',
-        error_code: outcome.ok ? null : outcome.errorCode,
+        error_code: outcome.ok ? (outcome.reason?.code ?? null) : outcome.errorCode,
         error_message: outcome.ok
-          ? null
+          ? (outcome.reason?.message ?? null)
           : (outcome.message ?? failureMessage(outcome.errorCode, outcome.errorMessage ?? null)),
         before_json: outcome.before ? JSON.stringify(outcome.before) : null,
         after_json: outcome.after ? JSON.stringify(outcome.after) : null,

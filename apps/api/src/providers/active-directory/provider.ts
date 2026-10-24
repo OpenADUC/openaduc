@@ -940,7 +940,8 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const target = await this.findUserEntry(client, userId);
+        // The full read, so the audit snapshot holds attributes outside the curated set.
+        const target = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
         const before = normalizeUser(target);
 
@@ -953,7 +954,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         await client.modify(before.distinguishedName, changes);
 
         // Re-read so the route can return the actual post-write state.
-        const afterEntry = await this.findUserEntry(client, userId);
+        const afterEntry = await this.findUserEntry(client, userId, USER_ATTRS_FULL);
         const after = afterEntry ? normalizeUser(afterEntry) : null;
         return {
           ok: true,
@@ -2830,6 +2831,10 @@ const PATCH_ATTRIBUTE_MAP: Record<string, string> = {
   l: 'l',
   st: 'st',
   postalCode: 'postalCode',
+  countryCode: 'countryCode',
+  physicalDeliveryOfficeName: 'physicalDeliveryOfficeName',
+  // writeUserAttributes checks the manager is a user, and not the user itself.
+  managerDn: 'manager',
 };
 
 /** Map our multi-valued patch field name → the AD attribute name. */
@@ -2837,6 +2842,7 @@ const PATCH_MULTI_ATTRIBUTE_MAP: Record<string, string> = {
   otherMailbox: 'otherMailbox',
   otherHomePhone: 'otherHomePhone',
   otherMobile: 'otherMobile',
+  postOfficeBox: 'postOfficeBox',
 };
 
 /**
@@ -2844,72 +2850,42 @@ const PATCH_MULTI_ATTRIBUTE_MAP: Record<string, string> = {
  *
  * Scalar fields (PATCH_ATTRIBUTE_MAP):
  *   - `undefined` ⇒ field absent, skip
- *   - `null` or empty string ⇒ delete the AD attribute
+ *   - `null` or empty string ⇒ clear the AD attribute
  *   - anything else ⇒ replace with the trimmed value
  *
  * Multi-valued fields (PATCH_MULTI_ATTRIBUTE_MAP):
  *   - `undefined` ⇒ skip
- *   - `null` or empty array ⇒ delete the AD attribute
+ *   - `null` or empty array ⇒ clear the AD attribute
  *   - non-empty array ⇒ replace with all (trimmed, non-empty) values
+ *
+ * A clear is a replace with no values, not a delete: a delete of an
+ * attribute the user doesn't have fails the whole modify, a replace
+ * with none is a no-op then.
  *
  * Returns an empty array if every field was undefined.
  */
 function buildAttributeChanges(patch: UserAttributePatch): Change[] {
-  const changes: Change[] = [];
   const data = patch as Record<string, unknown>;
+  const replace = (type: string, values: string[]) =>
+    new Change({ operation: 'replace', modification: new Attribute({ type, values }) });
+  const changes: Change[] = [];
   for (const [patchKey, attrName] of Object.entries(PATCH_ATTRIBUTE_MAP)) {
     const raw = data[patchKey];
     if (raw === undefined) continue;
-    if (raw === null || (typeof raw === 'string' && raw.trim() === '')) {
-      changes.push(
-        new Change({
-          operation: 'delete',
-          modification: new Attribute({ type: attrName, values: [] }),
-        }),
-      );
-      continue;
-    }
-    if (typeof raw === 'string') {
-      changes.push(
-        new Change({
-          operation: 'replace',
-          modification: new Attribute({ type: attrName, values: [raw.trim()] }),
-        }),
-      );
-    }
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    changes.push(replace(attrName, value ? [value] : []));
   }
   for (const [patchKey, attrName] of Object.entries(PATCH_MULTI_ATTRIBUTE_MAP)) {
     const raw = data[patchKey];
     if (raw === undefined) continue;
-    if (raw === null) {
-      changes.push(
-        new Change({
-          operation: 'delete',
-          modification: new Attribute({ type: attrName, values: [] }),
-        }),
-      );
-      continue;
-    }
-    if (Array.isArray(raw)) {
-      const cleaned = raw
-        .filter((v): v is string => typeof v === 'string')
-        .map((v) => v.trim())
-        .filter((v) => v.length > 0);
-      changes.push(
-        cleaned.length === 0
-          ? new Change({
-              operation: 'delete',
-              modification: new Attribute({ type: attrName, values: [] }),
-            })
-          : new Change({
-              operation: 'replace',
-              modification: new Attribute({ type: attrName, values: cleaned }),
-            }),
-      );
-    }
+    const values = Array.isArray(raw)
+      ? raw
+          .filter((v): v is string => typeof v === 'string')
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0)
+      : [];
+    changes.push(replace(attrName, values));
   }
-  // managerDn is typed on UserAttributePatch but not in the MVP edit
-  // allowlist: it needs a cycle check. Excluded here intentionally.
   return changes;
 }
 
@@ -2938,6 +2914,10 @@ function snapshotForAudit(user: DirectoryUser): Record<string, unknown> {
     l: rawAuditScalar(raw['l']),
     st: rawAuditScalar(raw['st']),
     postalCode: rawAuditScalar(raw['postalCode']),
+    postOfficeBox: rawAuditArray(raw['postOfficeBox']),
+    countryCode: rawAuditScalar(raw['countryCode']),
+    physicalDeliveryOfficeName: user.office ?? null,
+    managerDn: user.managerDn,
     otherMailbox: rawAuditArray(raw['otherMailbox']),
     otherHomePhone: rawAuditArray(raw['otherHomePhone']),
     otherMobile: rawAuditArray(raw['otherMobile']),

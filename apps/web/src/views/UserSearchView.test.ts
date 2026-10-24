@@ -6,13 +6,15 @@ import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type {
-  BulkGroupMembershipPreview,
-  BulkJob,
-  Capability,
-  GroupSummary,
-  UserMatchCandidate,
-  UserSummary,
+import {
+  BULK_ATTRIBUTE_FIELDS,
+  type BulkUserAttributesPreview,
+  type BulkGroupMembershipPreview,
+  type BulkJob,
+  type Capability,
+  type GroupSummary,
+  type UserMatchCandidate,
+  type UserSummary,
 } from '@openaduc/shared';
 
 const summary = (id: string, displayName: string): UserSummary => ({
@@ -65,6 +67,7 @@ const api = {
       })),
     })),
     previewGroupChange: vi.fn(),
+    previewAttributeEdit: vi.fn(),
   },
   groups: {
     search: vi.fn(async (): Promise<{ rows: GroupSummary[]; total: number }> => ({
@@ -76,6 +79,7 @@ const api = {
     list: vi.fn(async (): Promise<{ jobs: BulkJob[] }> => ({ jobs: [] })),
     get: vi.fn(),
     startGroupChange: vi.fn(),
+    startAttributeEdit: vi.fn(),
     rows: vi.fn(async () => ({
       rows: [
         {
@@ -301,5 +305,114 @@ describe('the user list, adding the selection to groups', () => {
       acknowledgeProtected: true,
     });
     expect(page.get('.bulk-job').text()).toContain('Adding 2 accounts to Sales…');
+  });
+});
+
+describe('the user list, editing the selection’s attributes', () => {
+  it('shows mixed values, previews each user’s change, and starts the job on confirming', async () => {
+    const current = {
+      ...Object.fromEntries(BULK_ATTRIBUTE_FIELDS.map((f) => [f, { kind: 'same', value: null }])),
+      department: { kind: 'multiple', count: 2 },
+      company: { kind: 'same', value: 'Initech' },
+    } as BulkUserAttributesPreview['current'];
+    const empty = {
+      current,
+      changed: { count: 0, offset: 0, users: [] },
+      unchanged: { count: 0, users: [] },
+      unread: { count: 0, users: [] },
+      skipped: { count: 0, users: [] },
+      fields: [],
+      unknownCount: 0,
+      previewToken: 'none',
+    };
+    api.users.previewAttributeEdit.mockResolvedValueOnce(empty).mockResolvedValueOnce({
+      ...empty,
+      changed: {
+        count: 1,
+        offset: 0,
+        users: [
+          {
+            id: 'jdoe',
+            name: 'Jane Doe',
+            changes: [
+              { field: 'department', before: 'Engineering', after: 'Sales' },
+              { field: 'company', before: 'Initech', after: null },
+            ],
+          },
+        ],
+      },
+      unchanged: { count: 1, users: [{ id: 'bsmith', name: 'Bob Smith' }] },
+      fields: [
+        { field: 'department', count: 1, unread: 0 },
+        { field: 'company', count: 1, unread: 0 },
+      ],
+      previewToken: 'tok',
+    });
+    const running: BulkJob = {
+      id: '9',
+      action: 'user.update',
+      subject: {
+        attributes: [
+          { field: 'department', value: 'Sales' },
+          { field: 'company', value: null },
+        ],
+      },
+      status: 'running',
+      pauseReason: null,
+      actorDisplayName: 'OpenADUC Operator',
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
+      counts: { total: 2, pending: 2, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 },
+    };
+    api.bulkJobs.startAttributeEdit.mockResolvedValue({ job: running });
+    api.bulkJobs.get.mockResolvedValue({ job: running });
+    const page = await openUsers('', ['read:user', 'write:user.attributes']);
+    await button(page, 'Paste a list').trigger('click');
+    await page.get('#paste-list-input').setValue('jdoe\nbsmith');
+    await button(page, 'Find users').trigger('click');
+    await flushPromises();
+    await button(page, 'Select 2 users').trigger('click');
+
+    await button(page, 'Edit…').trigger('click');
+    await flushPromises();
+    expect(page.text()).toContain('Edit 2 accounts');
+    const field = (label: string) =>
+      page.findAll('.be-field').find((f) => f.get('.be-label').text() === label)!;
+    expect(field('Department').text()).toContain('Now: (multiple values)');
+    expect(field('Company').text()).toContain('Now: Initech');
+    expect(field('Office').text()).toContain('Now: empty');
+    expect(button(page, 'Preview').attributes('disabled')).toBeDefined();
+
+    const mode = (label: string, choice: string) =>
+      field(label)
+        .findAll('button')
+        .find((b) => b.text() === choice)!
+        .trigger('click');
+    await mode('Department', 'Set');
+    await field('Department').get('input').setValue('Sales');
+    await mode('Company', 'Clear');
+    await button(page, 'Preview').trigger('click');
+    await flushPromises();
+
+    expect(api.users.previewAttributeEdit).toHaveBeenLastCalledWith({
+      ids: ['jdoe', 'bsmith'],
+      changes: { department: 'Sales', company: null },
+    });
+    const text = page.text();
+    expect(text).toContain('Edit 2 accounts?');
+    expect(text).toContain('Department: 1 user changes');
+    expect(page.get('.be-user').text()).toMatch(/Jane Doe.*Department.*Engineering.*Sales/s);
+    expect(page.get('.be-user').text()).toMatch(/Company.*Initech.*\(empty\)/s);
+    expect(text).toContain('Already as asked, unchanged (1)');
+    expect(api.bulkJobs.startAttributeEdit).not.toHaveBeenCalled();
+
+    await button(page, 'Edit account').trigger('click');
+    await flushPromises();
+    expect(api.bulkJobs.startAttributeEdit).toHaveBeenCalledExactlyOnceWith({
+      ids: ['jdoe', 'bsmith'],
+      changes: { department: 'Sales', company: null },
+      previewToken: 'tok',
+    });
+    expect(page.get('.bulk-job').text()).toContain('Editing 2 accounts (department and company)…');
   });
 });

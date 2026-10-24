@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { useBulkActions, type BulkAction } from '../design/composables/useBulkActions.js';
+import { useBulkAttributeEdit } from '../design/composables/useBulkAttributeEdit.js';
 import { useBulkGroupMembership } from '../design/composables/useBulkGroupMembership.js';
 import Dialog from 'primevue/dialog';
 import type { ListFreshness } from '@openaduc/shared';
@@ -30,6 +31,7 @@ import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import BulkEditDialog from '../design/feedback/BulkEditDialog.vue';
 import BulkGroupsDialog from '../design/feedback/BulkGroupsDialog.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import NewUserDialog from '../design/feedback/NewUserDialog.vue';
@@ -450,6 +452,7 @@ const {
   cancelBulk,
   startBulk,
   startGroupChange,
+  startAttributeEdit,
   continueJob,
   retryFailed,
   stopJob,
@@ -468,6 +471,12 @@ const groupJobPending = computed(
   () =>
     pendingBulkAction.value === 'user.group.add' || pendingBulkAction.value === 'user.group.remove',
 );
+
+const canBulkEdit = computed(() => auth.hasCapability('write:user.attributes'));
+const attributeEdit = useBulkAttributeEdit({
+  ids: () => Array.from(selectedIds.value),
+  start: startAttributeEdit,
+});
 
 const BULK_ICONS: Record<BulkAction, string> = {
   disable: 'pi pi-ban',
@@ -515,7 +524,12 @@ async function onBulkDeleted(deletedIds: string[]): Promise<void> {
 }
 
 const canBulkAct = computed(
-  () => canBulkDisable.value || canBulkUnlock.value || canBulkDelete.value || canBulkGroups.value,
+  () =>
+    canBulkDisable.value ||
+    canBulkUnlock.value ||
+    canBulkDelete.value ||
+    canBulkGroups.value ||
+    canBulkEdit.value,
 );
 const pasteListOpen = ref(false);
 
@@ -833,6 +847,16 @@ onMounted(() => {
             @click="groupChange.open()"
           />
           <Button
+            v-if="canBulkEdit"
+            label="Edit…"
+            icon="pi pi-pencil"
+            severity="secondary"
+            size="small"
+            :loading="bulkRunning && pendingBulkAction === 'user.update'"
+            :disabled="bulkRunning"
+            @click="attributeEdit.open()"
+          />
+          <Button
             v-if="canBulkDelete"
             label="Delete…"
             icon="pi pi-trash"
@@ -888,6 +912,7 @@ onMounted(() => {
     </Dialog>
 
     <BulkGroupsDialog :workflow="groupChange" :hidden-count="hiddenSelectedCount" />
+    <BulkEditDialog :workflow="attributeEdit" :hidden-count="hiddenSelectedCount" />
 
     <PasteListDialog
       v-model:visible="pasteListOpen"

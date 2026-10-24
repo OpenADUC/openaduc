@@ -11,8 +11,8 @@ import {
   type BulkJobAction,
   type BulkJobSubject,
 } from '@openaduc/shared';
-import { Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import { BulkJobRequestError } from '../services/bulkJobs/errors.js';
+import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
+import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import type { JobActor } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -42,7 +42,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       handler: async (req, reply) => {
         const id = await jobs
           .create(actorFrom(req), action, req.body, (subject) => requireFor(req, action, subject))
-          .catch(refuse);
+          .catch(refuseBulkRequest);
         return reply
           .status(202)
           .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
@@ -130,21 +130,6 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       await app.services.authorization.roleGroups(),
     );
     if (needs) await app.requireCapability(req, needs.capability, needs.reason);
-  }
-
-  /** A request the job can't start as asked, as its HTTP error. */
-  function refuse(err: unknown): never {
-    if (err instanceof BulkJobRequestError) {
-      switch (err.code) {
-        case 'group_not_found':
-          throw NotFound(err.message);
-        case 'preview_mismatch':
-          throw Conflict(err.message);
-        case 'protected_unacknowledged':
-          throw app.httpErrors.unprocessableEntity(err.message);
-      }
-    }
-    throw err;
   }
 
   async function ownJob(req: FastifyRequest) {
