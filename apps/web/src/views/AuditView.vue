@@ -21,6 +21,7 @@ import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.
 import AuditEventDialog from '../design/feedback/AuditEventDialog.vue';
 import AuditBulkEvents from '../design/primitives/AuditBulkEvents.vue';
 import { describeBulkEntry } from '../design/lib/bulkJob.js';
+import { resultBadge } from '../design/lib/auditResult.js';
 import type { MfaRegistrationRow, MfaRegistrationStatus, SignInEventApp } from '@openaduc/shared';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
 
@@ -310,12 +311,6 @@ function onPage(ev: DataTablePageEvent): void {
   page.value = ev.page + 1;
   pageSize.value = ev.rows;
   void load();
-}
-
-function resultBadge(r: string): string {
-  if (r === 'success') return 'badge-green';
-  if (r === 'failure' || r === 'denied') return 'badge-red';
-  return 'badge-muted';
 }
 
 // Clicking a row opens the detail modal. We pass the full row through so the

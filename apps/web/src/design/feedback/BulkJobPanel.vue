@@ -9,7 +9,7 @@ import { describeBulkJob, type BulkJobControl } from '../lib/bulkJob.js';
 
 // A bulk job's progress or result, with what the operator can do next.
 const props = defineProps<{ job: BulkJob; failure?: string | null; busy?: boolean }>();
-const emit = defineEmits<{ stop: []; continue: []; retry: []; dismiss: [] }>();
+const emit = defineEmits<(e: BulkJobControl) => void>();
 
 const description = computed(() => describeBulkJob(props.job));
 
@@ -22,13 +22,6 @@ const CONTROLS: Record<
   retry: { label: 'Retry failed', icon: 'pi pi-refresh' },
   dismiss: { label: 'Dismiss', icon: 'pi pi-times', severity: 'secondary', text: true },
 };
-
-function onControl(control: BulkJobControl): void {
-  if (control === 'stop') emit('stop');
-  else if (control === 'continue') emit('continue');
-  else if (control === 'retry') emit('retry');
-  else emit('dismiss');
-}
 </script>
 
 <template>
@@ -55,7 +48,7 @@ function onControl(control: BulkJobControl): void {
           :text="CONTROLS[control].text"
           size="small"
           :disabled="busy"
-          @click="onControl(control)"
+          @click="emit(control)"
         />
       </div>
     </div>

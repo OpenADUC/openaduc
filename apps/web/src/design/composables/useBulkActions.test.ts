@@ -30,10 +30,8 @@ const bulkJobs = {
 const stepUp = vi.fn(async () => ({ elevated: ELEVATED }));
 vi.mock('../../api/index.js', () => ({ api: { bulkJobs, auth: { stepUp } } }));
 
-const { useBulkActions } = await import('./useBulkActions.js');
+const { POLL, useBulkActions } = await import('./useBulkActions.js');
 const { useAuthStore } = await import('../../stores/auth.js');
-
-const POLL_MS = 50;
 
 function aJob(
   status: BulkJob['status'],
@@ -60,11 +58,11 @@ function setup(elevated = ELEVATED) {
   const selectedIds = ref(new Set(['a', 'b', 'c']));
   const toast = { add: vi.fn() };
   const reload = vi.fn(async () => {});
-  const bulk = useBulkActions({ selectedIds, toast, reload, pollMs: POLL_MS });
+  const bulk = useBulkActions({ selectedIds, toast, reload });
   return { bulk, auth, selectedIds, toast, reload };
 }
 
-const tick = () => vi.advanceTimersByTimeAsync(POLL_MS);
+const after = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
 describe('bulk actions', () => {
   beforeEach(() => {
@@ -143,11 +141,11 @@ describe('bulk actions', () => {
     expect(bulk.bulkRunning.value).toBe(true);
     expect(bulk.pendingBulkAction.value).toBe('disable');
 
-    await tick();
+    await after(POLL.firstMs);
     expect(bulk.job.value?.counts.succeeded).toBe(1);
     expect(bulkJobs.get).toHaveBeenCalledWith('7', { background: true });
 
-    await tick();
+    await after(POLL.firstMs * POLL.factor);
     await flushPromises();
     expect(reload).toHaveBeenCalled();
     expect(selectedIds.value.size).toBe(0);
@@ -211,7 +209,7 @@ describe('bulk actions', () => {
     await bulk.restore();
     expect(bulk.job.value?.counts.succeeded).toBe(1);
 
-    await tick();
+    await after(POLL.firstMs);
     await vi.waitFor(() =>
       expect(toast.add).toHaveBeenCalledWith(expect.objectContaining({ severity: 'success' })),
     );
@@ -272,6 +270,68 @@ describe('bulk actions', () => {
 
     await auth.stepUp('pw');
     await vi.waitFor(() => expect(bulk.job.value?.status).toBe('queued'));
+  });
+
+  it('polls a running job less and less often, up to every five seconds', async () => {
+    const { bulk } = setup();
+    bulkJobs.start.mockResolvedValue({ job: aJob('running', { pending: 3 }) });
+    bulkJobs.get.mockResolvedValue({ job: aJob('running', { pending: 3 }) });
+    bulk.startBulk('disable');
+    await flushPromises();
+
+    const gaps: number[] = [];
+    let elapsed = 0;
+    while (gaps.length < 7) {
+      const before = bulkJobs.get.mock.calls.length;
+      await after(250);
+      elapsed += 250;
+      if (bulkJobs.get.mock.calls.length > before) {
+        gaps.push(elapsed);
+        elapsed = 0;
+      }
+    }
+    expect(gaps).toEqual([1000, 1500, 2250, 3500, 5000, 5000, 5000]);
+  });
+
+  it('checks a paused job only now and then, and not while the page is hidden', async () => {
+    const { bulk } = setup();
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('paused', { pending: 3 })] });
+    bulkJobs.get.mockResolvedValue({ job: aJob('paused', { pending: 3 }) });
+    await bulk.restore();
+
+    await after(POLL.pausedMs - 1000);
+    expect(bulkJobs.get).not.toHaveBeenCalled();
+    await after(1000);
+    expect(bulkJobs.get).toHaveBeenCalledOnce();
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    await after(POLL.pausedMs * 3);
+    expect(bulkJobs.get).toHaveBeenCalledOnce();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await flushPromises();
+    expect(bulkJobs.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('selects a finished job’s failed accounts once, not on every visit', async () => {
+    const failed = aJob('finished', { succeeded: 2, failed: 1 });
+    bulkJobs.list.mockResolvedValue({ jobs: [failed] });
+    bulkJobs.rows.mockResolvedValue({
+      rows: [
+        { targetId: 'b', targetName: null, status: 'failed', errorCode: 'x', errorMessage: 'no' },
+      ],
+    });
+
+    const first = setup();
+    first.selectedIds.value = new Set();
+    await first.bulk.restore();
+    expect([...first.selectedIds.value]).toEqual(['b']);
+
+    const second = setup();
+    second.selectedIds.value = new Set();
+    await second.bulk.restore();
+    expect(second.selectedIds.value.size).toBe(0);
+    expect(second.bulk.bulkErrors.value.get('b')).toBe('no');
   });
 
   it('stops a job without a step-up, and says why when that fails', async () => {
