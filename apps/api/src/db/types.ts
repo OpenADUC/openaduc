@@ -12,6 +12,7 @@ import type {
   BulkJobStatus,
   ClassStart,
   ImportField,
+  ImportLicenseState,
   LicenseAssignmentError,
 } from '@openaduc/shared';
 
@@ -523,14 +524,31 @@ export interface ClassPassesTable {
   updated_at: TimestampDefault;
 }
 
-export type ImportLicenseCheckState = 'waiting' | 'settled' | 'timed_out';
+export type ImportLicenseCheckState = 'waiting' | 'settled' | 'stopped';
+
+/**
+ * What a check last waited on, or why it stopped. See
+ * migrations/20261028000002_import_license_check_stops.ts.
+ */
+export type ImportLicenseCheckCode =
+  | 'unsynced'
+  | 'throttled'
+  | 'graph_refused'
+  | 'graph_unavailable'
+  | 'directory_unavailable'
+  | 'internal_error'
+  | 'licenses_off'
+  | 'not_in_groups'
+  | 'not_created'
+  | 'sync_timeout'
+  | 'settle_timeout';
 
 /** A licensed group an import row joins, as the license cache had it. */
 export interface ExpectedLicenseGroup {
   groupId: string;
   entraGroupId: string;
   name: string;
-  skus: { skuId: string; skuPartNumber: string | null }[];
+  skus: EntraGroupSku[];
 }
 
 /** One license a row's groups grant, as Entra last said. */
@@ -538,7 +556,7 @@ export interface CheckedLicense {
   skuId: string;
   skuPartNumber: string | null;
   group: string;
-  state: 'pending' | 'active' | 'activeWithError' | 'disabled' | 'error';
+  state: ImportLicenseState;
   error: LicenseAssignmentError | null;
 }
 
@@ -554,7 +572,7 @@ export interface ImportLicenseChecksTable {
   >;
   entra_user_id: string | null;
   licenses: JSONColumnType<CheckedLicense[] | null, string | null, string | null>;
-  error_code: string | null;
+  error_code: ImportLicenseCheckCode | null;
   message: string | null;
   started_at: Timestamp | null;
   synced_at: Timestamp | null;

@@ -12,12 +12,14 @@
 // carries on where it was: a due check is claimed (claim_token) for a
 // lease, and one whose process died is due again when the lease lapses.
 // Graph throttling holds back that directory's checks for as long as
-// Graph asks; a directory with the feature off is left until it's on.
+// Graph asks. Every waiting check has a deadline each sweep enforces,
+// whatever Graph answers (rules.ts, stopOf), and a directory with the
+// feature turned off has its checks stopped.
 import { randomUUID } from 'node:crypto';
 import type { ImportRowLicenses } from '@openaduc/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { sql, type Kysely, type Selectable, type Updateable } from 'kysely';
-import type { DB, ImportLicenseChecksTable } from '../../db/types.js';
+import type { DB, ImportLicenseCheckCode, ImportLicenseChecksTable } from '../../db/types.js';
 import { licenseSku } from '../../lib/skuNames.js';
 import type { ProviderFactory } from '../../providers/registry.js';
 import { DirectoryUnavailableError } from '../../providers/types.js';
@@ -33,12 +35,14 @@ import {
 import { SweepTimer } from '../sweepTimer.js';
 import { licensedGroupsById } from './check.js';
 import {
+  SETTLE_WINDOW_MS,
+  SYNC_WAIT_MESSAGE,
+  SYNC_WINDOW_MS,
   checkedLicenses,
   lower,
   retryMs,
   settleOutcome,
-  syncOutcome,
-  type CheckOutcome,
+  stopOf,
 } from './rules.js';
 
 export interface ImportLicenseDeps {
@@ -63,6 +67,11 @@ type Check = Selectable<ImportLicenseChecksTable> & {
 };
 type CheckUpdate = Updateable<ImportLicenseChecksTable>;
 
+type Outcome =
+  | { status: 'settled' }
+  | { status: 'waiting'; afterMs: number; message: string }
+  | { status: 'stopped'; message: string };
+
 /**
  * Store a license check for each of the job's rows whose groups grant a
  * license, with those groups as the cache has them now, in the
@@ -85,16 +94,7 @@ export async function storeLicenseChecks(trx: Kysely<DB>, jobId: string): Promis
   const checks = rows.flatMap((r) => {
     const expected = (r.group_ids ?? []).flatMap((id) => {
       const g = licensed.get(lower(id));
-      return g
-        ? [
-            {
-              groupId: g.id,
-              entraGroupId: g.entraGroupId,
-              name: g.name,
-              skus: g.skus.map((s) => ({ skuId: s.skuId, skuPartNumber: s.skuPartNumber })),
-            },
-          ]
-        : [];
+      return g ? [{ groupId: g.id, entraGroupId: g.entraGroupId, name: g.name, skus: g.skus }] : [];
     });
     return expected.length > 0
       ? [{ row_id: r.id, job_id: jobId, expected: JSON.stringify(expected) }]
@@ -108,12 +108,6 @@ export async function storeLicenseChecks(trx: Kysely<DB>, jobId: string): Promis
   }
 }
 
-const STATUS: Record<Check['status'], ImportRowLicenses['status']> = {
-  waiting: 'waiting',
-  settled: 'settled',
-  timed_out: 'timedOut',
-};
-
 /** A row's license check, as the import's page shows it. */
 export function rowLicenses(
   c: Pick<Check, 'status' | 'expected' | 'licenses' | 'message' | 'checked_at'>,
@@ -124,7 +118,7 @@ export function rowLicenses(
       g.skus.map((s) => ({ ...s, group: g.name, state: 'pending' as const, error: null })),
     );
   return {
-    status: STATUS[c.status],
+    status: c.status,
     message: c.status === 'settled' ? null : (c.message ?? 'Waiting for the account to sync.'),
     licenses: licenses.map((l) => ({
       ...licenseSku(l.skuId, l.skuPartNumber),
@@ -157,9 +151,13 @@ export class ImportLicenseService {
     return this.timer.stop();
   }
 
-  /** Work through the due checks until none are or the tick's time is up. Returns how many were taken. */
+  /**
+   * Stop the checks that can't go on, then work through the due ones until
+   * none are or the tick's time is up. Returns how many were taken.
+   */
   async sweep(budgetMs = TICK_BUDGET_MS): Promise<number> {
     const on = await this.deps.entra.directoriesWith('licenses');
+    await this.stopOverdue(on);
     const until = Date.now() + budgetMs;
     let taken = 0;
     while (Date.now() < until && !this.timer.stopping) {
@@ -171,6 +169,66 @@ export class ImportLicenseService {
     return taken;
   }
 
+  /** Stop each waiting check, not claimed now, whose deadline has passed or whose feature is off. */
+  private async stopOverdue(on: readonly number[]): Promise<void> {
+    const startedAt = sql<Date>`COALESCE(c.started_at, r.finished_at, j.created_at)`;
+    const unclaimed = sql<boolean>`(c.claim_token IS NULL OR c.next_attempt_at <= now())`;
+    const overdue = await this.deps.db
+      .selectFrom('import_license_checks as c')
+      .innerJoin('bulk_job_rows as r', 'r.id', 'c.row_id')
+      .innerJoin('bulk_jobs as j', 'j.id', 'c.job_id')
+      .select([
+        'c.row_id',
+        'c.error_code',
+        'c.message',
+        'c.synced_at',
+        'c.licenses',
+        'r.target_id',
+        'j.provider_id',
+        startedAt.as('started_at'),
+      ])
+      .where('c.status', '=', 'waiting')
+      .where(unclaimed)
+      .where(
+        sql<boolean>`(
+          NOT (j.provider_id = ANY(${on}::int[]))
+          OR (c.synced_at IS NULL
+            AND ${startedAt} + make_interval(secs => ${SYNC_WINDOW_MS / 1000}) <= now())
+          OR c.synced_at + make_interval(secs => ${SETTLE_WINDOW_MS / 1000}) <= now()
+        )`,
+      )
+      .execute();
+    const now = new Date();
+    for (const c of overdue) {
+      const stop = stopOf(
+        {
+          code: c.error_code,
+          message: c.message,
+          startedAt: new Date(c.started_at),
+          syncedAt: c.synced_at ? new Date(c.synced_at) : null,
+          licenses: c.licenses,
+          hasAccount: c.target_id !== null,
+          licensesOn: on.includes(Number(c.provider_id)),
+        },
+        now,
+      );
+      if (!stop) continue;
+      await this.deps.db
+        .updateTable('import_license_checks as c')
+        .set({
+          status: 'stopped',
+          error_code: stop.code,
+          message: stop.message,
+          claim_token: null,
+          updated_at: sql`now()`,
+        })
+        .where('c.row_id', '=', c.row_id)
+        .where('c.status', '=', 'waiting')
+        .where(unclaimed)
+        .execute();
+    }
+  }
+
   /** Claim the next due check whose account the import has created. */
   private async claimDue(on: readonly number[]): Promise<{ check: Check; token: string } | null> {
     if (on.length === 0) return null;
@@ -179,7 +237,9 @@ export class ImportLicenseService {
     const token = randomUUID();
     const { rows } = await sql<{ row_id: string }>`
       UPDATE import_license_checks SET claim_token = ${token}, attempts = attempts + 1,
-        started_at = COALESCE(started_at, now()), next_attempt_at = ${LEASE}, updated_at = now()
+        started_at = COALESCE(started_at,
+          (SELECT finished_at FROM bulk_job_rows WHERE id = import_license_checks.row_id), now()),
+        next_attempt_at = ${LEASE}, updated_at = now()
       WHERE row_id = (
         SELECT c.row_id FROM import_license_checks c
         JOIN bulk_job_rows r ON r.id = c.row_id
@@ -220,7 +280,7 @@ export class ImportLicenseService {
   private async record(
     check: Check,
     token: string,
-    outcome: CheckOutcome,
+    outcome: Outcome,
     now: Date,
     set: CheckUpdate = {},
   ): Promise<void> {
@@ -251,15 +311,8 @@ export class ImportLicenseService {
   /** Look once at a claimed check: find the person in Entra, then read how their licenses stand. */
   private async check(check: Check, token: string): Promise<void> {
     const now = new Date();
-    const startedAt = check.started_at ? new Date(check.started_at) : now;
-    const graph = await this.deps.graph.build(check.provider_id);
-    if (!graph) {
-      await this.update(check, token, {
-        next_attempt_at: new Date(now.getTime() + retryMs(check.attempts)).toISOString(),
-      });
-      return;
-    }
-    // Only the groups the row did join can grant anything.
+    // Only the groups the row did join can grant anything; a row's run has
+    // finished, so one that joined none never will.
     const joined = new Set(
       (progressOf(check.after_json)?.groups ?? [])
         .filter((g) => g.isMember)
@@ -267,17 +320,31 @@ export class ImportLicenseService {
     );
     const expected = check.expected.filter((g) => joined.has(lower(g.groupId)));
     if (expected.length === 0) {
-      const waiting = syncOutcome(startedAt, check.attempts, now);
       await this.record(
         check,
         token,
-        waiting.status === 'waiting'
-          ? { ...waiting, message: 'Waiting for the import to add them to their licensed groups.' }
-          : {
-              status: 'timed_out',
-              message: 'The import didn’t add them to their licensed groups.',
-            },
+        {
+          status: 'stopped',
+          message:
+            'The import didn’t add them to their licensed groups, so there were no licenses to check.',
+        },
         now,
+        { error_code: 'not_in_groups' },
+      );
+      return;
+    }
+    const graph = await this.deps.graph.build(check.provider_id);
+    if (!graph) {
+      await this.record(
+        check,
+        token,
+        {
+          status: 'waiting',
+          afterMs: retryMs(check.attempts),
+          message: 'The Entra integration has no credentials, so Microsoft Graph can’t be asked.',
+        },
+        now,
+        { error_code: 'graph_unavailable' },
       );
       return;
     }
@@ -288,9 +355,13 @@ export class ImportLicenseService {
         entraUserId = sid ? await findEntraUser(graph, sid) : null;
       }
       if (!entraUserId) {
-        await this.record(check, token, syncOutcome(startedAt, check.attempts, now), now, {
-          error_code: 'unsynced',
-        });
+        await this.record(
+          check,
+          token,
+          { status: 'waiting', afterMs: retryMs(check.attempts), message: SYNC_WAIT_MESSAGE },
+          now,
+          { error_code: 'unsynced' },
+        );
         return;
       }
       const firstSeen = !check.synced_at;
@@ -298,7 +369,7 @@ export class ImportLicenseService {
       const licenses = checkedLicenses(expected, await assignmentStates(graph, entraUserId));
       // Counted from their sync, so a long wait for it doesn't slow the looks after.
       const attempts = firstSeen ? 1 : check.attempts;
-      await this.record(check, token, settleOutcome(licenses, syncedAt, attempts, now), now, {
+      await this.record(check, token, settleOutcome(licenses, attempts), now, {
         entra_user_id: entraUserId,
         synced_at: syncedAt.toISOString(),
         licenses: JSON.stringify(licenses),
@@ -316,22 +387,24 @@ export class ImportLicenseService {
         return;
       }
       let afterMs = retryMs(check.attempts);
+      let code: ImportLicenseCheckCode = 'internal_error';
       let message = 'Something went wrong reading their licenses from Entra.';
       if (err instanceof GraphThrottledError) {
         afterMs = Math.max(30_000, err.retryAfterSeconds * 1000);
         this.throttledUntil.set(check.provider_id, Date.now() + afterMs);
+        code = 'throttled';
         message = 'Microsoft Graph is busy: their licenses are read again shortly.';
       } else if (err instanceof GraphPermissionError) {
-        message = `Couldn’t read their licenses from Entra: ${err.hint ? `${err.message} (${err.hint})` : err.message}`;
+        code = 'graph_refused';
+        message = `Microsoft Graph refused: ${err.graphMessage ?? err.message}${err.hint ? ` (${err.hint})` : ''}`;
       } else if (err instanceof DirectoryUnavailableError) {
+        code = 'directory_unavailable';
         message = 'No domain controller could be reached to find them in Entra.';
       } else {
         this.deps.logger.error({ err, rowId: check.row_id }, 'import license check failed');
       }
-      await this.update(check, token, {
-        error_code: 'read_failed',
-        message,
-        next_attempt_at: new Date(now.getTime() + afterMs).toISOString(),
+      await this.record(check, token, { status: 'waiting', afterMs, message }, now, {
+        error_code: code,
       });
     }
   }

@@ -40,6 +40,9 @@ const NEW_SAMS = [
   'pia.park',
   'quin.quay',
   'rex.reed',
+  'sam.sato',
+  'tia.tran',
+  'uma.urbe',
 ];
 
 interface FakeUser {
@@ -66,6 +69,8 @@ class FakeLicenseGraph {
   users = new Map<string, FakeUser>();
   /** Paths Graph answers as throttled, asking for this many seconds. */
   throttled = new Map<string, number>();
+  /** Paths Graph refuses, as a permission not granted would. */
+  refused = new Set<string>();
   requests: string[] = [];
 
   fetch = async (input: string | URL): Promise<Response> => {
@@ -81,6 +86,12 @@ class FakeLicenseGraph {
     const wait = this.throttled.get(path);
     if (wait !== undefined) {
       return json({ error: { code: 'TooManyRequests' } }, 429, { 'Retry-After': String(wait) });
+    }
+    if (this.refused.has(path)) {
+      return json(
+        { error: { code: 'Authorization_RequestDenied', message: 'Insufficient privileges.' } },
+        403,
+      );
     }
     if (path === '/organization') {
       return json({ value: [{ onPremisesLastSyncDateTime: '2026-10-24T11:30:00Z' }] });
@@ -441,11 +452,11 @@ describe('an import’s licenses', () => {
       expect(lines[1]).toContain(
         'Microsoft 365 E3: Not enough licenses: every one the tenant has of this product is assigned.',
       );
-      expect(lines[2]).toMatch(/,Microsoft 365 E3: assigned$/);
+      expect(lines[2]).toMatch(/,Microsoft 365 E3: Assigned$/);
       expect(lines[3]).toMatch(/,,$/);
     });
 
-    it('waits for group-based licensing to settle, within a window', async () => {
+    it('waits for group-based licensing to settle, until its deadline', async () => {
       const job = await runImport([row('nia.nash', 2, [groups['All Staff']!.id])]);
       await sync('nia.nash', []);
       await sweepDue();
@@ -477,18 +488,87 @@ describe('an import’s licenses', () => {
         api.app.services.importLicenses as unknown as { throttledUntil: Map<number, number> }
       ).throttledUntil.clear();
 
-      // Past two hours since they synced, it stops waiting and says so.
+      // Past two hours since they synced, it stops, though Graph is busy again.
+      graph.throttled.set('/users/entra-nia.nash', 60);
       await api.app.db
         .updateTable('import_license_checks')
         .set({ synced_at: sql`now() - interval '3 hours'` })
         .where('job_id', '=', job.id)
         .execute();
-      await sweepDue();
+      await api.app.services.importLicenses.sweep(5_000);
       expect((await rowOf(job.id, 'nia.nash')).licenses).toMatchObject({
-        status: 'timedOut',
+        status: 'stopped',
         message:
-          'Entra still hadn’t assigned Microsoft 365 E3 two hours after they synced. Their Licenses tab shows how it stands now.',
+          'Timed out waiting for Entra to assign Microsoft 365 E3 two hours after they synced. Their Licenses tab shows how it stands now.',
       });
+    });
+
+    it('stops, saying why, when Graph keeps refusing past the deadline for sync', async () => {
+      const job = await runImport([row('sam.sato', 2, [groups['All Staff']!.id])]);
+      graph.refused.add('/users');
+      await sweepDue();
+      expect((await rowOf(job.id, 'sam.sato')).licenses).toMatchObject({
+        status: 'waiting',
+        message: expect.stringMatching(/^Microsoft Graph refused: Insufficient privileges\./),
+      });
+      await api.app.db
+        .updateTable('import_license_checks')
+        .set({ started_at: sql`now() - interval '25 hours'` })
+        .where('job_id', '=', job.id)
+        .execute();
+      graph.requests = [];
+      await api.app.services.importLicenses.sweep(5_000);
+      expect(graph.requests).toEqual([]);
+      const check = await api.app.db
+        .selectFrom('import_license_checks')
+        .select(['status', 'error_code', 'message'])
+        .where('job_id', '=', job.id)
+        .executeTakeFirstOrThrow();
+      expect(check).toMatchObject({
+        status: 'stopped',
+        error_code: 'graph_refused',
+        message: expect.stringMatching(/^Microsoft Graph refused: Insufficient privileges\./),
+      });
+    });
+
+    it('doesn’t wait for a row that joined none of its licensed groups', async () => {
+      const job = await runImport([row('tia.tran', 2, [groups['All Staff']!.id])]);
+      // As a groups step the directory refused leaves it.
+      await api.app.db
+        .updateTable('bulk_job_rows')
+        .set({
+          status: 'partial',
+          after_json: sql`jsonb_set(after_json, '{groups}', '[]'::jsonb)`,
+        })
+        .where('job_id', '=', job.id)
+        .execute();
+      graph.requests = [];
+      await sweepDue();
+      expect(graph.requests).toEqual([]);
+      expect((await rowOf(job.id, 'tia.tran')).licenses).toMatchObject({
+        status: 'stopped',
+        message:
+          'The import didn’t add them to their licensed groups, so there were no licenses to check.',
+      });
+    });
+
+    it('stops the checks of a directory whose licenses are turned off', async () => {
+      const job = await runImport([row('uma.urbe', 2, [groups['All Staff']!.id])]);
+      await api.app.services.entraIntegration.update(api.directoryId!, {
+        features: { licenses: false },
+      });
+      try {
+        await api.app.services.importLicenses.sweep(5_000);
+        expect((await rowOf(job.id, 'uma.urbe')).licenses).toMatchObject({
+          status: 'stopped',
+          message:
+            'Licenses were turned off for this directory, so their licenses weren’t checked.',
+        });
+      } finally {
+        await api.app.services.entraIntegration.update(api.directoryId!, {
+          features: { licenses: true },
+        });
+      }
     });
 
     it('leaves no check while licenses are off', async () => {

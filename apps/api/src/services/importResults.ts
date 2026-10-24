@@ -7,9 +7,10 @@
 import {
   IMPORT_JOB_ACTION,
   IMPORT_ROW_STATUS_LABEL,
-  LICENSE_ERROR_TEXT,
+  IMPORT_LICENSE_STATE_LABEL,
   bulkJobStopped,
   csvRow,
+  licenseProblem,
   type BulkJob,
   type BulkJobResultsDownload,
   type BulkJobRowStatus,
@@ -238,20 +239,10 @@ async function resetResultRows(db: Kysely<DB>, job: Job) {
   }));
 }
 
-const LICENSE_STATE_TEXT: Record<ImportRowLicenses['licenses'][number]['state'], string> = {
-  pending: 'not assigned yet',
-  active: 'assigned',
-  activeWithError: 'assigned, with an error',
-  disabled: 'disabled',
-  error: 'not assigned',
-};
-
 /** What the CSV says of a row's licenses: each one's state and error, and what it waits for. */
 function licensesCell(l: ImportRowLicenses): string {
-  const each = l.licenses.map((x) =>
-    x.error || x.state === 'error'
-      ? `${x.name}: ${LICENSE_ERROR_TEXT[x.error ?? 'Other']}`
-      : `${x.name}: ${LICENSE_STATE_TEXT[x.state]}`,
+  const each = l.licenses.map(
+    (x) => `${x.name}: ${licenseProblem(x) ?? IMPORT_LICENSE_STATE_LABEL[x.state]}`,
   );
   return [...each, l.message].filter(Boolean).join(' ');
 }

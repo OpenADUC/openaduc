@@ -6,7 +6,8 @@ import {
   checkedLicenses,
   retryMs,
   settleOutcome,
-  syncOutcome,
+  stopOf,
+  type WaitingCheck,
 } from './rules.js';
 
 const E3 = '05e9a617-0261-4cee-bb44-138d3ef5d965';
@@ -18,8 +19,8 @@ const expected = [
     entraGroupId: 'ENTRA-STAFF',
     name: 'All Staff',
     skus: [
-      { skuId: E3, skuPartNumber: 'SPE_E3' },
-      { skuId: EMS, skuPartNumber: 'EMS' },
+      { skuId: E3, skuPartNumber: 'SPE_E3', disabledPlanCount: 0 },
+      { skuId: EMS, skuPartNumber: 'EMS', disabledPlanCount: 0 },
     ],
   },
 ];
@@ -58,8 +59,6 @@ describe('checkedLicenses', () => {
 });
 
 describe('settleOutcome', () => {
-  const synced = new Date('2026-10-24T09:00:00Z');
-  const at = (ms: number) => new Date(synced.getTime() + ms);
   const settled = checkedLicenses(expected, [
     { skuId: E3, assignedByGroup: 'entra-staff', state: 'Active' },
     {
@@ -72,35 +71,78 @@ describe('settleOutcome', () => {
   const pending = checkedLicenses(expected, []);
 
   it('settles once every license is listed, error or not', () => {
-    expect(settleOutcome(settled, synced, 1, at(MINUTE))).toEqual({ status: 'settled' });
+    expect(settleOutcome(settled, 1)).toEqual({ status: 'settled' });
   });
 
-  it('waits, looking less often, within the window, then gives up', () => {
-    expect(settleOutcome(pending, synced, 1, at(MINUTE))).toEqual({
+  it('waits, looking less often', () => {
+    expect(settleOutcome(pending, 1)).toEqual({
       status: 'waiting',
       afterMs: MINUTE,
       message:
         'Waiting for Entra to assign Microsoft 365 E3 and Enterprise Mobility + Security E3.',
     });
-    expect(settleOutcome(pending, synced, 4, at(MINUTE))).toMatchObject({ afterMs: 8 * MINUTE });
-    expect(settleOutcome(pending, synced, 4, at(SETTLE_WINDOW_MS - 1)).status).toBe('waiting');
-    expect(settleOutcome(pending, synced, 9, at(SETTLE_WINDOW_MS))).toMatchObject({
-      status: 'timed_out',
-      message: expect.stringMatching(/two hours after they synced/),
-    });
+    expect(settleOutcome(pending, 4)).toMatchObject({ afterMs: 8 * MINUTE });
   });
 });
 
-describe('syncOutcome', () => {
-  it('waits a day for Connect Sync, then gives up', () => {
-    const started = new Date('2026-10-24T09:00:00Z');
-    expect(syncOutcome(started, 2, new Date(started.getTime() + MINUTE))).toMatchObject({
-      status: 'waiting',
-      afterMs: 2 * MINUTE,
+describe('stopOf', () => {
+  const created = new Date('2026-10-24T09:00:00Z');
+  const at = (ms: number) => new Date(created.getTime() + ms);
+  const unsynced: WaitingCheck = {
+    code: 'unsynced',
+    message: 'Waiting for Connect Sync to bring them to Microsoft Entra.',
+    startedAt: created,
+    syncedAt: null,
+    licenses: null,
+    hasAccount: true,
+    licensesOn: true,
+  };
+
+  it('waits for sync a day from the account’s creation, then times out', () => {
+    expect(stopOf(unsynced, at(SYNC_WINDOW_MS - 1))).toBeNull();
+    expect(stopOf(unsynced, at(SYNC_WINDOW_MS))).toMatchObject({
+      code: 'sync_timeout',
+      message: expect.stringMatching(/^Timed out waiting for sync/),
     });
-    expect(syncOutcome(started, 30, new Date(started.getTime() + SYNC_WINDOW_MS)).status).toBe(
-      'timed_out',
-    );
+  });
+
+  it('waits two hours from sync for licensing to settle, then times out naming what’s missing', () => {
+    const synced = {
+      ...unsynced,
+      code: null,
+      syncedAt: at(SYNC_WINDOW_MS),
+      licenses: checkedLicenses(expected, [
+        { skuId: E3, assignedByGroup: 'entra-staff', state: 'Active' },
+      ]),
+    };
+    expect(stopOf(synced, at(SYNC_WINDOW_MS + SETTLE_WINDOW_MS - 1))).toBeNull();
+    expect(stopOf(synced, at(SYNC_WINDOW_MS + SETTLE_WINDOW_MS))).toEqual({
+      code: 'settle_timeout',
+      message:
+        'Timed out waiting for Entra to assign Enterprise Mobility + Security E3 two hours after they synced. Their Licenses tab shows how it stands now.',
+    });
+  });
+
+  it('stops past the deadline with the last error it met, if any', () => {
+    const refused = {
+      ...unsynced,
+      code: 'graph_refused' as const,
+      message: 'Microsoft Graph refused: Insufficient privileges.',
+    };
+    expect(stopOf(refused, at(SYNC_WINDOW_MS))).toEqual({
+      code: 'graph_refused',
+      message: 'Microsoft Graph refused: Insufficient privileges.',
+    });
+    expect(stopOf({ ...unsynced, hasAccount: false }, at(SYNC_WINDOW_MS))).toMatchObject({
+      code: 'not_created',
+    });
+  });
+
+  it('stops at once when licenses are turned off', () => {
+    expect(stopOf({ ...unsynced, licensesOn: false }, created)).toEqual({
+      code: 'licenses_off',
+      message: 'Licenses were turned off for this directory, so their licenses weren’t checked.',
+    });
   });
 });
 

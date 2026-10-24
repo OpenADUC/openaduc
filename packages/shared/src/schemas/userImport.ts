@@ -286,21 +286,40 @@ export const IMPORT_ROW_STATUS_LABEL: Record<BulkJobRowStatus, string> = {
   skipped: 'Skipped',
 };
 
+/** How one license a row's groups grant stands: `pending` until Entra lists it on the user. */
+export const IMPORT_LICENSE_STATES = [
+  'pending',
+  'active',
+  'activeWithError',
+  'disabled',
+  'error',
+] as const;
+export type ImportLicenseState = (typeof IMPORT_LICENSE_STATES)[number];
+
+/** What a row's license state says, on the import's page and in its CSV. */
+export const IMPORT_LICENSE_STATE_LABEL: Record<ImportLicenseState, string> = {
+  pending: 'Not assigned yet',
+  active: 'Assigned',
+  activeWithError: 'Assigned, with an error',
+  disabled: 'Disabled',
+  error: 'Not assigned',
+};
+
 /**
  * How the licenses a row's groups grant stand in Entra, as the follow-up
  * last read them once the person synced: waiting (for Connect Sync, or
- * for group-based licensing to assign each), settled, or given up on.
+ * for group-based licensing to assign each), settled, or stopped (past
+ * its deadline, or unable to go on).
  */
 export const importRowLicensesSchema = z.object({
-  status: z.enum(['waiting', 'settled', 'timedOut']),
+  status: z.enum(['waiting', 'settled', 'stopped']),
   /** What it waits for, or why it stopped; null once settled. */
   message: z.string().nullable(),
   licenses: z.array(
     licenseSkuSchema.extend({
       /** The group it comes from, by its AD name. */
       group: z.string(),
-      /** `pending` until Entra lists it on the user. */
-      state: z.enum(['pending', 'active', 'activeWithError', 'disabled', 'error']),
+      state: z.enum(IMPORT_LICENSE_STATES),
       error: z.enum(LICENSE_ASSIGNMENT_ERRORS).nullable(),
     }),
   ),

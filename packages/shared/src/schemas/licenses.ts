@@ -32,6 +32,14 @@ export const LICENSE_ERROR_TEXT: Record<LicenseAssignmentError, string> = {
   Other: 'Microsoft Entra couldn’t assign it. The Microsoft 365 admin center says why.',
 };
 
+/** Why a license wasn't (fully) assigned, in the admin centers' terms; null when it was. */
+export function licenseProblem(a: {
+  state: string;
+  error: LicenseAssignmentError | null;
+}): string | null {
+  return a.error || a.state === 'error' ? LICENSE_ERROR_TEXT[a.error ?? 'Other'] : null;
+}
+
 export const licenseSkuSchema = z.object({
   skuId: z.string(),
   /** e.g. `SPE_E3`; null when the tenant's subscriptions couldn't be read. */
