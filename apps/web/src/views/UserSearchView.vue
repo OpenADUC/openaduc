@@ -40,6 +40,9 @@ import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import BulkAccountDialog from '../design/feedback/BulkAccountDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import BulkRevertDialog from '../design/feedback/BulkRevertDialog.vue';
+import { useBulkJobRevert } from '../design/composables/useBulkJobRevert.js';
+import { bulkJobTitle } from '../design/lib/bulkJob.js';
 import BulkEditDialog from '../design/feedback/BulkEditDialog.vue';
 import BulkGroupsDialog from '../design/feedback/BulkGroupsDialog.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
@@ -448,6 +451,7 @@ function exportCsv(): void {
 const canBulkDisable = computed(() => auth.hasCapability('write:user.enableDisable'));
 const canBulkUnlock = computed(() => auth.hasCapability('write:user.unlock'));
 
+const bulk = useBulkActions({ selectedIds, toast, reload: load });
 const {
   job: bulkJob,
   busy: bulkJobBusy,
@@ -468,7 +472,18 @@ const {
   stopJob,
   dismissJob,
   restore: restoreBulkJob,
-} = useBulkActions({ selectedIds, toast, reload: load });
+} = bulk;
+const jobRevert = useBulkJobRevert({ bulk });
+
+function revertBulkJob(): void {
+  const job = bulkJob.value;
+  if (!job) return;
+  void jobRevert.open({
+    jobId: job.id,
+    title: bulkJobTitle(job, job.counts.total, job.actorDisplayName),
+    action: job.action,
+  });
+}
 const selectedRows = computed(() => rows.value.filter((r) => selectedIds.value.has(r.id)));
 
 const canBulkGroups = computed(() => auth.hasCapability('write:group.membership'));
@@ -668,6 +683,7 @@ onMounted(() => {
       @stop="stopJob"
       @continue="continueJob"
       @retry="retryFailed"
+      @revert="revertBulkJob"
       @dismiss="dismissJob"
     />
 
@@ -962,6 +978,7 @@ onMounted(() => {
     <BulkGroupsDialog :workflow="groupChange" :hidden-count="hiddenSelectedCount" />
     <BulkEditDialog :workflow="attributeEdit" :hidden-count="hiddenSelectedCount" />
     <BulkAccountDialog :workflow="accountChange" :hidden-count="hiddenSelectedCount" />
+    <BulkRevertDialog :workflow="jobRevert" />
 
     <PasteListDialog
       v-model:visible="pasteListOpen"

@@ -49,6 +49,8 @@ const aJob = (status: BulkJob['status'], counts: Partial<BulkJob['counts']> = {}
   status,
   pauseReason: null,
   revertsJobId: null,
+  revertible: false,
+  revertedBy: null,
   actorDisplayName: 'OpenADUC Operator',
   createdAt: new Date().toISOString(),
   finishedAt: status === 'finished' ? new Date().toISOString() : null,

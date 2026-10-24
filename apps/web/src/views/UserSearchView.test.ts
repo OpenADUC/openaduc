@@ -95,6 +95,8 @@ const api = {
     startGroupChange: vi.fn(),
     startAttributeEdit: vi.fn(),
     startAccountChange: vi.fn(),
+    revertPreview: vi.fn(),
+    revert: vi.fn(),
     rows: vi.fn(async () => ({
       rows: [
         {
@@ -199,6 +201,8 @@ describe('the user list, coming back to a bulk job', () => {
     status,
     pauseReason: null,
     revertsJobId: null,
+    revertible: false,
+    revertedBy: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: status === 'finished' ? new Date().toISOString() : null,
@@ -221,6 +225,45 @@ describe('the user list, coming back to a bulk job', () => {
     expect(page.get('.bulk-job').text()).toContain('Disabling 2 accounts…');
     expect(page.get('.bulk-job').text()).toContain('1 of 2 done.');
     expect(button(page, 'Paste a list').attributes('disabled')).toBeDefined();
+  });
+
+  it('offers to revert a stopped job, and follows the revert in its place', async () => {
+    localStorage.clear();
+    api.bulkJobs.list.mockResolvedValueOnce({
+      jobs: [{ ...aJob('finished', 2, 0), revertible: true }],
+    });
+    api.bulkJobs.revertPreview.mockResolvedValueOnce({
+      revert: { count: 2, users: [] },
+      modified: { count: 0, users: [] },
+      unchanged: { count: 0, users: [] },
+      notRevertible: { count: 0, users: [] },
+      excluded: 0,
+      protectedGroups: [],
+      previewToken: 'tok',
+    });
+    const revert: BulkJob = {
+      ...aJob('running', 0, 0),
+      id: '8',
+      action: 'user.enable',
+      revertsJobId: '7',
+    };
+    api.bulkJobs.revert.mockResolvedValueOnce({ job: revert });
+    api.bulkJobs.get.mockResolvedValue({ job: revert });
+    const page = await openUsers('');
+
+    await button(page, 'Revert…').trigger('click');
+    await flushPromises();
+    expect(api.bulkJobs.revertPreview).toHaveBeenCalledWith('7');
+    expect(page.get('.p-dialog').text()).toContain('Bulk disable by OpenADUC Operator: 2 users');
+    await button(page, 'Revert 2 accounts').trigger('click');
+    await flushPromises();
+
+    expect(api.bulkJobs.revert).toHaveBeenCalledWith('7', {
+      previewToken: 'tok',
+      include: [],
+      acknowledgeProtected: false,
+    });
+    expect(page.get('.bulk-job').text()).toContain('Reverting 2 accounts…');
   });
 
   it('keeps a finished job’s failed accounts selected until it’s dismissed', async () => {
@@ -276,6 +319,8 @@ describe('the user list, adding the selection to groups', () => {
       status: 'running',
       pauseReason: null,
       revertsJobId: null,
+      revertible: false,
+      revertedBy: null,
       actorDisplayName: 'OpenADUC Operator',
       createdAt: new Date().toISOString(),
       finishedAt: null,
@@ -377,6 +422,8 @@ describe('the user list, editing the selection’s attributes', () => {
       status: 'running',
       pauseReason: null,
       revertsJobId: null,
+      revertible: false,
+      revertedBy: null,
       actorDisplayName: 'OpenADUC Operator',
       createdAt: new Date().toISOString(),
       finishedAt: null,
@@ -443,6 +490,8 @@ describe('the user list, moving the selection and changing its account settings'
     status: 'running',
     pauseReason: null,
     revertsJobId: null,
+    revertible: false,
+    revertedBy: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: null,

@@ -86,12 +86,15 @@ const revertPreview: BulkJobRevertPreview = {
   unchanged: { count: 0, users: [] },
   notRevertible: { count: 0, users: [] },
   excluded: 1,
+  protectedGroups: [],
   previewToken: 'token-1',
 };
 const revertJob: BulkJob = {
   id: '8',
-  action: 'user.disable',
+  action: 'user.enable',
   revertsJobId: '7',
+  revertible: false,
+  revertedBy: null,
   subject: null,
   status: 'running',
   pauseReason: null,
@@ -208,6 +211,7 @@ describe('the audit log', () => {
     expect(api.bulkJobs.revert).toHaveBeenCalledExactlyOnceWith('7', {
       previewToken: 'token-1',
       include: ['u2'],
+      acknowledgeProtected: false,
     });
     expect(page.find('.p-dialog').exists()).toBe(false);
     expect(text(page.get('.bulk-job'))).toContain('Reverting 2 accounts…');
@@ -229,6 +233,7 @@ describe('the audit log', () => {
     expect(api.bulkJobs.revert).toHaveBeenCalledWith('7', {
       previewToken: 'token-1',
       include: 'all',
+      acknowledgeProtected: false,
     });
   });
 
@@ -263,7 +268,7 @@ describe('the audit log', () => {
           status: 'finished',
         },
       }),
-      revertible({ revertsJobId: '6' }),
+      revertible({ action: 'user.enable', revertsJobId: '6' }),
     ];
     const { page } = await openAudit(['view:audit']);
 

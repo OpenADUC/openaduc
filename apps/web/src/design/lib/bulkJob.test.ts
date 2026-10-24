@@ -134,9 +134,10 @@ describe('a bulk job in the audit log', () => {
   });
 
   it('says what a revert reverts, and who reverted a job and when', () => {
-    expect(describeBulkEntry(summary({ revertsJobId: '6', total: 40 }), 'Sam Lee').title).toBe(
-      'Revert of bulk disable by Sam Lee: 40 users',
-    );
+    expect(
+      describeBulkEntry(summary({ action: 'user.enable', revertsJobId: '6', total: 40 }), 'Sam Lee')
+        .title,
+    ).toBe('Revert of bulk disable by Sam Lee: 40 users');
     const revertedBy = (status: 'finished' | 'running' | 'cancelled') => ({
       jobId: '8',
       actorDisplayName: 'Sam Lee',

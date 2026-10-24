@@ -33,6 +33,7 @@ import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import ReassignReportsDialog from '../design/feedback/ReassignReportsDialog.vue';
+import BulkRevertDialog from '../design/feedback/BulkRevertDialog.vue';
 import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
 import { lockoutEnd, signInBlockers, signInNotes, type SignInFix } from '../design/lib/signIn.js';
@@ -1039,6 +1040,7 @@ watch(user, (u) => {
           @stop="reassign.stopJob"
           @continue="reassign.continueJob"
           @retry="reassign.retryFailed"
+          @revert="reassign.revertJob"
           @dismiss="reassign.dismissJob"
         />
         <!-- Overview — at-a-glance summary that aggregates the most-asked-about
@@ -1835,6 +1837,7 @@ watch(user, (u) => {
       @close="closeMoveDialog"
     />
     <ReassignReportsDialog :workflow="reassign" :manager-name="displayName" />
+    <BulkRevertDialog :workflow="reassign.jobRevert" />
     <AccountExpiryDialog
       :visible="expiryDialogOpen"
       :expiry="expiry"
