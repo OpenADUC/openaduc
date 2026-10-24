@@ -645,6 +645,7 @@ const announcement = computed(() => {
 
 .gs-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: 0;
   outline: none;
@@ -664,6 +665,7 @@ const announcement = computed(() => {
 }
 
 .gs-close {
+  flex-shrink: 0;
   background: transparent;
   border: 0;
   color: var(--text-3);
