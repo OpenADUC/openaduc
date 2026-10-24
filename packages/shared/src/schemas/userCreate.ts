@@ -230,8 +230,8 @@ export interface UserCopySource {
     samAccountName: string;
     displayName: string | null;
   };
-  /** Where the source is, which the copy is created in unless the operator picks another OU. */
-  ouDn: string;
+  /** The source's OU, which the copy is created in; null when it isn't in an OU (CN=Users). */
+  ouDn: string | null;
   organisation: Record<NewUserOrganisationField, string | null>;
   /** Null when the source has none, or it isn't a user OpenADUC knows. */
   manager: { id: string; distinguishedName: string; displayName: string | null } | null;

@@ -3,6 +3,7 @@ import type {
   GroupScope,
   GroupType,
   NamingLookups,
+  NewUserOrganisationField,
   TakenNames,
   UserCreateStep,
 } from '@openaduc/shared';
@@ -543,10 +544,11 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult & { group?: DirectoryGroup }>;
   // Create a user at `input.dn` in AD's order: add it disabled, set its
-  // password (and must-change), then enable it unless `finish.enable` is
-  // false. Checks its names are free on the operator's bind first and
-  // returns `conflict` naming the holder otherwise. A step failing after
-  // the add stops there, leaving the account disabled.
+  // password (and must-change), add it to `finish.groups`, then enable it
+  // unless `finish.enable` is false. Checks its names are free on the
+  // operator's bind first and returns `conflict` naming the holder
+  // otherwise. A step failing after the add stops there, leaving the
+  // account disabled; a group that can't be added doesn't stop the others.
   createUser(
     input: UserCreateInput,
     finish: UserCreateFinish,
@@ -682,13 +684,25 @@ export interface UserCreateInput {
   otherMailbox: string | null;
   mobile: string | null;
   telephoneNumber: string | null;
+  /** Organisation attributes with a value; the rest are left unset. */
+  organisation: Partial<Record<NewUserOrganisationField, string>>;
+  /** The manager's DN. */
+  manager: string | null;
 }
 
 /** What the steps after the add need. */
 export interface UserCreateFinish {
   password: string;
   mustChange: boolean;
+  /** DNs of the groups the groups step adds the account to. */
+  groups: readonly string[];
   enable: boolean;
+}
+
+/** How the groups step went, group by group. */
+export interface UserCreateGroups {
+  added: string[];
+  failed: { dn: string; reason: NonNullable<MutationResult['reason']>; errorMessage: string }[];
 }
 
 export interface UserCreateResult extends MutationResult {
@@ -696,6 +710,8 @@ export interface UserCreateResult extends MutationResult {
   completed: UserCreateStep[];
   /** The step that failed after the account was made. */
   failedStep?: UserCreateStep;
+  /** Set once the groups step has run. */
+  groups?: UserCreateGroups;
   /** The account as read back, unless that failed. */
   user?: DirectoryUser;
   /** The account as the steps left it, unless that couldn't be read. */
