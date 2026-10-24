@@ -16,6 +16,7 @@ interface AuditRow {
   result: string;
   targetId: string | null;
   bulkJobId: string | null;
+  bulk: { action: string; status: string; total: number; succeeded: number; failed: number } | null;
 }
 
 const isDisabled = async (sam: string) =>
@@ -112,7 +113,7 @@ describe('bulk actions run as server-side jobs', () => {
     expect(failed[1]!.errorMessage).toBe('No such user in the directory.');
   });
 
-  it('audits every row with the bulk id, each row also in its target’s own activity', async () => {
+  it('audits every row with the bulk id, and the audit log shows the job as one entry', async () => {
     const missing = randomUUID();
     const job = await waitFor(
       operator,
@@ -133,6 +134,26 @@ describe('bulk actions run as server-side jobs', () => {
     );
     expect(events.every((e) => e.bulkJobId === job.id)).toBe(true);
 
+    // Grouped, and found by a row's failure as well as by its heading.
+    for (const query of ['groupBulk=1', 'groupBulk=1&result=failure&action=user.disable']) {
+      const grouped = (await auditor.get(`/api/audit-events?${query}&pageSize=200`)).json<{
+        rows: AuditRow[];
+      }>().rows;
+      expect(grouped.filter((e) => e.bulkJobId === job.id)).toEqual([
+        expect.objectContaining({
+          action: 'bulk.create',
+          bulk: {
+            action: 'user.disable',
+            status: 'finished',
+            pauseReason: null,
+            total: 3,
+            succeeded: 2,
+            failed: 1,
+          },
+        }),
+      ]);
+    }
+    // Ungrouped, as a user's own activity reads it, each row stands alone.
     const flat = (
       await auditor.get(`/api/audit-events?targetType=user&targetId=${users.alice}`)
     ).json<{ rows: AuditRow[] }>().rows;
