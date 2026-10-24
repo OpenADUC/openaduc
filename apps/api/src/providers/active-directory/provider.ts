@@ -55,6 +55,7 @@ import type {
   UserCreateFinish,
   UserCreateInput,
   UserCreateResult,
+  AccountFingerprint,
   UserRenameInput,
   WriteContext,
 } from '../types.js';
@@ -694,13 +695,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Set `unicodePwd` to a new value. AD requires this to be a UTF-16LE
-   * encoding of the password wrapped in double quotes, transmitted over
-   * LDAPS (the cleartext-on-the-wire requirement is enforced by AD itself).
-   *
-   * If `forceChangeAtNextLogin` is true, also set `pwdLastSet=0`. AD treats
-   * that as "needs to change on next sign-in". `unlock` also sets
-   * `lockoutTime=0`. All of it is one modify, so it applies or fails whole.
+   * Set a new password (see passwordChanges), with must-change if
+   * `forceChangeAtNextLogin`. `unlock` also sets `lockoutTime=0`. All of it
+   * is one modify, so it applies or fails whole.
    */
   async resetPassword(
     userId: DirectoryObjectIdentifier,
@@ -713,23 +710,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (!target) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
         const before = normalizeUser(target);
 
-        const changes: Change[] = [
-          new Change({
-            operation: 'replace',
-            modification: new Attribute({
-              type: 'unicodePwd',
-              values: [encodeUnicodePassword(input.newPassword)],
-            }),
-          }),
-        ];
-        if (input.forceChangeAtNextLogin) {
-          changes.push(
-            new Change({
-              operation: 'replace',
-              modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
-            }),
-          );
-        }
+        const changes = passwordChanges(input.newPassword, input.forceChangeAtNextLogin);
         if (input.unlock) {
           changes.push(
             new Change({
@@ -759,13 +740,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           },
         };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isPolicy = /policy|complexity|length|history/i.test(message);
-        return {
-          ok: false,
-          reason: isPolicy ? 'policy_violation' : 'directory_error',
-          errorMessage: message,
-        };
+        return classifyPasswordError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -876,16 +851,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           };
         }
 
-        await client.modify(
-          dn,
-          new Change({
-            operation: 'replace',
-            modification: new Attribute({
-              type: 'userAccountControl',
-              values: [String(nextUac)],
-            }),
-          }),
-        );
+        await client.modify(dn, accountControlChange(nextUac));
 
         const afterEntry = await this.findAccountEntry(client, kind, id);
         return {
@@ -1604,13 +1570,15 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
         if (input.mobile) attrs.mobile = input.mobile;
         if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
-        await client.add(input.dn, attrs);
-      } catch (err) {
-        return { ...classifyWriteError(err), completed: [] };
-      }
-      try {
+        try {
+          await client.add(input.dn, attrs);
+        } catch (err) {
+          return { ...classifyWriteError(err), completed: [] };
+        }
         const steps: UserCreateStep[] = finish.enable ? ['password', 'enable'] : ['password'];
         return await this.runCreateSteps(client, input.dn, ['create'], steps, finish);
+      } catch (err) {
+        return { ...classifyWriteError(err), completed: [] };
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -1646,11 +1614,39 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     return 'completed' in result ? result : { ...result, completed: [] };
   }
 
+  async getAccountFingerprint(
+    identifier: DirectoryObjectIdentifier,
+  ): Promise<AccountFingerprint | null> {
+    return this.withServiceBind((client) => this.accountFingerprint(client, identifier));
+  }
+
+  private async accountFingerprint(
+    client: Client,
+    identifier: DirectoryObjectIdentifier,
+  ): Promise<AccountFingerprint | null> {
+    const entry = await this.findUserEntry(client, identifier, [
+      'objectGUID',
+      'whenCreated',
+      'uSNChanged',
+      'pwdLastSet',
+      'lastLogonTimestamp',
+    ]);
+    const guid = entry?.objectGUID;
+    if (!entry || !Buffer.isBuffer(guid)) return null;
+    return {
+      objectGuid: objectGuidToString(guid),
+      whenCreated: asString(entry.whenCreated),
+      usnChanged: asString(entry.uSNChanged),
+      pwdLastSet: asString(entry.pwdLastSet),
+      lastLogonTimestamp: asString(entry.lastLogonTimestamp),
+    };
+  }
+
   /**
-   * The steps after the add, in order, stopping at the first that fails.
-   * The password and must-change are one modify, so a password AD refuses
-   * leaves `pwdLastSet` alone. Without must-change, setting the password
-   * sets `pwdLastSet` to now.
+   * The steps after the add, in order, stopping at the first that fails,
+   * then the account as they left it. The password step also clears
+   * PASSWD_NOTREQD, and enabling leaves exactly a normal account, so a
+   * new account carries no flags nobody chose.
    */
   private async runCreateSteps(
     client: Client,
@@ -1660,71 +1656,32 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     finish: UserCreateFinish,
   ): Promise<UserCreateResult> {
     const completed = [...done];
-    const readBack = async () => {
-      const entry = await this.findUserEntry(client, {
-        kind: 'distinguishedName',
-        value: dn,
-      }).catch(() => null);
-      return entry ? normalizeUser(entry) : undefined;
+    const leftAs = async () => {
+      const id = { kind: 'distinguishedName', value: dn } as const;
+      const entry = await this.findUserEntry(client, id).catch(() => null);
+      const fingerprint = await this.accountFingerprint(client, id).catch(() => null);
+      return {
+        ...(entry ? { user: normalizeUser(entry) } : {}),
+        ...(fingerprint ? { fingerprint } : {}),
+      };
     };
     for (const step of steps) {
       try {
         if (step === 'password') {
-          const changes = [
-            new Change({
-              operation: 'replace',
-              modification: new Attribute({
-                type: 'unicodePwd',
-                values: [encodeUnicodePassword(finish.password)],
-              }),
-            }),
-          ];
-          if (finish.mustChange) {
-            changes.push(
-              new Change({
-                operation: 'replace',
-                modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
-              }),
-            );
-          }
-          await client.modify(dn, changes);
+          await client.modify(dn, [
+            ...passwordChanges(finish.password, finish.mustChange),
+            accountControlChange(UAC.NORMAL_ACCOUNT | UAC.ACCOUNTDISABLE),
+          ]);
         } else if (step === 'enable') {
-          const { searchEntries } = await client.search(dn, {
-            scope: 'base',
-            filter: '(objectClass=user)',
-            attributes: ['userAccountControl'],
-          });
-          const uac = searchEntries[0] ? userAccountControlOf(searchEntries[0]) : NaN;
-          if (!Number.isFinite(uac)) throw new Error('unreadable userAccountControl');
-          await client.modify(
-            dn,
-            new Change({
-              operation: 'replace',
-              modification: new Attribute({
-                type: 'userAccountControl',
-                values: [String(uac & ~UAC.ACCOUNTDISABLE)],
-              }),
-            }),
-          );
+          await client.modify(dn, accountControlChange(UAC.NORMAL_ACCOUNT));
         }
         completed.push(step);
       } catch (err) {
-        const refused = classifyWriteError(err);
-        // AD says a password breaks the policy as a constraint violation.
-        const reason =
-          step === 'password' && refused.reason === 'conflict'
-            ? 'policy_violation'
-            : refused.reason;
-        return {
-          ...refused,
-          ...(reason ? { reason } : {}),
-          completed,
-          failedStep: step,
-          ...withUser(await readBack()),
-        };
+        const refused = step === 'password' ? classifyPasswordError(err) : classifyWriteError(err);
+        return { ...refused, completed, failedStep: step, ...(await leftAs()) };
       }
     }
-    return { ok: true, completed, ...withUser(await readBack()) };
+    return { ok: true, completed, ...(await leftAs()) };
   }
 
   async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {
@@ -3011,8 +2968,56 @@ const CLASH_ORDER: readonly ClashAttribute[] = [
   'cn',
 ];
 
-function withUser(user: DirectoryUser | undefined): { user?: DirectoryUser } {
-  return user ? { user } : {};
+/**
+ * Set a password, and must-change with it. One modify, so a password AD
+ * refuses leaves `pwdLastSet` alone; without must-change, AD sets
+ * `pwdLastSet` to now. AD requires the value as UTF-16LE in quotes, over
+ * an encrypted connection.
+ */
+function passwordChanges(password: string, mustChange: boolean): Change[] {
+  const changes = [
+    new Change({
+      operation: 'replace',
+      modification: new Attribute({
+        type: 'unicodePwd',
+        values: [encodeUnicodePassword(password)],
+      }),
+    }),
+  ];
+  if (mustChange) {
+    changes.push(
+      new Change({
+        operation: 'replace',
+        modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
+      }),
+    );
+  }
+  return changes;
+}
+
+function accountControlChange(userAccountControl: number): Change {
+  return new Change({
+    operation: 'replace',
+    modification: new Attribute({
+      type: 'userAccountControl',
+      values: [String(userAccountControl)],
+    }),
+  });
+}
+
+/**
+ * A refused password write. AD reports a password its policy rejects
+ * under several result codes (constraint violation, unwilling to
+ * perform), always with extended error 0000052D; Samba names the
+ * restriction instead.
+ */
+function classifyPasswordError(err: unknown): MutationResult {
+  const refused = classifyWriteError(err);
+  return /\b0*52D\b|password_restrictions|policy|complexity|length|history/i.test(
+    refused.errorMessage ?? '',
+  )
+    ? { ...refused, reason: 'policy_violation' }
+    : refused;
 }
 
 /**
