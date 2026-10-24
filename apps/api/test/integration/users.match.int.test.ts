@@ -159,10 +159,11 @@ describe('POST /api/users/match', () => {
     expect(row).toEqual({
       action: 'user.search',
       metadata_json: {
-        pastedList: ['alice.anders', 'nobody'],
+        pastedEntries: 2,
         matched: 1,
         ambiguous: 0,
         unmatched: 1,
+        matchedUserIds: [ids['alice.anders']],
       },
     });
   });
