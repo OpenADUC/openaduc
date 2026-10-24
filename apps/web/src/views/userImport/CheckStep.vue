@@ -2,10 +2,11 @@
 <!--
   Step 6: the final check, against the directory right before the run:
   each name still free, each OU, group and manager still there. Running
-  the import comes with #153; until then the wizard ends here.
+  the import starts its job and moves on to the job's results page.
 -->
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import type { ImportCheckIssueKind } from '@openaduc/shared';
@@ -25,7 +26,20 @@ const {
   protectedGroups,
   acknowledgedProtected,
   ready,
+  running,
+  runError,
+  rulesError,
+  startedJobId,
 } = w;
+
+const router = useRouter();
+const openJob = () =>
+  startedJobId.value &&
+  router.push({ name: 'user-import-job', params: { id: startedJobId.value } });
+// A placement rule that didn't save is said here first; the import runs regardless.
+watch(startedJobId, (id) => {
+  if (id && !rulesError.value) void openJob();
+});
 
 const count = computed(() => importRequest.value?.rows.length ?? 0);
 const people = (n: number) => (n === 1 ? '1 person' : `${n} people`);
@@ -114,15 +128,25 @@ const FIX_LABEL = { names: 'Review names', buckets: 'Buckets', options: 'Options
     </template>
 
     <div class="ck-run">
-      <Button label="Run import" icon="pi pi-play" disabled />
-      <span class="hint">
-        {{
-          ready
-            ? 'Running imports isn’t available yet. The draft stays in this tab until it is.'
-            : 'Run the final check first.'
-        }}
+      <Button
+        :label="`Import ${people(count)}`"
+        icon="pi pi-play"
+        :loading="running"
+        :disabled="!ready || !!startedJobId"
+        @click="w.run"
+      />
+      <span v-if="!ready" class="hint">Run the final check first.</span>
+      <span v-else class="hint">
+        It runs on the server: you can leave the page and come back to its results.
       </span>
     </div>
+    <Message v-if="runError" severity="error" :closable="false" class="ck-msg">
+      {{ runError }}
+    </Message>
+    <Message v-if="startedJobId && rulesError" severity="warn" :closable="false" class="ck-msg">
+      The import is running, but its placement rules weren’t saved: {{ rulesError }}
+      <Button label="See its progress" size="small" text @click="openJob" />
+    </Message>
   </div>
 </template>
 

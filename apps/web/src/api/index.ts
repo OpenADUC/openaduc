@@ -84,6 +84,9 @@ import type {
   ImportLookupRequest,
   ImportLookupResponse,
   ImportRequest,
+  ImportRunRequest,
+  ImportJobResponse,
+  ImportResultsDownload,
   PlacementRulesResponse,
   PlacementRulesSave,
   PlacementRulesSaveResponse,
@@ -460,6 +463,20 @@ export const api = {
       /** The final check: nothing is written. */
       check(body: ImportRequest): Promise<ImportCheckResponse> {
         return apiFetch('/users/import/check', { method: 'POST', body: JSON.stringify(body) });
+      },
+      /** Check the import once more and run it as a job. */
+      run(body: ImportRunRequest): Promise<{ job: BulkJob }> {
+        return apiFetch('/users/import/run', { method: 'POST', body: JSON.stringify(body) });
+      },
+      /** An import's job, row by row, and whether its results CSV still holds the passwords. */
+      job(id: string, init: Background = {}): Promise<ImportJobResponse> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}`, init);
+      },
+      /** The results CSV; with passwords, only once. */
+      results(id: string): Promise<ImportResultsDownload> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/results`, {
+          method: 'POST',
+        });
       },
     },
     copySource(id: string): Promise<UserCopySource> {
