@@ -7,7 +7,7 @@ import type { ImportField } from '@openaduc/shared';
 import type { useUserImport } from '../../design/composables/useUserImport.js';
 
 const props = defineProps<{ wizard: ReturnType<typeof useUserImport> }>();
-const { draft, table, fieldOptions, columnProblems, preview } = props.wizard;
+const { draft, table, fieldOptions, columnProblems, preview, usageLocationNote } = props.wizard;
 </script>
 
 <template>
@@ -48,6 +48,9 @@ const { draft, table, fieldOptions, columnProblems, preview } = props.wizard;
     <p v-if="(table?.rows.length ?? 0) > preview.length" class="hint">
       The first {{ preview.length }} of {{ table?.rows.length }} rows.
     </p>
+    <Message v-if="usageLocationNote" severity="info" :closable="false" class="cols-msg">
+      {{ usageLocationNote }}
+    </Message>
     <Message
       v-for="p in columnProblems"
       :key="p"

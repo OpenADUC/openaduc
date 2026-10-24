@@ -51,6 +51,10 @@ const classTaps = vi.fn(async (): Promise<ClassTapOptions> => ({
   status: 'ready',
   policy: TAP_POLICY,
 }));
+const usageLocation = vi.fn(async () => ({
+  attribute: 'msExchUsageLocation' as const,
+  writable: false,
+}));
 // Answers with every rule, as the API does.
 const saveRules = vi.fn(async (_id: number, body: PlacementRulesSave) => ({
   rules: [...rules, ...body.rules].map((r) => ({
@@ -75,7 +79,7 @@ vi.mock('../../api/index.js', () => ({
       policy: async () => ({ policy: { minPwdLength: 8, complexityRequired: true } }),
       placementRules: { get: async () => ({ rules }), save: saveRules },
     },
-    users: { import: { lookup, check: finalCheck, run: runImport, classTaps } },
+    users: { import: { lookup, check: finalCheck, run: runImport, classTaps, usageLocation } },
     auth: { logout: async () => ({ ok: true }) },
     groups: { search: async () => ({ rows: [], total: 0 }) },
   },
@@ -177,6 +181,22 @@ describe('useUserImport', () => {
       wizard.next();
       expect(wizard.columnProblems.value).toEqual([]);
       expect(wizard.canContinue.value).toBe(true);
+    });
+
+    it('says when a mapped usage location can’t reach Entra, and only then', async () => {
+      const wizard = await started();
+      wizard.paste('First,Last,Country\nJane,Doe,GB\n');
+      expect(wizard.draft.mapping).toEqual(['first', 'last', 'usageLocation']);
+      expect(wizard.usageLocationNote.value).toMatch(
+        /^Usage location won’t reach Entra: this directory’s schema has no msExchUsageLocation/,
+      );
+      wizard.setMapping(2, null);
+      expect(wizard.usageLocationNote.value).toBeNull();
+
+      usageLocation.mockResolvedValueOnce({ attribute: 'msExchUsageLocation', writable: true });
+      const writable = await started();
+      writable.paste('First,Last,Country\nJane,Doe,GB\n');
+      expect(writable.usageLocationNote.value).toBeNull();
     });
 
     it('refuses more than 500 rows', async () => {
