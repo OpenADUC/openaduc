@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { checkPassword, generatePassword, type PasswordPolicy } from './passwordPolicy.js';
+import { checkPassword, generatePassword, type PasswordPolicy } from './password.js';
 
 const complex: PasswordPolicy = { minPwdLength: 7, complexityRequired: true };
 const jane = { samAccountName: 'jdoe', displayName: 'Jane Doe-Smith' };

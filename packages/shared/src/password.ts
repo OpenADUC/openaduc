@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { RESET_PASSWORD_MIN_LENGTH, type DirectoryPolicy } from '@openaduc/shared';
+// AD's password rules as far as they can be checked outside AD, and a
+// generator that meets them. Shared: the browser checks what the operator
+// types, and the server generates passwords nobody sees.
+import { RESET_PASSWORD_MIN_LENGTH, type DirectoryPolicy } from './schemas/user.js';
+
+// Web Crypto, global in browsers and Node alike; this package has neither's types.
+declare const crypto: { getRandomValues<T extends ArrayBufferView>(array: T): T };
 
 export type PasswordPolicy = Pick<DirectoryPolicy, 'minPwdLength' | 'complexityRequired'>;
 
