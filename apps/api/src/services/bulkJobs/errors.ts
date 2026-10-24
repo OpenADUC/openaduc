@@ -8,6 +8,7 @@ export class BulkJobRequestError extends Error {
       | 'group_not_found'
       | 'manager_not_found'
       | 'ou_not_found'
+      | 'ou_refused'
       | 'preview_mismatch'
       | 'protected_unacknowledged',
     message: string,
@@ -27,6 +28,7 @@ export function refuseBulkRequest(err: unknown): never {
         throw NotFound(err.message);
       case 'preview_mismatch':
         throw Conflict(err.message);
+      case 'ou_refused':
       case 'protected_unacknowledged':
         throw new AppError({
           statusCode: 422,

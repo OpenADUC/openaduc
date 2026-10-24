@@ -399,8 +399,15 @@ export type BulkAccountRequest = z.input<typeof bulkAccountRequestSchema>;
  *   a synced user signing in unless Connect Sync's force-change flag is on.
  * - `must_change`: already due to change their password, which AD holds
  *   back while it never expires; clearing that asks them at next sign-in.
+ * - `name_taken`: their name (RDN) is taken in the OU a move goes to, by
+ *   an object there or another user being moved; the move would fail.
  */
-export const BULK_ACCOUNT_NOTES = ['never_expires', 'random_password', 'must_change'] as const;
+export const BULK_ACCOUNT_NOTES = [
+  'never_expires',
+  'random_password',
+  'must_change',
+  'name_taken',
+] as const;
 export type BulkAccountNote = (typeof BULK_ACCOUNT_NOTES)[number];
 
 export const bulkAccountPreviewUserSchema = previewUserSchema.extend({

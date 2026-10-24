@@ -159,6 +159,7 @@ export const OU_ATTRS = [
   'ou',
   'name',
   'description',
+  'isCriticalSystemObject',
   'whenCreated',
   'whenChanged',
 ];

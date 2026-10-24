@@ -120,8 +120,10 @@ const copy = (op: BulkAccountOp) => OPS[op] as AccountOpCopy<BulkAccountOp>;
 export const accountOpLabel = (op: BulkAccountOp): string => OPS[op].label;
 
 /** What a note in the preview says about the users it lists. */
-export function noteText(kind: BulkAccountNote, n: number): string {
+export function noteText(kind: BulkAccountNote, n: number, ouName = 'the OU'): string {
   switch (kind) {
+    case 'name_taken':
+      return `${users(n)} ${plural(n, 'has a name', 'have names')} already taken in ${ouName}, or shared with another user being moved, so ${plural(n, 'that move', 'those moves')} will fail. Rename them first.`;
     case 'never_expires':
       return `${users(n)} ${plural(n, 'has a password', 'have passwords')} that never ${plural(n, 'expires', 'expire')}. AD doesn’t ask for a change while that’s set, so clear “password never expires” for them too.`;
     case 'random_password':
@@ -193,7 +195,10 @@ export function useBulkAccountChange(options: {
     preview.value && previewed ? previewSummary(preview.value, previewed.change) : null,
   );
   const notes = computed(() =>
-    (preview.value?.notes ?? []).map((n) => ({ ...n, text: noteText(n.kind, n.count) })),
+    (preview.value?.notes ?? []).map((n) => ({
+      ...n,
+      text: noteText(n.kind, n.count, preview.value?.ou?.name),
+    })),
   );
   const effect = computed(() => (previewed ? consequence(previewed.change) : null));
 

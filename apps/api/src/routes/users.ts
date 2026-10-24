@@ -35,14 +35,21 @@ import { z } from 'zod';
 import { describeDeleteBlock, userDeleteBlockReason } from '../lib/userDeletion.js';
 import { lockoutDurationFor, lockoutEnd } from '../lib/lockout.js';
 import { lookupsFor, matchEntries } from '../lib/userMatch.js';
-import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
+import {
+  AppError,
+  BadRequest,
+  Conflict,
+  NotFound,
+  StepUpRequired,
+  Unauthorized,
+} from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
 import { previewAccountChange } from '../services/bulkAccountChange.js';
 import { previewAttributes } from '../services/bulkAttributes.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
-import { findCachedOu } from '../services/ouCache.js';
+import { findCachedOu, userMoveRefusal } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
@@ -1110,28 +1117,37 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       if (!actor.session.actorUsername) throw Unauthorized('session has no bind identity');
       const provider = await app.services.providers.buildForRequest(req);
 
-      // Confirm the target OU is one we know about for this provider. This
-      // gates against typos and against pointing the move at a container the
-      // sync hasn't seen — the AD bind would refuse those anyway, but
-      // failing fast here gives a cleaner 400.
+      // The AD bind would refuse an OU the sync hasn't seen too, but failing
+      // here first gives a cleaner 400; a missing user is still a 404.
       const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
       if (!targetOu) {
+        if (!(await app.services.userLiveRefresh.refresh(provider, id))) {
+          throw NotFound('user not found');
+        }
         throw app.httpErrors.badRequest('target OU not found in directory cache');
       }
+      const refused = userMoveRefusal(targetOu);
+      if (refused) {
+        throw new AppError({ statusCode: 422, code: 'unprocessable_entity', message: refused });
+      }
 
+      const move = moveUserTo(targetOu);
       const written = await writeUserAccount(
         app.services,
         provider,
-        moveUserTo(targetOu),
+        move,
         id,
         ctx(actor, req),
         auditContextFromRequest(req),
       );
       if (!written) throw NotFound('user not found');
-      const { result } = written;
+      const { result, user } = written;
       if (!result.ok) {
         if (result.errorCode === 'permission_denied') {
           throw app.httpErrors.forbidden('directory rejected the move');
+        }
+        if (result.errorCode === 'conflict') {
+          throw Conflict(move.refused('conflict', user) ?? 'the name is taken in that OU');
         }
         if (result.errorCode === 'not_found') {
           throw app.httpErrors.notFound('user not found in directory');
