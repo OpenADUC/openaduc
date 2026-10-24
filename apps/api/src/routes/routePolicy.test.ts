@@ -8,8 +8,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 
 // Signed-in writes exempt from step-up by design: they open and close the
-// elevated session itself.
-const STEP_UP_EXEMPT = new Set(['POST /api/auth/step-up', 'DELETE /api/auth/step-up']);
+// elevated session itself, or stop a bulk job (which only prevents writes).
+const STEP_UP_EXEMPT = new Set([
+  'POST /api/auth/step-up',
+  'DELETE /api/auth/step-up',
+  'POST /api/bulk-jobs/:id/cancel',
+]);
 
 // Reads sent as POST because their input doesn't fit a query string.
 const READ_ONLY_POSTS = new Set([

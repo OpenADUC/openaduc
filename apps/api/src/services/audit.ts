@@ -31,6 +31,8 @@ export interface AuditEventInput {
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   metadata?: Record<string, unknown>;
+  /** The bulk job the event belongs to, which groups it in the audit log. */
+  bulkJobId?: string | null;
 }
 
 // Sensitive keys that must never reach the audit log even if a caller
@@ -154,6 +156,7 @@ export class AuditService {
         before_json: before ? JSON.stringify(before) : null,
         after_json: after ? JSON.stringify(after) : null,
         metadata_json: JSON.stringify(metadata),
+        bulk_job_id: input.bulkJobId ?? null,
       })
       .execute();
   }
