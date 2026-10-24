@@ -1,6 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { computed } from 'vue';
+import { dnName } from '../lib/dn.js';
 import Avatar from './Avatar.vue';
 import EmptyState from './EmptyState.vue';
 import SectionCard from './SectionCard.vue';
@@ -29,7 +30,7 @@ const hasMultipleReports = computed(() => reports.value.length + (overflow.value
 const isEmpty = computed(() => !props.manager && props.directReports.length === 0);
 
 function nameOf(ref: ReportRef): string {
-  return ref.displayName ?? ref.distinguishedName.split(',')[0]?.replace(/^CN=/i, '') ?? 'Unknown';
+  return ref.displayName ?? dnName(ref.distinguishedName);
 }
 </script>
 

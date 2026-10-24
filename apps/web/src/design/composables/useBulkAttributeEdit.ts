@@ -22,7 +22,7 @@ import { ATTRIBUTE_LABELS } from '../lib/bulkAttributes.js';
 import { accounts } from '../lib/bulkJob.js';
 import { latestRequest } from '../lib/latestRequest.js';
 import { useAttributeEditPreview } from './useAttributeEditPreview.js';
-import { useDebouncedSearch } from './useDebouncedSearch.js';
+import { useUserPick } from './useUserPick.js';
 
 export type FieldMode = 'keep' | 'set' | 'clear';
 
@@ -31,8 +31,6 @@ export const MULTIPLE_VALUES = '(multiple values)';
 /** Shown for a field the cache hasn't read for some of the users. */
 export const NOT_READ_YET = 'not known yet for some of them';
 
-const MANAGER_SEARCH_DELAY_MS = 200;
-const MANAGER_PAGE_SIZE = 12;
 const FIELDS = bulkAttributeChangesSchema.shape;
 
 const message = (err: unknown): string => (err instanceof ApiError ? err.message : String(err));
@@ -70,14 +68,16 @@ export function useBulkAttributeEdit(options: {
       string
     >,
   );
-  const manager = shallowRef<{ id: string; name: string } | null>(null);
-  const managerSearch = useDebouncedSearch<UserSummary>({
-    delayMs: MANAGER_SEARCH_DELAY_MS,
-    search: (q) => api.users.search({ q, pageSize: MANAGER_PAGE_SIZE }),
-  });
+  const managerPick = useUserPick();
+  const manager = managerPick.chosen;
 
-  const previewStep = useAttributeEditPreview();
-  const { preview, previewing, mayChange, canConfirm, forget: forgetPreview } = previewStep;
+  const {
+    review: reviewEdit,
+    request,
+    forget: forgetPreview,
+    ...previewState
+  } = useAttributeEditPreview();
+  const { preview, previewing, mayChange } = previewState;
 
   const count = computed(() => options.ids().length);
 
@@ -156,8 +156,7 @@ export function useBulkAttributeEdit(options: {
   }
 
   function chooseManager(user: UserSummary): void {
-    manager.value = { id: user.id, name: user.displayName ?? user.samAccountName };
-    managerSearch.reset();
+    managerPick.choose(user);
     forgetPreview();
   }
 
@@ -166,8 +165,7 @@ export function useBulkAttributeEdit(options: {
       modes[field] = 'keep';
       values[field] = '';
     }
-    manager.value = null;
-    managerSearch.reset();
+    managerPick.reset();
     forgetPreview();
     current.value = null;
     loadError.value = null;
@@ -195,7 +193,7 @@ export function useBulkAttributeEdit(options: {
   }
 
   async function review(): Promise<void> {
-    if (canPreview.value) await previewStep.review(options.ids(), changes.value);
+    if (canPreview.value) await reviewEdit(options.ids(), changes.value);
   }
 
   /** Back from the preview to change the fields. */
@@ -204,7 +202,7 @@ export function useBulkAttributeEdit(options: {
   }
 
   function confirm(): void {
-    const edit = previewStep.request(options.ids());
+    const edit = request(options.ids());
     if (!edit) return;
     close();
     options.start(edit);
@@ -221,21 +219,15 @@ export function useBulkAttributeEdit(options: {
     modes,
     values,
     manager,
-    managerQuery: managerSearch.query,
-    managerResults: managerSearch.results,
-    managerSearching: managerSearch.searching,
-    managerSearchError: managerSearch.searchError,
+    managerQuery: managerPick.query,
+    managerResults: managerPick.results,
+    managerSearching: managerPick.searching,
+    managerSearchError: managerPick.searchError,
     changes,
     changedFields,
     problems,
     canPreview,
-    preview,
-    previewing,
-    previewError: previewStep.previewError,
-    canConfirm,
-    hasMore: previewStep.hasMore,
-    loadingMore: previewStep.loadingMore,
-    showMore: previewStep.showMore,
+    ...previewState,
     shown,
     label: (field: BulkAttributeField) => ATTRIBUTE_LABELS[field],
     setMode,
