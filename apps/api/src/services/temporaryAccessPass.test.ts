@@ -335,6 +335,36 @@ describe('tapPreflight', () => {
       });
       expect(endless).toMatchObject({ status: 'refused', reason: 'entraRolesUnknown' });
     });
+
+    it('counts no eligibilities in a tenant without PIM licensing, still checking assignments', async () => {
+      const unlicensed = (g: FakeGraph) =>
+        g.failing.set(
+          '/roleManagement/directory/roleEligibilityScheduleInstances',
+          new GraphPermissionError(
+            'Graph 400: The tenant needs to have Microsoft Entra ID P2 or Microsoft Entra ID Governance license.',
+            400,
+            'AadPremiumLicenseRequired',
+            null,
+          ),
+        );
+      expect((await preflightWith(unlicensed)).status).toBe('ready');
+      expect(
+        await preflightWith((g) => {
+          unlicensed(g);
+          g.roleAssignments.push({ principalId: GROUP_ID });
+        }),
+      ).toMatchObject({ status: 'refused', reason: 'entraAdminRole' });
+    });
+
+    it('still refuses as unverified on any other eligibility error', async () => {
+      const other = await preflightWith((g) =>
+        g.failing.set(
+          '/roleManagement/directory/roleEligibilityScheduleInstances',
+          new GraphPermissionError('Graph 400: bad request', 400, 'BadRequest', null),
+        ),
+      );
+      expect(other).toMatchObject({ status: 'refused', reason: 'entraRolesUnknown' });
+    });
   });
 
   it('refuses when the tenant has Temporary Access Pass turned off', async () => {
