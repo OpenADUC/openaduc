@@ -1058,7 +1058,7 @@
 
 /* A dialog with .ds-sheet becomes a sheet along the bottom edge at phone
    width: full width, its buttons in thumb reach, above the on-screen
-   keyboard (useKeyboardInset), and never taller than what's left of the
+   keyboard (useVisualViewport), and never taller than what's left of the
    screen, its content scrolling instead. */
 @media (max-width: 767.98px) {
   .p-dialog-mask:has(> .ds-sheet) {
@@ -1068,7 +1068,7 @@
 
   .p-dialog.ds-sheet {
     width: 100% !important;
-    max-height: calc(100dvh - var(--keyboard-inset, 0px) - 16px);
+    max-height: calc(100dvh - var(--visual-viewport-top, 0px) - var(--keyboard-inset, 0px) - 16px);
     margin: 0 !important;
     border-bottom: 0 !important;
     border-radius: 14px 14px 0 0 !important;
