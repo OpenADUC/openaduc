@@ -2026,7 +2026,6 @@ watch(user, (u) => {
   gap: 8px;
 }
 
-/* The Account tab's Unlock and Reset password, thumb-sized on a phone. */
 @media (max-width: 767.98px) {
   .card-actions :deep(.p-button) {
     min-height: var(--tap-target);
