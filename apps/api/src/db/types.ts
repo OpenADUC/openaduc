@@ -4,6 +4,12 @@
 // kysely-codegen; for now hand-rolled keeps PR review clear.
 
 import type { ColumnType, Generated, JSONColumnType } from 'kysely';
+import type {
+  BulkJobAction,
+  BulkJobPauseReason,
+  BulkJobRowStatus,
+  BulkJobStatus,
+} from '@openaduc/shared';
 
 // Common alias for `timestamp(useTz: true)`. Read as Date, write as ISO string or Date.
 type Timestamp = ColumnType<Date, Date | string, Date | string>;
@@ -201,10 +207,10 @@ export interface AuditEventsTable {
 export interface BulkJobsTable {
   id: Generated<string>;
   provider_id: number;
-  action: string;
-  status: string;
-  pause_reason: string | null;
-  options_json: ColumnType<Record<string, unknown>, string | undefined, string>;
+  action: BulkJobAction;
+  status: BulkJobStatus;
+  pause_reason: BulkJobPauseReason | null;
+  run_token: string | null;
   actor_user_id: string;
   actor_display_name: string | null;
   actor_username: string;
@@ -224,7 +230,8 @@ export interface BulkJobRowsTable {
   target_id: string;
   target_dn: string | null;
   target_name: string | null;
-  status: ColumnType<string, string | undefined, string>;
+  status: ColumnType<BulkJobRowStatus, BulkJobRowStatus | undefined, BulkJobRowStatus>;
+  run_token: string | null;
   attempts: ColumnType<number, number | undefined, number>;
   error_code: string | null;
   error_message: string | null;

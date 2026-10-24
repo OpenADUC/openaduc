@@ -1,34 +1,35 @@
 // SPDX-License-Identifier: BUSL-1.1
+import { randomUUID } from 'node:crypto';
 import type { FastifyBaseLogger } from 'fastify';
 import { sql, type Kysely, type Selectable } from 'kysely';
 import type {
+  AuditBulkSummary,
   BulkJob,
   BulkJobAction,
   BulkJobCounts,
   BulkJobPauseReason,
   BulkJobRow,
   BulkJobRowStatus,
-  BulkJobStatus,
 } from '@openaduc/shared';
-import type { BulkJobRowsTable, BulkJobsTable, DB } from '../db/types.js';
-import type { ProviderFactory } from '../providers/registry.js';
+import type { BulkJobRowsTable, BulkJobsTable, DB } from '../../db/types.js';
+import type { ProviderFactory } from '../../providers/registry.js';
 import {
   DirectoryUnavailableError,
   type DirectoryProvider,
   type WriteContext,
-} from '../providers/types.js';
-import type { AuditEventInput, AuditService } from './audit.js';
-import { wasAudited } from './auditContext.js';
-import type { CredentialCacheService } from './credentialCache.js';
-import type { SessionsService } from './sessions.js';
-import { writeUserAccount } from './userAccountWrite.js';
-import type { UserLiveRefreshService } from './userLiveRefresh.js';
+} from '../../providers/types.js';
+import type { AuditEventInput, AuditService } from '../audit.js';
+import { wasAudited } from '../auditContext.js';
+import type { CredentialCacheService } from '../credentialCache.js';
+import type { SessionsService } from '../sessions.js';
+import type { UserLiveRefreshService } from '../userLiveRefresh.js';
+import { BULK_JOB_HANDLERS, type BulkJobHandlers, type BulkRowOutcome } from './handlers.js';
 
-type JobRecord = Selectable<BulkJobsTable>;
+export type JobRecord = Selectable<BulkJobsTable>;
 type RowRecord = Selectable<BulkJobRowsTable>;
 
-/** Who starts, continues, retries or stops a job, and from which request. */
-export interface BulkJobStarter {
+/** The operator a job writes as, and the request that last started it. */
+export interface JobActor {
   directoryId: number;
   adminSessionId: string;
   actorUserId: string;
@@ -36,16 +37,23 @@ export interface BulkJobStarter {
   actorUsername: string;
   sourceIp: string | null;
   userAgent: string | null;
-  correlationId: string;
+  correlationId: string | null;
 }
 
-/** Rows of one job written at once: enough to keep a DC busy, not to flood it. */
+export interface BulkJobDeps {
+  audit: Pick<AuditService, 'recordEvent'>;
+  sessions: Pick<SessionsService, 'findActiveElevated'>;
+  credentialCache: Pick<CredentialCacheService, 'get'>;
+  providers: Pick<ProviderFactory, 'buildForDirectory'>;
+  userLiveRefresh: Pick<UserLiveRefreshService, 'refresh'>;
+}
+
+/** Enough rows at once to keep a DC busy, not to flood it. */
 const ROW_CONCURRENCY = 4;
 const HEARTBEAT_MS = 10_000;
-/** A running job whose heartbeat is older than this has lost its process. */
-const STALE_AFTER_MS = 60_000;
+/** A job whose heartbeat is older than this has lost its run. */
+const STALE_AFTER = sql<Date>`now() - interval '60 seconds'`;
 const SWEEP_MS = 30_000;
-/** How long shutdown waits for rows in flight before leaving them interrupted. */
 const STOP_WAIT_MS = 4_000;
 const INSERT_CHUNK = 1_000;
 
@@ -54,9 +62,15 @@ const INSERT_CHUNK = 1_000;
  * written as its operator, with the password cached for their elevated
  * session, which is never stored with the job: when that session ends
  * (idle, absolute lifetime, step-down, sign-out) the job pauses until the
- * operator steps up and continues it. A process that stops mid-job leaves
- * it paused as `interrupted`, its in-flight rows failed and retryable,
- * because whether their write landed is unknown.
+ * operator steps up and continues it. It also pauses when no domain
+ * controller answers. A process that stops mid-job leaves it paused as
+ * `interrupted`, its in-flight rows failed and retryable, because whether
+ * their write landed is unknown.
+ *
+ * Each run claims the job with a fresh `run_token`; heartbeats, row
+ * claims and results, pausing and finishing all match it, so a run that
+ * lost the job (to the stale sweep, a stop, or a newer run) can't change
+ * it any more.
  *
  * Every audit event a job writes carries its id: the `bulk.create` event
  * heads the group, followed by one event per row (the same shape as the
@@ -70,14 +84,9 @@ export class BulkJobService {
 
   constructor(
     private readonly db: Kysely<DB>,
-    private readonly services: {
-      audit: AuditService;
-      sessions: SessionsService;
-      credentialCache: CredentialCacheService;
-      providers: ProviderFactory;
-      userLiveRefresh: UserLiveRefreshService;
-    },
+    private readonly deps: BulkJobDeps,
     private readonly logger: FastifyBaseLogger,
+    readonly handlers: BulkJobHandlers = BULK_JOB_HANDLERS,
   ) {}
 
   start(): void {
@@ -87,7 +96,7 @@ export class BulkJobService {
     this.sweepHandle.unref?.();
   }
 
-  /** Lets rows in flight finish (briefly), then leaves running jobs interrupted. */
+  /** Lets rows in flight finish (briefly); running jobs are left interrupted. */
   async stop(): Promise<void> {
     this.stopping = true;
     if (this.sweepHandle) clearInterval(this.sweepHandle);
@@ -102,34 +111,41 @@ export class BulkJobService {
     clearTimeout(timer);
   }
 
-  async create(starter: BulkJobStarter, action: BulkJobAction, ids: string[]): Promise<string> {
-    const targets = ids.map((id) => id.toLowerCase());
+  /** Throws a ZodError for a bad request body. */
+  async create(actor: JobActor, action: BulkJobAction, body: unknown): Promise<string> {
+    const handler = this.handlers[action];
+    const rows = handler.rows(handler.request.parse(body));
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
-      .where('provider_id', '=', starter.directoryId)
-      .where('object_guid', 'in', targets)
+      .where('provider_id', '=', actor.directoryId)
+      .where(
+        'object_guid',
+        'in',
+        rows.map((r) => r.targetId),
+      )
       .execute();
     const byId = new Map(cached.map((u) => [u.object_guid, u]));
 
     const jobId = await this.db.transaction().execute(async (trx) => {
       const job = await trx
         .insertInto('bulk_jobs')
-        .values({ ...this.startColumns(starter), provider_id: starter.directoryId, action })
+        .values({ ...actorColumns(actor), status: 'queued', heartbeat_at: sql`now()`, action })
         .returning('id')
         .executeTakeFirstOrThrow();
-      for (let i = 0; i < targets.length; i += INSERT_CHUNK) {
+      for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
         await trx
           .insertInto('bulk_job_rows')
           .values(
-            targets.slice(i, i + INSERT_CHUNK).map((id, j) => {
-              const user = byId.get(id);
+            rows.slice(i, i + INSERT_CHUNK).map((row, j) => {
+              const user = byId.get(row.targetId);
               return {
                 job_id: job.id,
                 ordinal: i + j,
-                target_id: id,
+                target_id: row.targetId,
                 target_dn: user?.distinguished_name ?? null,
                 target_name: user ? (user.display_name ?? user.sam_account_name) : null,
+                input_json: row.input === null ? null : JSON.stringify(row.input),
               };
             }),
           )
@@ -140,12 +156,12 @@ export class BulkJobService {
 
     // Like any write, a job that can't be audited doesn't run.
     try {
-      await this.services.audit.recordEvent({
-        ...this.auditBase(starter, jobId),
+      await this.deps.audit.recordEvent({
+        ...auditBase(actor, jobId),
         action: 'bulk.create',
         result: 'success',
         targetType: 'user',
-        metadata: { action, total: targets.length },
+        metadata: { action, total: rows.length },
       });
     } catch (err) {
       await this.db.deleteFrom('bulk_jobs').where('id', '=', jobId).execute();
@@ -180,20 +196,6 @@ export class BulkJobService {
     return this.describe(jobs);
   }
 
-  async describe(jobs: JobRecord[]): Promise<BulkJob[]> {
-    const counts = await this.counts(jobs.map((j) => j.id));
-    return jobs.map((j) => ({
-      id: String(j.id),
-      action: j.action as BulkJobAction,
-      status: j.status as BulkJobStatus,
-      pauseReason: j.pause_reason as BulkJobPauseReason | null,
-      actorDisplayName: j.actor_display_name,
-      createdAt: new Date(j.created_at).toISOString(),
-      finishedAt: j.finished_at ? new Date(j.finished_at).toISOString() : null,
-      counts: counts.get(String(j.id)) ?? emptyCounts(),
-    }));
-  }
-
   async describeOne(id: string): Promise<BulkJob> {
     const job = await this.db
       .selectFrom('bulk_jobs')
@@ -203,25 +205,20 @@ export class BulkJobService {
     return (await this.describe([job]))[0]!;
   }
 
-  /** Each job's rows by status, for the audit log as well as the job's own view. */
-  async counts(jobIds: string[]): Promise<Map<string, BulkJobCounts>> {
-    const out = new Map<string, BulkJobCounts>();
-    if (jobIds.length === 0) return out;
-    const rows = await this.db
-      .selectFrom('bulk_job_rows')
-      .select(['job_id', 'status', (eb) => eb.fn.countAll<string>().as('n')])
-      .where('job_id', 'in', jobIds)
-      .groupBy(['job_id', 'status'])
-      .execute();
-    for (const r of rows) {
-      const key = String(r.job_id);
-      const counts = out.get(key) ?? emptyCounts();
-      const n = Number(r.n);
-      counts.total += n;
-      if (r.status in counts) counts[r.status as BulkJobRowStatus] += n;
-      out.set(key, counts);
-    }
-    return out;
+  /** The audit log's view of these jobs, by id; a job whose record is gone is missing. */
+  async summaries(
+    jobIds: string[],
+  ): Promise<Map<string, Pick<AuditBulkSummary, 'status' | 'pauseReason' | 'counts'>>> {
+    const jobs =
+      jobIds.length === 0
+        ? []
+        : await this.db.selectFrom('bulk_jobs').selectAll().where('id', 'in', jobIds).execute();
+    return new Map(
+      (await this.describe(jobs)).map((j) => [
+        j.id,
+        { status: j.status, pauseReason: j.pauseReason, counts: j.counts },
+      ]),
+    );
   }
 
   async rows(jobId: string, status?: BulkJobRowStatus): Promise<BulkJobRow[]> {
@@ -231,77 +228,76 @@ export class BulkJobService {
     return rows.map((r) => ({
       targetId: r.target_id,
       targetName: r.target_name,
-      status: r.status as BulkJobRowStatus,
+      status: r.status,
       errorCode: r.error_code,
       errorMessage: r.error_message,
     }));
   }
 
   /** Continue a paused job on the operator's current elevated session. */
-  async resume(job: JobRecord, starter: BulkJobStarter): Promise<boolean> {
+  async resume(job: JobRecord, actor: JobActor): Promise<boolean> {
     const resumed = await this.db
       .updateTable('bulk_jobs')
-      .set({ ...this.startColumns(starter), pause_reason: null })
+      .set({
+        ...actorColumns(actor),
+        status: 'queued',
+        heartbeat_at: sql`now()`,
+        pause_reason: null,
+      })
       .where('id', '=', job.id)
       .where('status', '=', 'paused')
       .executeTakeFirst();
     if (Number(resumed.numUpdatedRows) === 0) return false;
-    await this.services.audit.recordEvent({
-      ...this.auditBase(starter, job.id),
-      action: 'bulk.resume',
-      result: 'success',
-      targetType: 'user',
-      metadata: { action: job.action },
-    });
+    await this.record(actor, job, 'bulk.resume', {});
     this.kick(job.id);
     return true;
   }
 
   /** Run a stopped job's failed rows again. False when it's running or none failed. */
-  async retry(job: JobRecord, starter: BulkJobStarter): Promise<boolean> {
-    const retried = await this.db
-      .transaction()
-      .execute(async (trx) => {
-        const claimed = await trx
-          .updateTable('bulk_jobs')
-          .set({ ...this.startColumns(starter), pause_reason: null, finished_at: null })
-          .where('id', '=', job.id)
-          .where('status', 'in', ['paused', 'finished', 'cancelled'])
-          .executeTakeFirst();
-        if (Number(claimed.numUpdatedRows) === 0) return 0;
-        const rows = await trx
-          .updateTable('bulk_job_rows')
-          .set({ status: 'pending', error_code: null, error_message: null, finished_at: null })
-          .where('job_id', '=', job.id)
-          .where('status', '=', 'failed')
-          .executeTakeFirst();
-        const n = Number(rows.numUpdatedRows);
-        // Nothing to retry: leave the job as it was.
-        if (n === 0) throw new NothingToRetry();
-        return n;
-      })
-      .catch((err) => {
-        if (err instanceof NothingToRetry) return 0;
-        throw err;
-      });
-    if (retried === 0) return false;
-    await this.services.audit.recordEvent({
-      ...this.auditBase(starter, job.id),
-      action: 'bulk.retry',
-      result: 'success',
-      targetType: 'user',
-      metadata: { action: job.action, rows: retried },
+  async retry(job: JobRecord, actor: JobActor): Promise<boolean> {
+    const retried = await this.db.transaction().execute(async (trx) => {
+      const queued = await trx
+        .updateTable('bulk_jobs')
+        .set({
+          ...actorColumns(actor),
+          status: 'queued',
+          heartbeat_at: sql`now()`,
+          pause_reason: null,
+          finished_at: null,
+        })
+        .where('id', '=', job.id)
+        .where('status', 'in', ['paused', 'finished', 'cancelled'])
+        .where((eb) =>
+          eb.exists(
+            eb
+              .selectFrom('bulk_job_rows')
+              .select('id')
+              .where('job_id', '=', job.id)
+              .where('status', '=', 'failed'),
+          ),
+        )
+        .executeTakeFirst();
+      if (Number(queued.numUpdatedRows) === 0) return 0;
+      const rows = await trx
+        .updateTable('bulk_job_rows')
+        .set({ status: 'pending', error_code: null, error_message: null, finished_at: null })
+        .where('job_id', '=', job.id)
+        .where('status', '=', 'failed')
+        .executeTakeFirst();
+      return Number(rows.numUpdatedRows);
     });
+    if (retried === 0) return false;
+    await this.record(actor, job, 'bulk.retry', { rows: retried });
     this.kick(job.id);
     return true;
   }
 
   /** Stop a job: rows not yet started are skipped; rows in flight finish. */
-  async cancel(job: JobRecord, starter: BulkJobStarter): Promise<boolean> {
+  async cancel(job: JobRecord, actor: JobActor): Promise<boolean> {
     const skipped = await this.db.transaction().execute(async (trx) => {
       const stopped = await trx
         .updateTable('bulk_jobs')
-        .set({ status: 'cancelled', pause_reason: null, finished_at: new Date() })
+        .set({ status: 'cancelled', pause_reason: null, run_token: null, finished_at: sql`now()` })
         .where('id', '=', job.id)
         .where('status', 'in', ['queued', 'running', 'paused'])
         .executeTakeFirst();
@@ -315,31 +311,25 @@ export class BulkJobService {
       return Number(rows.numUpdatedRows);
     });
     if (skipped === null) return false;
-    await this.services.audit.recordEvent({
-      ...this.auditBase(starter, job.id),
-      action: 'bulk.cancel',
-      result: 'success',
-      targetType: 'user',
-      metadata: { action: job.action, skipped },
-    });
+    await this.record(actor, job, 'bulk.cancel', { skipped });
     return true;
   }
 
   /**
-   * Pause jobs whose process is gone (their heartbeat stopped), failing
-   * the rows they had in flight so the operator can check and retry them.
+   * Pause jobs whose run is gone (their heartbeat stopped), failing the
+   * rows they had in flight so the operator can check and retry them.
    */
   async recoverStale(): Promise<void> {
     try {
       const stale = await this.db
         .updateTable('bulk_jobs')
-        .set({ status: 'paused', pause_reason: 'interrupted' })
+        .set({ status: 'paused', pause_reason: 'interrupted', run_token: null })
         .where('status', 'in', ['queued', 'running'])
-        .where('heartbeat_at', '<', new Date(Date.now() - STALE_AFTER_MS))
+        .where('heartbeat_at', '<', STALE_AFTER)
         .returningAll()
         .execute();
       for (const job of stale) {
-        await this.interruptRows(job.id);
+        await this.interruptRows(job.id, null);
         await this.recordPause(job, 'interrupted');
       }
     } catch (err) {
@@ -349,8 +339,8 @@ export class BulkJobService {
 
   private kick(jobId: string): void {
     if (this.stopping) return;
-    // A run still winding down (it has just finished or paused) goes first;
-    // the next one only claims the job if it's queued again by then.
+    // A run still winding down goes first; the next one only claims the job
+    // if it's queued by then.
     const before = this.runs.get(jobId) ?? Promise.resolve();
     const run = before
       .then(() => this.run(jobId))
@@ -362,9 +352,10 @@ export class BulkJobService {
   }
 
   private async run(jobId: string): Promise<void> {
+    const token = randomUUID();
     const job = await this.db
       .updateTable('bulk_jobs')
-      .set({ status: 'running', heartbeat_at: new Date() })
+      .set({ status: 'running', run_token: token, heartbeat_at: sql`now()` })
       .where('id', '=', jobId)
       .where('status', '=', 'queued')
       .returningAll()
@@ -374,9 +365,9 @@ export class BulkJobService {
     const heartbeat = setInterval(() => {
       this.db
         .updateTable('bulk_jobs')
-        .set({ heartbeat_at: new Date() })
+        .set({ heartbeat_at: sql`now()` })
         .where('id', '=', jobId)
-        .where('status', '=', 'running')
+        .where('run_token', '=', token)
         .execute()
         .catch((err) => this.logger.warn({ err, jobId }, 'bulk job heartbeat failed'));
     }, HEARTBEAT_MS);
@@ -385,7 +376,7 @@ export class BulkJobService {
     // An object, so the workers' writes aren't lost to narrowing.
     const stopped: { pause: BulkJobPauseReason | null } = { pause: null };
     try {
-      const provider = await this.services.providers.buildForDirectory(job.provider_id);
+      const provider = await this.deps.providers.buildForDirectory(job.provider_id);
       const worker = async (): Promise<void> => {
         while (!stopped.pause && !this.stopping) {
           const writeCtx = await this.credentials(job);
@@ -393,12 +384,22 @@ export class BulkJobService {
             stopped.pause = 'step_up_required';
             return;
           }
-          const row = await this.claimRow(jobId);
+          const row = await this.claimRow(jobId, token);
           if (!row) return;
-          await this.runRow(job, provider, row, writeCtx);
+          const paused = await this.runRow(job, token, provider, row, writeCtx);
+          if (paused) stopped.pause = paused;
         }
       };
-      await Promise.all(Array.from({ length: ROW_CONCURRENCY }, worker));
+      // A failed worker stops the others claiming rows; the rows they have
+      // in flight finish before the job settles.
+      await Promise.allSettled(
+        Array.from({ length: ROW_CONCURRENCY }, () =>
+          worker().catch((err: unknown) => {
+            this.logger.error({ err, jobId }, 'bulk job worker failed');
+            stopped.pause = 'interrupted';
+          }),
+        ),
+      );
       if (this.stopping) stopped.pause ??= 'interrupted';
     } catch (err) {
       this.logger.error({ err, jobId }, 'bulk job stopped');
@@ -406,33 +407,41 @@ export class BulkJobService {
     } finally {
       clearInterval(heartbeat);
     }
+    await this.settle(job, token, stopped.pause);
+  }
 
-    const { pause } = stopped;
+  /** End a run: pause the job, or finish it when no rows are left. */
+  private async settle(
+    job: JobRecord,
+    token: string,
+    pause: BulkJobPauseReason | null,
+  ): Promise<void> {
     if (pause) {
       const paused = await this.db
         .updateTable('bulk_jobs')
-        .set({ status: 'paused', pause_reason: pause })
-        .where('id', '=', jobId)
+        .set({ status: 'paused', pause_reason: pause, run_token: null })
+        .where('id', '=', job.id)
+        .where('run_token', '=', token)
         .where('status', '=', 'running')
         .executeTakeFirst();
-      if (Number(paused.numUpdatedRows) > 0) {
-        if (pause === 'interrupted') await this.interruptRows(jobId);
-        await this.recordPause(job, pause);
-      }
+      if (Number(paused.numUpdatedRows) === 0) return;
+      await this.interruptRows(job.id, token);
+      await this.recordPause(job, pause);
       return;
     }
     await this.db
       .updateTable('bulk_jobs')
-      .set({ status: 'finished', finished_at: new Date() })
-      .where('id', '=', jobId)
+      .set({ status: 'finished', run_token: null, finished_at: sql`now()` })
+      .where('id', '=', job.id)
+      .where('run_token', '=', token)
       .where('status', '=', 'running')
       .execute();
   }
 
   /** The operator's write credentials, while their elevated session lives. */
   private async credentials(job: JobRecord): Promise<WriteContext | null> {
-    const elevated = await this.services.sessions.findActiveElevated(job.admin_session_id);
-    const password = elevated ? this.services.credentialCache.get(elevated.id) : null;
+    const elevated = await this.deps.sessions.findActiveElevated(job.admin_session_id);
+    const password = elevated ? this.deps.credentialCache.get(elevated.id) : null;
     if (!password) return null;
     return {
       actorUserId: job.actor_user_id,
@@ -442,15 +451,16 @@ export class BulkJobService {
     };
   }
 
-  /** The next pending row, marked running; null once none are left or the job stopped. */
-  private async claimRow(jobId: string): Promise<RowRecord | null> {
+  /** The next pending row, marked running for this run; null once none are left or the run lost the job. */
+  private async claimRow(jobId: string, token: string): Promise<RowRecord | null> {
     const { rows } = await sql<RowRecord>`
       UPDATE bulk_job_rows
-      SET status = 'running', attempts = attempts + 1, started_at = now()
+      SET status = 'running', run_token = ${token}, attempts = attempts + 1, started_at = now()
       WHERE id = (
         SELECT r.id FROM bulk_job_rows r
         JOIN bulk_jobs j ON j.id = r.job_id
-        WHERE r.job_id = ${jobId} AND r.status = 'pending' AND j.status = 'running'
+        WHERE r.job_id = ${jobId} AND r.status = 'pending'
+          AND j.status = 'running' AND j.run_token = ${token}
         ORDER BY r.ordinal
         LIMIT 1
         FOR UPDATE OF r SKIP LOCKED
@@ -460,110 +470,100 @@ export class BulkJobService {
     return rows[0] ?? null;
   }
 
+  /** Run one row and record its outcome; returns why the job should pause, if it should. */
   private async runRow(
     job: JobRecord,
+    token: string,
     provider: DirectoryProvider,
     row: RowRecord,
     writeCtx: WriteContext,
-  ): Promise<void> {
-    const audit = this.auditBase(job, job.id);
-    let outcome: {
-      status: 'succeeded' | 'failed';
-      errorCode?: string | null;
-      errorMessage?: string | null;
-      before?: Record<string, unknown> | null;
-      after?: Record<string, unknown> | null;
-      dn?: string;
-    };
+  ): Promise<BulkJobPauseReason | null> {
+    const handler = this.handlers[job.action];
+    const audit = auditBase(actorOf(job), job.id);
+    let outcome: BulkRowOutcome;
     try {
-      const written = await writeUserAccount(
-        this.services,
-        provider,
-        job.action as BulkJobAction,
-        row.target_id,
-        writeCtx,
-        audit,
-      );
-      if (!written) {
-        await this.services.audit.recordEvent({
-          ...audit,
-          action: job.action,
-          result: 'failure',
-          errorCode: 'not_found',
-          targetType: 'user',
+      outcome = await handler.run(
+        {
           targetId: row.target_id,
           targetDn: row.target_dn,
-        });
-        outcome = { status: 'failed', errorCode: 'not_found' };
-      } else {
-        const { result, user } = written;
-        outcome = {
-          status: result.ok ? 'succeeded' : 'failed',
-          errorCode: result.ok ? null : (result.errorCode ?? 'directory_error'),
-          errorMessage: result.errorMessage ?? null,
-          before: result.before ?? null,
-          after: result.after ?? null,
-          dn: user.distinguishedName,
-        };
-      }
+          input: handler.input.parse(row.input_json),
+        },
+        { provider, writeCtx, audit, services: this.deps },
+      );
     } catch (err) {
+      if (err instanceof DirectoryUnavailableError && !wasAudited(err)) {
+        // Nothing was written: the row waits for the job to continue.
+        await this.db
+          .updateTable('bulk_job_rows')
+          .set({ status: 'pending' })
+          .where('id', '=', row.id)
+          .where('run_token', '=', token)
+          .execute();
+        return 'directory_unavailable';
+      }
       const errorCode =
         err instanceof DirectoryUnavailableError ? 'directory_unavailable' : 'internal_error';
       if (errorCode === 'internal_error') {
         this.logger.error({ err, jobId: job.id, rowId: row.id }, 'bulk job row failed');
       }
-      if (!wasAudited(err)) {
-        await this.services.audit
-          .recordEvent({
-            ...audit,
-            action: job.action,
-            result: 'failure',
-            errorCode,
-            targetType: 'user',
-            targetId: row.target_id,
-            targetDn: row.target_dn,
-          })
-          .catch((auditErr) => this.logger.error({ err: auditErr }, 'audit insert failed'));
-      }
-      outcome = { status: 'failed', errorCode };
+      outcome = { ok: false, errorCode, audited: wasAudited(err) };
+    }
+
+    if (!outcome.ok && !outcome.audited) {
+      await this.deps.audit
+        .recordEvent({
+          ...audit,
+          action: job.action,
+          result: 'failure',
+          errorCode: outcome.errorCode,
+          targetType: 'user',
+          targetId: row.target_id,
+          targetDn: outcome.targetDn ?? row.target_dn,
+        })
+        .catch((err) => this.logger.error({ err }, 'audit insert failed'));
     }
 
     await this.db
       .updateTable('bulk_job_rows')
       .set({
-        status: outcome.status,
-        error_code: outcome.errorCode ?? null,
-        error_message:
-          outcome.status === 'failed'
-            ? failureMessage(outcome.errorCode ?? null, outcome.errorMessage ?? null)
-            : null,
+        status: outcome.ok ? 'succeeded' : 'failed',
+        error_code: outcome.ok ? null : outcome.errorCode,
+        error_message: outcome.ok
+          ? null
+          : failureMessage(outcome.errorCode, outcome.errorMessage ?? null),
         before_json: outcome.before ? JSON.stringify(outcome.before) : null,
         after_json: outcome.after ? JSON.stringify(outcome.after) : null,
-        ...(outcome.dn ? { target_dn: outcome.dn } : {}),
-        finished_at: new Date(),
+        ...(outcome.targetDn ? { target_dn: outcome.targetDn } : {}),
+        finished_at: sql`now()`,
       })
       .where('id', '=', row.id)
+      .where('run_token', '=', token)
       .execute();
+    return outcome.ok || outcome.errorCode !== 'directory_unavailable'
+      ? null
+      : 'directory_unavailable';
   }
 
-  private async interruptRows(jobId: string): Promise<void> {
-    await this.db
+  /** Fail the rows a run left in flight (any run's, with no token). */
+  private async interruptRows(jobId: string, token: string | null): Promise<void> {
+    let q = this.db
       .updateTable('bulk_job_rows')
       .set({
         status: 'failed',
         error_code: 'interrupted',
         error_message: failureMessage('interrupted', null),
-        finished_at: new Date(),
+        finished_at: sql`now()`,
       })
       .where('job_id', '=', jobId)
-      .where('status', '=', 'running')
-      .execute();
+      .where('status', '=', 'running');
+    if (token) q = q.where('run_token', '=', token);
+    await q.execute();
   }
 
   private async recordPause(job: JobRecord, reason: BulkJobPauseReason): Promise<void> {
-    await this.services.audit
+    await this.deps.audit
       .recordEvent({
-        ...this.auditBase(job, job.id),
+        ...auditBase(actorOf(job), job.id),
         action: 'bulk.pause',
         result: 'success',
         actorAuthMethod: 'system',
@@ -573,58 +573,102 @@ export class BulkJobService {
       .catch((err) => this.logger.error({ err }, 'audit insert failed for bulk.pause'));
   }
 
-  private startColumns(starter: BulkJobStarter) {
-    return {
-      status: 'queued',
-      actor_user_id: starter.actorUserId,
-      actor_display_name: starter.actorDisplayName,
-      actor_username: starter.actorUsername,
-      admin_session_id: starter.adminSessionId,
-      source_ip: starter.sourceIp,
-      user_agent: starter.userAgent,
-      correlation_id: starter.correlationId,
-      heartbeat_at: new Date(),
-    } as const;
+  private async record(
+    actor: JobActor,
+    job: JobRecord,
+    action: 'bulk.resume' | 'bulk.retry' | 'bulk.cancel',
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    await this.deps.audit.recordEvent({
+      ...auditBase(actor, job.id),
+      action,
+      result: 'success',
+      targetType: 'user',
+      metadata: { action: job.action, ...metadata },
+    });
   }
 
-  private auditBase(
-    who: BulkJobStarter | JobRecord,
-    jobId: string,
-  ): Omit<AuditEventInput, 'action' | 'result'> {
-    const fields =
-      'actorUserId' in who
-        ? who
-        : {
-            directoryId: who.provider_id,
-            adminSessionId: who.admin_session_id,
-            actorUserId: who.actor_user_id,
-            actorDisplayName: who.actor_display_name,
-            sourceIp: who.source_ip,
-            userAgent: who.user_agent,
-            correlationId: who.correlation_id,
-          };
-    return {
-      actorUserId: fields.actorUserId,
-      actorDisplayName: fields.actorDisplayName,
-      actorAuthMethod: 'ad-password',
-      sourceIp: fields.sourceIp,
-      userAgent: fields.userAgent,
-      sessionId: fields.adminSessionId,
-      correlationId: fields.correlationId,
-      providerId: fields.directoryId,
-      bulkJobId: String(jobId),
-    };
+  private async describe(jobs: JobRecord[]): Promise<BulkJob[]> {
+    const counts = await this.counts(jobs.map((j) => j.id));
+    return jobs.map((j) => ({
+      id: String(j.id),
+      action: j.action,
+      status: j.status,
+      pauseReason: j.pause_reason,
+      actorDisplayName: j.actor_display_name,
+      createdAt: new Date(j.created_at).toISOString(),
+      finishedAt: j.finished_at ? new Date(j.finished_at).toISOString() : null,
+      counts: counts.get(String(j.id)) ?? emptyCounts(),
+    }));
+  }
+
+  private async counts(jobIds: string[]): Promise<Map<string, BulkJobCounts>> {
+    const out = new Map<string, BulkJobCounts>();
+    if (jobIds.length === 0) return out;
+    const rows = await this.db
+      .selectFrom('bulk_job_rows')
+      .select(['job_id', 'status', (eb) => eb.fn.countAll<string>().as('n')])
+      .where('job_id', 'in', jobIds)
+      .groupBy(['job_id', 'status'])
+      .execute();
+    for (const r of rows) {
+      const key = String(r.job_id);
+      const counts = out.get(key) ?? emptyCounts();
+      const n = Number(r.n);
+      counts.total += n;
+      counts[r.status] += n;
+      out.set(key, counts);
+    }
+    return out;
   }
 }
 
-class NothingToRetry extends Error {}
+function actorOf(job: JobRecord): JobActor {
+  return {
+    directoryId: job.provider_id,
+    adminSessionId: job.admin_session_id,
+    actorUserId: job.actor_user_id,
+    actorDisplayName: job.actor_display_name,
+    actorUsername: job.actor_username,
+    sourceIp: job.source_ip,
+    userAgent: job.user_agent,
+    correlationId: job.correlation_id,
+  };
+}
+
+function actorColumns(actor: JobActor) {
+  return {
+    provider_id: actor.directoryId,
+    admin_session_id: actor.adminSessionId,
+    actor_user_id: actor.actorUserId,
+    actor_display_name: actor.actorDisplayName,
+    actor_username: actor.actorUsername,
+    source_ip: actor.sourceIp,
+    user_agent: actor.userAgent,
+    correlation_id: actor.correlationId,
+  };
+}
+
+function auditBase(actor: JobActor, jobId: string): Omit<AuditEventInput, 'action' | 'result'> {
+  return {
+    actorUserId: actor.actorUserId,
+    actorDisplayName: actor.actorDisplayName,
+    actorAuthMethod: 'ad-password',
+    sourceIp: actor.sourceIp,
+    userAgent: actor.userAgent,
+    sessionId: actor.adminSessionId,
+    correlationId: actor.correlationId,
+    providerId: actor.directoryId,
+    bulkJobId: String(jobId),
+  };
+}
 
 function emptyCounts(): BulkJobCounts {
   return { total: 0, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0 };
 }
 
 /** What a failed row says to the operator. */
-function failureMessage(code: string | null, detail: string | null): string {
+function failureMessage(code: string, detail: string | null): string {
   const reason = detail ? `: ${detail}` : '';
   switch (code) {
     case 'not_found':

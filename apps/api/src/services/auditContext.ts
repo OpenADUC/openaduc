@@ -52,7 +52,7 @@ export function auditContextFromRequest(req: FastifyRequest): RequestAuditContex
  * the wrapper records a failure audit and re-throws.
  */
 export async function withAudit<T extends WriteOpResult>(
-  audit: AuditService,
+  audit: Pick<AuditService, 'recordEvent'>,
   base: Omit<AuditEventInput, 'action' | 'result'> & {
     action: string;
     targetType?: AuditEventInput['targetType'];

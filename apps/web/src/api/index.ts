@@ -70,6 +70,7 @@ import type {
   UserSearchResponse,
   UserUpdateRequest,
 } from '@openaduc/shared';
+import { bulkJobPath } from '@openaduc/shared';
 import { apiFetch, type ApiFetchInit } from './client.js';
 
 export interface AuditEventRow {
@@ -664,7 +665,7 @@ export const api = {
   },
   bulkJobs: {
     start(action: BulkJobAction, ids: string[]): Promise<{ job: BulkJob }> {
-      return apiFetch(`/users/bulk-${action.slice('user.'.length)}`, {
+      return apiFetch(bulkJobPath(action), {
         method: 'POST',
         body: JSON.stringify({ ids }),
       });

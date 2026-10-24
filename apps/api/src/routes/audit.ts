@@ -2,12 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { sql, type Expression, type SqlBool } from 'kysely';
 import { z } from 'zod';
-import type {
-  AuditBulkSummary,
-  BulkJobAction,
-  BulkJobPauseReason,
-  BulkJobStatus,
-} from '@openaduc/shared';
+import { auditBulkSummarySchema, type AuditBulkSummary } from '@openaduc/shared';
 
 const querySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -131,30 +126,17 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
             .map((r) => r.bulk_job_id!),
         ),
       ];
-      const [jobs, counts] = await Promise.all([
-        jobIds.length === 0
-          ? []
-          : app.db
-              .selectFrom('bulk_jobs')
-              .select(['id', 'action', 'status', 'pause_reason'])
-              .where('id', 'in', jobIds)
-              .execute(),
-        app.services.bulkJobs.counts(jobIds),
-      ]);
-      const jobById = new Map(jobs.map((j) => [String(j.id), j]));
+      const summaries = await app.services.bulkJobs.summaries(jobIds);
       const bulkSummary = (r: (typeof rows)[number]): AuditBulkSummary => {
-        const job = r.bulk_job_id ? jobById.get(String(r.bulk_job_id)) : undefined;
-        const jobCounts = r.bulk_job_id ? counts.get(String(r.bulk_job_id)) : undefined;
-        const metadata = r.metadata_json as { action?: BulkJobAction; total?: number };
-        return {
-          action: (job?.action as BulkJobAction | undefined) ?? metadata.action ?? null,
-          // Null once the job's record is gone; its events remain.
-          status: (job?.status as BulkJobStatus | undefined) ?? null,
-          pauseReason: (job?.pause_reason as BulkJobPauseReason | null | undefined) ?? null,
-          total: jobCounts?.total ?? metadata.total ?? 0,
-          succeeded: jobCounts?.succeeded ?? null,
-          failed: jobCounts?.failed ?? null,
-        };
+        const metadata = r.metadata_json as { action?: unknown; total?: unknown };
+        const job = summaries.get(String(r.bulk_job_id));
+        return auditBulkSummarySchema.parse({
+          action: metadata.action,
+          total: metadata.total,
+          status: job?.status ?? null,
+          pauseReason: job?.pauseReason ?? null,
+          counts: job?.counts ?? null,
+        });
       };
 
       return {
