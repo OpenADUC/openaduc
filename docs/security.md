@@ -62,6 +62,8 @@ Computer accounts can be disabled and enabled (`write:computer.enableDisable`), 
 
 A failed capability check returns 403 and writes an `authz.deny` row to the audit log with the required capability, the actor, and the request correlation id.
 
+Adding members to a group mapped to an OpenADUC role hands them that role at their next sign-in (members of a group nested in it too), so it takes `configure:security` as well as `write:group.membership`. The server checks it on the single-member routes (`/api/users/:id/groups`, `/api/groups/:id/groups`) and on a bulk add when it starts, continues or is retried; the refusal names the group and the role, and writes an `authz.deny` row with the capability and that reason. Taking members out takes nothing more. A bulk add to a group AD protects (AdminSDHolder, or `adminCount=1`) also needs the operator to tick that these users gain admin rights in AD: without it the API refuses the job (422) before writing anything. AD's own permissions still decide every change. Creating or copying a user with role groups ticked doesn't take `configure:security` yet.
+
 ## Step-up authentication
 
 Mutating routes require **step-up auth**: the operator re-enters their AD password, the API rebinds against the directory, and on success mints an `elevated_sessions` row with a write-only subset of capabilities.
@@ -87,7 +89,7 @@ Every authenticated action — successful or denied — produces an `audit_event
 
 Each row captures: action, actor, target type and id, before/after JSON snapshots, source IP, user agent, session id, correlation id, error code, and arbitrary metadata. Keys matching a sensitive-key allowlist (`password`, `secret`, `token`, etc.) are auto-redacted to `[REDACTED]` before insert.
 
-Every event a bulk job writes carries the job's id (`bulk_job_id`): its `bulk.create` event, one event per row in the same shape as the single-object write's, and any `bulk.pause`, `bulk.resume`, `bulk.retry` or `bulk.cancel`. The audit log shows the job as one expandable entry.
+Every event a bulk job writes carries the job's id (`bulk_job_id`): its `bulk.create` event, one event per row in the same shape as the single-object write's, and any `bulk.pause`, `bulk.resume`, `bulk.retry` or `bulk.cancel`. A group job writes one event per user and group, a no-op included (a user already in the group, recorded with before and after alike, as the single-member route records one), so its events account for every row `bulk.create` counted. The audit log shows the job as one expandable entry.
 
 Each row also names the directory it belongs to: the one the action targeted, else the one the operator was signed in to. The audit log shows an auditor only their own directory's rows, plus installation-wide ones (settings changes, first-run setup), which name no directory and appear in every directory's log.
 

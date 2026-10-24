@@ -5,7 +5,11 @@ import { groupMembershipChangeSchema } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedGroups } from '../services/groupCache.js';
-import { refreshMembershipCache, writeGroupMembership } from '../services/groupMembershipWrite.js';
+import {
+  membershipRequirement,
+  refreshMembershipCache,
+  writeGroupMembership,
+} from '../services/groupMembershipWrite.js';
 import { ctx } from './writeContext.js';
 
 const idParamSchema = z.object({ id: z.guid() });
@@ -40,6 +44,8 @@ export async function changeMembership(
   // Validate the group id belongs to this provider before bothering AD.
   const [group] = await findCachedGroups(app.db, provider.id, { ids: [body.groupId] });
   if (!group) throw NotFound('group not found');
+  const needs = membershipRequirement(op, [group], await app.services.authorization.roleGroups());
+  if (needs) await app.requireCapability(req, needs.capability, needs.reason);
 
   const result = await writeGroupMembership(
     app.services.audit,

@@ -96,13 +96,16 @@ export type BulkGroupMembershipPreviewRequest = z.infer<
 /**
  * Adding users to groups, or removing them from groups: one row per user.
  * `previewToken` is the preview's, so the job runs on exactly the users
- * and groups the operator saw it for.
+ * and groups the operator saw it for. Adding to a group AD protects
+ * (adminCount, AdminSDHolder) takes `acknowledgeProtected`: the operator
+ * ticked that these users gain admin rights.
  */
 export const bulkGroupMembershipRequestSchema = z.object({
   ...groupSelection,
   previewToken: z.string().min(1),
+  acknowledgeProtected: z.boolean().default(false),
 });
-export type BulkGroupMembershipRequest = z.infer<typeof bulkGroupMembershipRequestSchema>;
+export type BulkGroupMembershipRequest = z.input<typeof bulkGroupMembershipRequestSchema>;
 
 /** How many users a preview lists in each group's lists; it counts them all. */
 export const PREVIEW_LIST_LIMIT = 50;
@@ -163,7 +166,7 @@ export type BulkJobCounts = z.infer<typeof bulkJobCountsSchema>;
 
 /** What a job acts with, besides its rows: the groups a membership job adds to or removes from. */
 export const bulkJobSubjectSchema = z.object({
-  groups: z.array(z.object({ id: z.string(), name: z.string() })),
+  groups: z.array(z.object({ id: z.string(), name: z.string(), distinguishedName: z.string() })),
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 

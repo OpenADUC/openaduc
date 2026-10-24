@@ -112,8 +112,8 @@ describe('the bulk job panel', () => {
   it('names the groups a membership job adds to or removes from', () => {
     const subject = {
       groups: [
-        { id: 'g1', name: 'Sales' },
-        { id: 'g2', name: 'HR' },
+        { id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales' },
+        { id: 'g2', name: 'HR', distinguishedName: 'CN=HR' },
       ],
     };
     expect(
@@ -133,7 +133,7 @@ describe('the bulk job panel', () => {
   });
 
   it('counts rows that needed no change, and rows only partly changed', () => {
-    const subject = { groups: [{ id: 'g1', name: 'Sales' }] };
+    const subject = { groups: [{ id: 'g1', name: 'Sales', distinguishedName: 'CN=Sales' }] };
     const page = panel(
       aJob(
         'finished',

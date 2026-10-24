@@ -57,7 +57,7 @@ describe('a bulk job in the audit log', () => {
 
   it('names the groups a membership job changed', () => {
     const groups = (...names: string[]) => ({
-      groups: names.map((name, i) => ({ id: `g${i}`, name })),
+      groups: names.map((name, i) => ({ id: `g${i}`, name, distinguishedName: `CN=${name}` })),
     });
     expect(
       describeBulkEntry(summary({ action: 'user.group.add', subject: groups('Sales') }), 'Jane')

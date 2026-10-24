@@ -122,14 +122,57 @@ describe('useBulkGroupMembership', () => {
     ]);
     expect(start).not.toHaveBeenCalled();
 
+    // Domain Admins is protected: confirming takes the operator's say-so.
+    expect(flow.acknowledgement.value).toBe(
+      'I understand these users gain admin rights in AD through Domain Admins.',
+    );
+    expect(flow.canConfirm.value).toBe(false);
+    flow.confirm();
+    expect(start).not.toHaveBeenCalled();
+    flow.acknowledged.value = true;
     flow.confirm();
     expect(start).toHaveBeenCalledExactlyOnceWith({
       op: 'add',
       ids: ['u1', 'u2', 'u3', 'u4'],
       groupIds: ['g1', 'g2'],
       previewToken: 'tok',
+      acknowledgeProtected: true,
     });
     expect(flow.visible.value).toBe(false);
+  });
+
+  it('won’t add members to a role group for an operator who can’t hand out roles', async () => {
+    const start = vi.fn();
+    const flow = useBulkGroupMembership({ ids: () => ['u1'], start, canGrantRoles: () => false });
+    previewGroupChange.mockResolvedValue(
+      aPreview('add', [
+        previewed('g1', 'Operators', {
+          changes: 1,
+          privilege: { reason: 'role', role: 'operator' },
+        }),
+      ]),
+    );
+    flow.open();
+    flow.choose(SALES);
+    await flow.review();
+
+    expect(flow.lines.value[0]!.blocked).toMatch(/configure:security/);
+    expect(flow.canConfirm.value).toBe(false);
+    flow.confirm();
+    expect(start).not.toHaveBeenCalled();
+
+    // Taking members out of it is fine.
+    flow.setOp('remove');
+    previewGroupChange.mockResolvedValue(
+      aPreview('remove', [
+        previewed('g1', 'Operators', {
+          changes: 1,
+          privilege: { reason: 'role', role: 'operator' },
+        }),
+      ]),
+    );
+    await flow.review();
+    expect(flow.canConfirm.value).toBe(true);
   });
 
   it('won’t start on a selection that changed since the preview', async () => {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
-import type { BulkMembershipOp } from '@openaduc/shared';
+import type { BulkMembershipOp, Capability, Role } from '@openaduc/shared';
+import { grantedRole, type RoleGroup } from '../lib/groupPrivilege.js';
 import type { DB } from '../db/types.js';
 import type {
   DirectoryObjectIdentifier,
@@ -17,6 +18,42 @@ export interface MembershipCacheDeps {
   db: Kysely<DB>;
   userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
 }
+
+/** A capability a membership change takes beyond write:group.membership, and why. */
+export interface MembershipRequirement {
+  capability: Capability;
+  reason: string;
+}
+
+/**
+ * What else adding to these groups takes. A group mapped to an OpenADUC
+ * role hands that role to its members (and to members of a group nested
+ * in it), which only an operator who may configure security can do.
+ * Taking members out takes nothing more.
+ */
+export function membershipRequirement(
+  op: BulkMembershipOp,
+  groups: readonly { distinguishedName: string; name: string }[],
+  roleGroups: readonly RoleGroup[],
+): MembershipRequirement | null {
+  if (op !== 'add') return null;
+  for (const group of groups) {
+    const role = grantedRole(group.distinguishedName, roleGroups);
+    if (role) {
+      return {
+        capability: 'configure:security',
+        reason: `Adding members to ${group.name} gives them OpenADUC’s ${ROLE_NAMES[role]} role, which takes the configure:security capability.`,
+      };
+    }
+  }
+  return null;
+}
+
+const ROLE_NAMES: Record<Role, string> = {
+  admin: 'Admin',
+  operator: 'Operator',
+  auditor: 'Auditor',
+};
 
 export interface MembershipChange {
   kind: 'user' | 'group';

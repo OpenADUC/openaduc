@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
+import Checkbox from 'primevue/checkbox';
 import InputText from 'primevue/inputtext';
 import Message from 'primevue/message';
 import SelectButton from 'primevue/selectbutton';
@@ -40,6 +41,9 @@ const {
   previewError,
   lines,
   changes,
+  acknowledged,
+  acknowledgement,
+  canConfirm,
 } = props.workflow;
 const w = props.workflow;
 
@@ -153,7 +157,10 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
       </p>
       <section v-for="line in lines" :key="line.group.id" class="bg-group">
         <h3 class="bg-group-name">{{ line.group.name }}</h3>
-        <Message v-if="line.warning" severity="warn" :closable="false" class="bg-warning">
+        <Message v-if="line.blocked" severity="error" :closable="false" class="bg-warning">
+          {{ line.blocked }}
+        </Message>
+        <Message v-else-if="line.warning" severity="warn" :closable="false" class="bg-warning">
           {{ line.warning }}
         </Message>
         <p class="bg-summary">{{ line.summary }}</p>
@@ -169,6 +176,10 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
           </p>
         </details>
       </section>
+      <div v-if="acknowledgement && changes > 0" class="bg-ack">
+        <Checkbox v-model="acknowledged" input-id="bg-ack" binary />
+        <label for="bg-ack">{{ acknowledgement }}</label>
+      </div>
       <Message v-if="changes === 0" severity="info" :closable="false">
         {{
           op === 'add'
@@ -185,7 +196,7 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
           :label="confirmLabel"
           :icon="op === 'add' ? 'pi pi-user-plus' : 'pi pi-user-minus'"
           :severity="op === 'remove' ? 'danger' : undefined"
-          :disabled="changes === 0"
+          :disabled="!canConfirm"
           @click="w.confirm"
         />
       </template>
@@ -316,6 +327,14 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
   margin: 4px 0 8px;
   font-size: 12.5px;
   color: var(--text-2);
+}
+
+.bg-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
 }
 
 .bg-unchanged {
