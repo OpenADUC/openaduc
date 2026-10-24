@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TapPreflight } from '@openaduc/shared';
 import { ActiveDirectoryProvider } from '../../src/providers/active-directory/provider.js';
+import { json, token } from './fakeGraph.js';
 import { configureDirectory, DC, startApi, type TestApi, type TestClient } from './harness.js';
 
 // Issue TAP against the dev DC, with Microsoft Graph played by a fake
@@ -102,18 +103,6 @@ class FakeGraph {
     }
     return json({ error: { code: 'Request_ResourceNotFound', message: path } }, 404);
   };
-}
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-
-function token(roles: string[]): string {
-  const part = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
-  return `${part({ alg: 'none' })}.${part({ roles })}.sig`;
 }
 
 describe('Issue TAP', () => {
