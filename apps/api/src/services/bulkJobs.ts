@@ -348,10 +348,16 @@ export class BulkJobService {
   }
 
   private kick(jobId: string): void {
-    if (this.stopping || this.runs.has(jobId)) return;
-    const run = this.run(jobId)
+    if (this.stopping) return;
+    // A run still winding down (it has just finished or paused) goes first;
+    // the next one only claims the job if it's queued again by then.
+    const before = this.runs.get(jobId) ?? Promise.resolve();
+    const run = before
+      .then(() => this.run(jobId))
       .catch((err) => this.logger.error({ err, jobId }, 'bulk job run failed'))
-      .finally(() => this.runs.delete(jobId));
+      .finally(() => {
+        if (this.runs.get(jobId) === run) this.runs.delete(jobId);
+      });
     this.runs.set(jobId, run);
   }
 

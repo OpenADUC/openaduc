@@ -10,7 +10,7 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
 
 /** Rows the job has got through, whatever their outcome. */
-export const bulkJobDone = (job: BulkJob): number =>
+const bulkJobDone = (job: BulkJob): number =>
   job.counts.succeeded + job.counts.failed + job.counts.skipped;
 
 /** Still writing, or about to: worth polling. */
