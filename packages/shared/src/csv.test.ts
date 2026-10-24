@@ -114,3 +114,28 @@ describe('parseTable', () => {
     });
   });
 });
+
+describe('parseTable, choosing the delimiter', () => {
+  it('picks the delimiter that keeps the rows as wide as the header', () => {
+    const table = parseTable('Name, first;Name, last\nJane;Doe\nJohn;Roe');
+    expect(table.delimiter).toBe(';');
+    expect(table.header).toEqual(['Name, first', 'Name, last']);
+    expect(table.rows).toEqual([
+      ['Jane', 'Doe'],
+      ['John', 'Roe'],
+    ]);
+  });
+
+  it('follows a sep= line, which the spreadsheet doesn’t count as a row', () => {
+    const table = parseTable('sep=;\r\nFirst;Last,ish\r\nJane;Doe');
+    expect(table.delimiter).toBe(';');
+    expect(table.header).toEqual(['First', 'Last,ish']);
+    expect(table.rowNumbers).toEqual([2]);
+  });
+
+  it('refuses characters a file’s encoding lost', () => {
+    expect(parseTable('First,Last\nZo�,Doe\nAnn,Ash').problems).toEqual([
+      'Row 2 has characters that couldn’t be read (shown as �). Save the sheet as “CSV UTF-8” and use that file.',
+    ]);
+  });
+});
