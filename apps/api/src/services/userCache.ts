@@ -46,6 +46,8 @@ export async function upsertUser(
       title: user.title,
       department: user.department,
       manager_dn: user.managerDn,
+      office: user.office ?? null,
+      office_read: true,
       enabled: user.enabled,
       locked: user.locked,
       password_never_expires: user.passwordNeverExpires,
@@ -78,6 +80,8 @@ export async function upsertUser(
         title: eb.ref('excluded.title'),
         department: eb.ref('excluded.department'),
         manager_dn: eb.ref('excluded.manager_dn'),
+        office: eb.ref('excluded.office'),
+        office_read: eb.ref('excluded.office_read'),
         enabled: eb.ref('excluded.enabled'),
         locked: eb.ref('excluded.locked'),
         password_never_expires: eb.ref('excluded.password_never_expires'),
@@ -203,4 +207,12 @@ export function findCachedUser(
       ? query.where('object_guid', '=', by.id)
       : query.where(sql<string>`lower(distinguished_name)`, '=', by.dn.toLowerCase())
   ).executeTakeFirst();
+}
+
+/** How a cached user is named: display name, else logon name, else `fallback`. */
+export function cachedUserName(
+  user: { display_name: string | null; sam_account_name: string | null },
+  fallback: string,
+): string {
+  return user.display_name ?? user.sam_account_name ?? fallback;
 }

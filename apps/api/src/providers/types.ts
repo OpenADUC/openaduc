@@ -39,8 +39,8 @@ export interface DirectoryUser {
   title: string | null;
   department: string | null;
   /**
-   * physicalDeliveryOfficeName. Typed because it's kept out of
-   * rawAttributes; only full reads carry it.
+   * physicalDeliveryOfficeName, typed because it's kept out of
+   * rawAttributes (SKIP_RAW_ATTRS). The cache keeps it in its own column.
    */
   office?: string | null;
   managerDn: string | null;
@@ -343,7 +343,6 @@ export interface UserAttributePatch {
   l?: string | null | undefined;
   st?: string | null | undefined;
   postalCode?: string | null | undefined;
-  postOfficeBox?: string | null | undefined;
   countryCode?: string | null | undefined;
   physicalDeliveryOfficeName?: string | null | undefined;
   managerDn?: string | null | undefined;
@@ -351,6 +350,7 @@ export interface UserAttributePatch {
   otherMailbox?: string[] | null | undefined;
   otherHomePhone?: string[] | null | undefined;
   otherMobile?: string[] | null | undefined;
+  postOfficeBox?: string[] | null | undefined;
 }
 
 export interface ResetPasswordInput {

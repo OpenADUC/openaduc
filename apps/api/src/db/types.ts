@@ -54,6 +54,9 @@ export interface UserCacheRecordsTable {
   title: string | null;
   department: string | null;
   manager_dn: string | null;
+  office: string | null;
+  /** False for a row cached before the office was: its office isn't known. */
+  office_read: ColumnType<boolean, boolean | undefined, boolean>;
   enabled: ColumnType<boolean, boolean | undefined, boolean>;
   locked: ColumnType<boolean, boolean | undefined, boolean>;
   password_never_expires: ColumnType<boolean, boolean | undefined, boolean>;
