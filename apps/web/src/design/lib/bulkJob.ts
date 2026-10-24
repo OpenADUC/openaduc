@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type {
-  AuditBulkSummary,
-  BulkJob,
-  BulkJobAction,
-  BulkJobCounts,
-  BulkJobPauseReason,
-  BulkJobStatus,
-  BulkJobSubject,
+import {
+  revertedAction,
+  type AuditBulkSummary,
+  type BulkJob,
+  type BulkJobKind,
+  type BulkJobCounts,
+  type BulkJobPauseReason,
+  type BulkJobStatus,
+  type BulkJobSubject,
 } from '@openaduc/shared';
 import { expiryMoment } from './accountExpiry.js';
 import { fieldNames } from './bulkAttributes.js';
+import { fmtAbsolute } from './format.js';
 
-export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
+export const BULK_VERBS: Record<BulkJobKind, { verb: string; ing: string; ed: string }> = {
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
   'user.enable': { verb: 'Enable', ing: 'Enabling', ed: 'Enabled' },
   'user.unlock': { verb: 'Unlock', ing: 'Unlocking', ed: 'Unlocked' },
@@ -34,6 +36,16 @@ export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: 
     ing: 'Clearing “password never expires” for',
     ed: 'Cleared “password never expires” for',
   },
+  'user.passwordMustChange.clear': {
+    verb: 'Stop requiring a password change',
+    ing: 'Stopping requiring a password change for',
+    ed: 'Stopped requiring a password change for',
+  },
+  'user.passwordNeverExpires.set': {
+    verb: 'Set “password never expires”',
+    ing: 'Setting “password never expires” for',
+    ed: 'Set “password never expires” for',
+  },
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
@@ -49,7 +61,7 @@ export function groupNames(groups: readonly { name: string }[]): string {
  * " (department and title)" for an edit, " to the end of 3/1/2031" for
  * an expiry, or nothing.
  */
-export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | null): string {
+export function bulkJobTarget(action: BulkJobKind, subject: BulkJobSubject | null): string {
   if (action === 'user.update' && subject?.attributes?.length) {
     return ` (${fieldNames(subject.attributes.map((a) => a.field))})`;
   }
@@ -61,6 +73,20 @@ export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | n
   if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
   if (action === 'user.group.remove') return ` from ${groupNames(subject.groups)}`;
   return '';
+}
+
+/**
+ * How a job's progress and result put what it does: "Disabling", " to
+ * Sales". A revert says only that it reverts; its audit entry says what.
+ */
+export function bulkJobWords(job: Pick<BulkJob, 'action' | 'subject' | 'revertsJobId'>): {
+  ing: string;
+  ed: string;
+  target: string;
+} {
+  if (job.revertsJobId !== null) return { ing: 'Reverting', ed: 'Reverted', target: '' };
+  const { ing, ed } = BULK_VERBS[job.action];
+  return { ing, ed, target: bulkJobTarget(job.action, job.subject) };
 }
 
 /** Rows got through, whatever their outcome. */
@@ -104,7 +130,7 @@ const PAUSED_BECAUSE: Record<BulkJobPauseReason, string> = {
 const PAUSES_WHEN =
   'It pauses if your elevated session ends (when idle, or at its time limit); then step up to continue.';
 
-export type BulkJobControl = 'stop' | 'continue' | 'retry' | 'dismiss';
+export type BulkJobControl = 'stop' | 'continue' | 'retry' | 'revert' | 'dismiss';
 
 export interface BulkJobDescription {
   tone: 'info' | 'warn' | 'success';
@@ -117,8 +143,7 @@ export interface BulkJobDescription {
 
 /** What a bulk job's progress panel says, and which controls it offers. */
 export function describeBulkJob(job: BulkJob): BulkJobDescription {
-  const { ing, ed } = BULK_VERBS[job.action];
-  const target = bulkJobTarget(job.action, job.subject);
+  const { ing, ed, target } = bulkJobWords(job);
   const { counts } = job;
   const { label, open } = STATUS[job.status];
   const progress = counts.total === 0 ? 0 : Math.round((done(counts) / counts.total) * 100);
@@ -133,10 +158,16 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
           counts.failed > 0 ? `${counts.failed} failed` : null,
         ]
           .filter(Boolean)
-          .join(
-            ' and ',
-          )}. ${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
-  const afterwards: BulkJobControl[] = problems > 0 ? ['retry', 'dismiss'] : ['dismiss'];
+          .join(' and ')}. ${
+          job.revertsJobId === null
+            ? `${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`
+            : 'The revert’s entry below lists why.'
+        }`;
+  const afterwards: BulkJobControl[] = [
+    ...(problems > 0 ? (['retry'] as const) : []),
+    ...(job.revertible ? (['revert'] as const) : []),
+    'dismiss',
+  ];
 
   if (job.status === 'paused') {
     return {
@@ -180,29 +211,63 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   };
 }
 
+/** Whether a revert has got anywhere, as the reverted job's entry says it. */
+function revertedNote(revert: NonNullable<AuditBulkSummary['revertedBy']>): string {
+  const by = revert.actorDisplayName ? ` by ${revert.actorDisplayName}` : '';
+  const on = fmtAbsolute(revert.createdAt);
+  if (revert.status === 'cancelled') return `Revert${by} on ${on} was stopped`;
+  if (STATUS[revert.status].open) return `Being reverted${by}, since ${on}`;
+  return `Reverted${by} on ${on}`;
+}
+
 /**
- * A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe:
- * 42 users" or "Bulk add to Sales by Jane Doe: 42 users".
+ * A job's heading, e.g. "Bulk disable by Jane Doe: 42 users", "Bulk add to
+ * Sales by Jane Doe: 42 users", or "Revert of bulk disable by Jane Doe: 40
+ * users".
  */
+export function bulkJobTitle(
+  job: { action: BulkJobKind; subject: BulkJobSubject | null; revertsJobId: string | null },
+  total: number,
+  actor: string | null,
+): string {
+  const action = job.revertsJobId === null ? job.action : revertedAction(job.action);
+  const verb = BULK_VERBS[action].verb.toLowerCase();
+  const users = total === 1 ? '1 user' : `${total} users`;
+  const what = job.revertsJobId === null ? 'Bulk' : 'Revert of bulk';
+  return `${what} ${verb}${bulkJobTarget(action, job.subject)}${actor ? ` by ${actor}` : ''}: ${users}`;
+}
+
+/** A bulk job's entry in the audit log: its heading, how it went, and whether it's been reverted. */
 export function describeBulkEntry(
   bulk: AuditBulkSummary,
   actor: string | null,
-): { title: string; outcome: string | null; tone: 'green' | 'amber' | 'red' | 'muted' } {
-  const verb = BULK_VERBS[bulk.action].verb.toLowerCase();
-  const users = bulk.total === 1 ? '1 user' : `${bulk.total} users`;
-  const target = bulkJobTarget(bulk.action, bulk.subject);
-  const title = `Bulk ${verb}${target}${actor ? ` by ${actor}` : ''}: ${users}`;
+): {
+  title: string;
+  outcome: string | null;
+  tone: 'green' | 'amber' | 'red' | 'muted';
+  reverted: string | null;
+} {
+  const title = bulkJobTitle(bulk, bulk.total, actor);
+  const reverted = bulk.revertedBy ? revertedNote(bulk.revertedBy) : null;
   const { status, counts } = bulk;
-  if (status === null || counts === null) return { title, outcome: null, tone: 'muted' };
+  if (status === null || counts === null) {
+    return { title, outcome: null, tone: 'muted', reverted };
+  }
 
   const { label, open } = STATUS[status];
   const failedTone = counts.failed > 0 ? 'red' : null;
   if (open) {
-    return { title, outcome: `${label}: ${done(counts)} of ${counts.total} done`, tone: 'amber' };
+    return {
+      title,
+      outcome: `${label}: ${done(counts)} of ${counts.total} done`,
+      tone: 'amber',
+      reverted,
+    };
   }
   return {
     title,
     outcome: label ? `${label}: ${tally(counts)}` : tally(counts),
     tone: failedTone ?? (label ? 'amber' : 'green'),
+    reverted,
   };
 }

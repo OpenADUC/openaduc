@@ -6,14 +6,16 @@ import {
   bulkJobListResponseSchema,
   bulkJobPath,
   bulkJobResponseSchema,
+  bulkJobRevertPreviewSchema,
   bulkJobRowsQuerySchema,
   bulkJobRowsResponseSchema,
-  type BulkJobAction,
+  canRevert,
   type BulkJobSubject,
 } from '@openaduc/shared';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
-import type { JobActor } from '../services/bulkJobs/service.js';
+import { revertRunner, type BulkRevertRunner } from '../services/bulkJobs/reverts.js';
+import type { JobActor, JobRecord } from '../services/bulkJobs/service.js';
 
 const jobParamSchema = z.object({ id: z.coerce.number().int().positive() });
 const listQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50).default(10) });
@@ -23,9 +25,13 @@ const listQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(50)
  * action's capability and step-up, as the single-object route does;
  * continuing or retrying one writes too, so takes them again, along with
  * whatever its subject takes (adding to a role group, configure:security).
- * A job is its
- * operator's own: anyone else gets 404, and sees the job through the audit
- * log instead.
+ * A job is its operator's own: anyone else gets 404, and sees the job
+ * through the audit log instead.
+ *
+ * Reverting a job starts a new job, the reverting operator's own, that
+ * puts back what it changed. It takes the capability of the writes it
+ * makes, and step-up, as the job did; reverting someone else's job also
+ * takes view:audit, as that's where it's seen.
  */
 export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void> {
   const jobs = app.services.bulkJobs;
@@ -41,7 +47,9 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
       },
       handler: async (req, reply) => {
         const id = await jobs
-          .create(actorFrom(req), action, req.body, (subject) => requireFor(req, action, subject))
+          .create(actorFrom(req), action, req.body, (subject) =>
+            requireFor(req, jobs.handlers[action], subject),
+          )
           .catch(refuseBulkRequest);
         return reply
           .status(202)
@@ -84,8 +92,7 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await app.requireCapability(req, jobs.handlers[job.action].capability);
-      await requireFor(req, job.action, job.subject_json);
+      await requireFor(req, jobs.runner(job), job.subject_json);
       if (!(await jobs.resume(job, actorFrom(req)))) {
         throw app.httpErrors.conflict('only a paused job can be continued');
       }
@@ -97,9 +104,8 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
     handler: async (req) => {
       const job = await ownJob(req);
-      await app.requireCapability(req, jobs.handlers[job.action].capability);
-      await requireFor(req, job.action, job.subject_json);
-      if (!(await jobs.retry(job, actorFrom(req)))) {
+      await requireFor(req, jobs.runner(job), job.subject_json);
+      if (!(await jobs.retry(job, actorFrom(req)).catch(refuseBulkRequest))) {
         throw app.httpErrors.conflict('the job is still running, or has no failed rows');
       }
       return bulkJobResponseSchema.parse({ job: await jobs.describeOne(job.id) });
@@ -119,16 +125,48 @@ export async function registerBulkJobRoutes(app: FastifyInstance): Promise<void>
     },
   });
 
-  /** What the job's subject takes beyond its action's capability, such as handing out a role. */
+  app.get('/api/bulk-jobs/:id/revert/preview', {
+    config: { policy: { capability: null, stepUp: false, directory: 'caller' } },
+    handler: async (req) => {
+      const job = await revertedJob(req);
+      const preview = await jobs.previewRevert(job).catch(refuseBulkRequest);
+      return bulkJobRevertPreviewSchema.parse(preview);
+    },
+  });
+
+  app.post('/api/bulk-jobs/:id/revert', {
+    config: { policy: { capability: null, stepUp: true, directory: 'caller' } },
+    handler: async (req, reply) => {
+      const job = await revertedJob(req);
+      const id = await jobs.revert(actorFrom(req), job, req.body).catch(refuseBulkRequest);
+      return reply
+        .status(202)
+        .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
+    },
+  });
+
+  /** A job in this directory to revert, if the operator may revert it. */
+  async function revertedJob(req: FastifyRequest): Promise<JobRecord> {
+    const { id } = jobParamSchema.parse(req.params);
+    const job = await jobs.findInDirectory(String(id), req.directoryId!);
+    if (!job) throw NotFound('bulk job not found');
+    if (job.actor_user_id !== req.actor!.session.actorUserId) {
+      await app.requireCapability(req, 'view:audit');
+    }
+    if (job.reverts_job_id === null && canRevert(job.action)) {
+      await requireFor(req, revertRunner(job.action), job.subject_json);
+    }
+    return job;
+  }
+
+  /** The job's capability, and what its subject takes beyond it, such as handing out a role. */
   async function requireFor(
     req: FastifyRequest,
-    action: BulkJobAction,
+    runner: Pick<BulkRevertRunner, 'capability' | 'requires'>,
     subject: BulkJobSubject | null,
   ): Promise<void> {
-    const needs = jobs.handlers[action].requires?.(
-      subject,
-      await app.services.authorization.roleGroups(),
-    );
+    await app.requireCapability(req, runner.capability);
+    const needs = runner.requires?.(subject, await app.services.authorization.roleGroups());
     if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 

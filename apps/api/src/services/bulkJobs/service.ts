@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { randomUUID } from 'node:crypto';
 import type { FastifyBaseLogger } from 'fastify';
-import { sql, type Kysely, type Selectable } from 'kysely';
-import type {
-  AuditBulkSummary,
-  BulkJob,
-  BulkJobAction,
-  BulkJobCounts,
-  BulkJobPauseReason,
-  BulkJobRow,
-  BulkJobRowStatus,
-  BulkJobSubject,
+import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
+import {
+  BULK_REVERT_ACTIONS,
+  bulkJobRevertRequestSchema,
+  canRevert,
+  revertedAction,
+  revertRefusal,
+  type BulkJobKind,
+  type BulkRevertableAction,
+  type AuditBulkSummary,
+  type BulkJob,
+  type BulkJobAction,
+  type BulkJobCounts,
+  type BulkJobPauseReason,
+  type BulkJobRevertPreview,
+  type BulkJobRow,
+  type BulkJobRowStatus,
+  type BulkJobStatus,
+  type BulkJobSubject,
 } from '@openaduc/shared';
 import type { BulkJobRowsTable, BulkJobsTable, DB } from '../../db/types.js';
 import type { ProviderFactory } from '../../providers/registry.js';
@@ -24,7 +33,22 @@ import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
 import type { SessionsService } from '../sessions.js';
 import type { MembershipCacheDeps } from '../groupMembershipWrite.js';
-import { BULK_JOB_HANDLERS, type BulkJobHandlers, type BulkRowOutcome } from './handlers.js';
+import { BulkJobRequestError } from './errors.js';
+import {
+  BULK_JOB_HANDLERS,
+  type BulkJobHandlers,
+  type BulkJobRowInput,
+  type BulkRowOutcome,
+} from './handlers.js';
+import {
+  directoryLookup,
+  planRevert,
+  revertInput,
+  revertPreview,
+  revertRunner,
+  type BulkRevertRunner,
+  type RevertPlan,
+} from './reverts.js';
 import { failureMessage } from './rowMessages.js';
 
 export type JobRecord = Selectable<BulkJobsTable>;
@@ -60,6 +84,61 @@ const STOP_WAIT_MS = 4_000;
 const INSERT_CHUNK = 1_000;
 /** The rows a retry runs again: those with changes still to make. */
 const RETRIED: BulkJobRowStatus[] = ['failed', 'partial'];
+/** A job in these may still write; one revert of a job at a time may be (bulk_jobs_one_open_revert_uq). */
+const OPEN: BulkJobStatus[] = ['queued', 'running', 'paused'];
+
+const REVERT_RUNNING = 'This job is being reverted already.';
+
+/** A unique violation on bulk_jobs_one_open_revert_uq, as the refusal it is; anything else rethrown. */
+function revertRunning(err: unknown): never {
+  if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '23505') {
+    throw new BulkJobRequestError('revert_running', REVERT_RUNNING);
+  }
+  throw err;
+}
+
+const lockJob = (db: Kysely<DB>, id: string) =>
+  db.selectFrom('bulk_jobs').selectAll().where('id', '=', id).forUpdate().executeTakeFirstOrThrow();
+
+/**
+ * The jobs among these with a revert, other than `except`, that may still
+ * write: not stopped, or stopped with rows still running (a stop lets
+ * them finish).
+ */
+async function withOpenReverts(
+  db: Kysely<DB>,
+  jobIds: string[],
+  except?: string,
+): Promise<Set<string>> {
+  if (jobIds.length === 0) return new Set();
+  let q = db
+    .selectFrom('bulk_jobs as revert')
+    .select('revert.reverts_job_id')
+    .where('revert.reverts_job_id', 'in', jobIds)
+    .where((eb) =>
+      eb.or([
+        eb('revert.status', 'in', OPEN),
+        eb.exists(
+          eb
+            .selectFrom('bulk_job_rows as r')
+            .select('r.id')
+            .whereRef('r.job_id', '=', 'revert.id')
+            .where('r.status', '=', 'running'),
+        ),
+      ]),
+    );
+  if (except) q = q.where('revert.id', '<>', except);
+  return new Set((await q.execute()).map((r) => String(r.reverts_job_id)));
+}
+
+const hasOpenRevert = async (db: Kysely<DB>, jobId: string, except?: string) =>
+  (await withOpenReverts(db, [jobId], except)).has(String(jobId));
+
+/** The job's action, as one a revert can put back, once revertRefusal has passed it. */
+function revertable(job: JobRecord): BulkRevertableAction {
+  if (!canRevert(job.action)) throw new Error(`${job.action} can't be reverted`);
+  return job.action;
+}
 
 /**
  * Bulk actions as server-side jobs, run in-process. A job's rows are
@@ -80,6 +159,10 @@ const RETRIED: BulkJobRowStatus[] = ['failed', 'partial'];
  * heads the group, followed by one event per row (the same shape as the
  * single-object route's) and any `bulk.pause`, `bulk.resume`, `bulk.retry`
  * or `bulk.cancel`.
+ *
+ * A revert is a job too, of the same action, pointing at the job it
+ * reverts (`reverts_job_id`, also in its `bulk.create` event); its rows run
+ * through `revertRunner` rather than the action's handler.
  */
 export class BulkJobService {
   private readonly runs = new Map<string, Promise<void>>();
@@ -132,6 +215,113 @@ export class BulkJobService {
     const subject =
       (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
     await authorize?.(subject);
+    return this.insert(actor, action, subject, rows);
+  }
+
+  /**
+   * Revert a stopped job: a new job, of the opposite action, that puts back
+   * each row's before-values, on the rows previewed (a token from
+   * `previewRevert`). Rows changed again since the job are left alone
+   * unless `include` names them. The caller checks the operator may make
+   * its writes. The job is locked while the revert is stored, so a retry
+   * of it, or another revert, can't start alongside.
+   */
+  async revert(actor: JobActor, job: JobRecord, body: unknown): Promise<string> {
+    const request = bulkJobRevertRequestSchema.parse(body);
+    const plan = await this.plan(job);
+    if (request.previewToken !== plan.token) {
+      throw new BulkJobRequestError(
+        'preview_mismatch',
+        'The accounts have changed since the preview. Preview the revert again.',
+      );
+    }
+    const included = new Set(
+      request.include === 'all'
+        ? plan.modified.map((r) => r.targetId)
+        : request.include.map((id) => id.toLowerCase()),
+    );
+    const forced = plan.modified.filter((r) => included.has(r.targetId));
+    const chosen = [
+      ...plan.revert.map((r) => ({ row: r, force: false })),
+      ...forced.map((r) => ({ row: r, force: true })),
+    ].sort((a, b) => a.row.ordinal - b.row.ordinal);
+    if (chosen.length === 0) {
+      throw new BulkJobRequestError(
+        'nothing_to_revert',
+        'Nothing to revert: every account the job changed is back as it was, changed since, or can’t be reverted.',
+      );
+    }
+    const guarded = chosen
+      .flatMap(({ row }) => row.readds)
+      .map((id) => plan.protectedGroups.get(id))
+      .find((name) => name !== undefined);
+    if (guarded && !request.acknowledgeProtected) {
+      throw new BulkJobRequestError(
+        'protected_unacknowledged',
+        `Reverting puts users back in ${guarded}, which gives them admin rights in AD. Confirm that they need them.`,
+      );
+    }
+    const rows = chosen.map(({ row, force }) => ({
+      targetId: row.targetId,
+      input: revertInput(String(job.id), row, force),
+    }));
+    return this.insert(actor, BULK_REVERT_ACTIONS[revertable(job)], job.subject_json, rows, {
+      revertsJobId: String(job.id),
+      metadata: {
+        leftAsChanged: plan.modified.length - forced.length,
+        notRevertible: plan.notRevertible.length,
+      },
+      guard: async (trx) => {
+        const locked = await lockJob(trx, job.id);
+        const refusal = await this.refusal(trx, locked);
+        if (refusal) throw new BulkJobRequestError(refusal.code, refusal.message);
+        const at = (d: Date | string | null) => (d === null ? null : new Date(d).getTime());
+        if (at(locked.finished_at) !== at(job.finished_at)) {
+          throw new BulkJobRequestError(
+            'preview_mismatch',
+            'The job has run again since the preview. Preview the revert again.',
+          );
+        }
+      },
+    }).catch(revertRunning);
+  }
+
+  /** What reverting the job would do, read from the cache. */
+  async previewRevert(job: JobRecord): Promise<BulkJobRevertPreview> {
+    return revertPreview(this.db, job.provider_id, await this.plan(job));
+  }
+
+  private async plan(job: JobRecord): Promise<RevertPlan> {
+    const refusal = await this.refusal(this.db, job);
+    if (refusal) throw new BulkJobRequestError(refusal.code, refusal.message);
+    const provider = await this.deps.providers.buildForDirectory(job.provider_id);
+    return planRevert(this.db, job, revertable(job), directoryLookup(provider));
+  }
+
+  private async refusal(db: Kysely<DB>, job: JobRecord) {
+    const [described] = await this.describe([job], db);
+    return revertRefusal(described!, await hasOpenRevert(db, String(job.id)));
+  }
+
+  /** What runs a job's rows: its action's handler, or for a revert, what puts them back. */
+  runner(job: Pick<JobRecord, 'action' | 'reverts_job_id'>): BulkRevertRunner {
+    return job.reverts_job_id === null
+      ? this.handlers[job.action as BulkJobAction]
+      : revertRunner(revertedAction(job.action));
+  }
+
+  private async insert(
+    actor: JobActor,
+    action: BulkJobKind,
+    subject: BulkJobSubject | null,
+    rows: BulkJobRowInput<unknown>[],
+    revert?: {
+      revertsJobId: string;
+      metadata: Record<string, unknown>;
+      /** Run in the transaction that stores the job, first; throws to refuse it. */
+      guard: (trx: Transaction<DB>) => Promise<void>;
+    },
+  ): Promise<string> {
     const cached = await this.db
       .selectFrom('user_cache_records')
       .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
@@ -145,6 +335,7 @@ export class BulkJobService {
     const byId = new Map(cached.map((u) => [u.object_guid, u]));
 
     const jobId = await this.db.transaction().execute(async (trx) => {
+      await revert?.guard(trx);
       const job = await trx
         .insertInto('bulk_jobs')
         .values({
@@ -153,6 +344,7 @@ export class BulkJobService {
           heartbeat_at: sql`now()`,
           action,
           subject_json: subject ? JSON.stringify(subject) : null,
+          reverts_job_id: revert?.revertsJobId ?? null,
         })
         .returning('id')
         .executeTakeFirstOrThrow();
@@ -184,7 +376,12 @@ export class BulkJobService {
         action: 'bulk.create',
         result: 'success',
         targetType: 'user',
-        metadata: { action, total: rows.length, ...(subject ? { subject } : {}) },
+        metadata: {
+          action,
+          total: rows.length,
+          ...(subject ? { subject } : {}),
+          ...(revert ? { revertsJobId: revert.revertsJobId, ...revert.metadata } : {}),
+        },
       });
     } catch (err) {
       await this.db.deleteFrom('bulk_jobs').where('id', '=', jobId).execute();
@@ -192,6 +389,17 @@ export class BulkJobService {
     }
     this.kick(jobId);
     return jobId;
+  }
+
+  /** The job, if it's in this directory, whoever's it is. */
+  async findInDirectory(id: string, directoryId: number): Promise<JobRecord | null> {
+    const job = await this.db
+      .selectFrom('bulk_jobs')
+      .selectAll()
+      .where('id', '=', id)
+      .where('provider_id', '=', directoryId)
+      .executeTakeFirst();
+    return job ?? null;
   }
 
   /** The job, if it's in this directory and the operator's own. */
@@ -231,17 +439,19 @@ export class BulkJobService {
   /** The audit log's view of these jobs, by id; a job whose record is gone is missing. */
   async summaries(
     jobIds: string[],
-  ): Promise<Map<string, Pick<AuditBulkSummary, 'status' | 'pauseReason' | 'counts'>>> {
-    const jobs =
-      jobIds.length === 0
-        ? []
-        : await this.db.selectFrom('bulk_jobs').selectAll().where('id', 'in', jobIds).execute();
-    return new Map(
-      (await this.describe(jobs)).map((j) => [
-        j.id,
-        { status: j.status, pauseReason: j.pauseReason, counts: j.counts },
-      ]),
-    );
+  ): Promise<
+    Map<
+      string,
+      Pick<AuditBulkSummary, 'status' | 'pauseReason' | 'counts' | 'revertible' | 'revertedBy'>
+    >
+  > {
+    if (jobIds.length === 0) return new Map();
+    const jobs = await this.db
+      .selectFrom('bulk_jobs')
+      .selectAll()
+      .where('id', 'in', jobIds)
+      .execute();
+    return new Map((await this.describe(jobs)).map((j) => [j.id, j]));
   }
 
   async rows(jobId: string, status?: BulkJobRowStatus): Promise<BulkJobRow[]> {
@@ -278,7 +488,21 @@ export class BulkJobService {
 
   /** Run a stopped job's failed and partial rows again. False when it's running or none failed. */
   async retry(job: JobRecord, actor: JobActor): Promise<boolean> {
-    const retried = await this.db.transaction().execute(async (trx) => {
+    const retried = await this.retryRows(job, actor).catch(revertRunning);
+    if (retried === 0) return false;
+    await this.record(actor, job, 'bulk.retry', { rows: retried });
+    this.kick(job.id);
+    return true;
+  }
+
+  private async retryRows(job: JobRecord, actor: JobActor): Promise<number> {
+    return this.db.transaction().execute(async (trx) => {
+      // As a revert locks it, so a retry and a revert can't both start.
+      const reverted = job.reverts_job_id ?? job.id;
+      await lockJob(trx, reverted);
+      if (await hasOpenRevert(trx, reverted, job.id)) {
+        throw new BulkJobRequestError('revert_running', REVERT_RUNNING);
+      }
       const queued = await trx
         .updateTable('bulk_jobs')
         .set({
@@ -309,10 +533,6 @@ export class BulkJobService {
         .executeTakeFirst();
       return Number(rows.numUpdatedRows);
     });
-    if (retried === 0) return false;
-    await this.record(actor, job, 'bulk.retry', { rows: retried });
-    this.kick(job.id);
-    return true;
   }
 
   /** Stop a job: rows not yet started are skipped; rows in flight finish. */
@@ -508,7 +728,7 @@ export class BulkJobService {
     writeCtx: WriteContext,
     pause: (reason: BulkJobPauseReason) => void,
   ): Promise<void> {
-    const handler = this.handlers[job.action];
+    const handler = this.runner(job);
     const audit = auditBase(actorOf(job), job.id);
     let outcome: BulkRowOutcome;
     try {
@@ -626,25 +846,60 @@ export class BulkJobService {
     });
   }
 
-  private async describe(jobs: JobRecord[]): Promise<BulkJob[]> {
-    const counts = await this.counts(jobs.map((j) => j.id));
-    return jobs.map((j) => ({
-      id: String(j.id),
-      action: j.action,
-      subject: j.subject_json,
-      status: j.status,
-      pauseReason: j.pause_reason,
-      actorDisplayName: j.actor_display_name,
-      createdAt: new Date(j.created_at).toISOString(),
-      finishedAt: j.finished_at ? new Date(j.finished_at).toISOString() : null,
-      counts: counts.get(String(j.id)) ?? emptyCounts(),
-    }));
+  private async describe(jobs: JobRecord[], db: Kysely<DB> = this.db): Promise<BulkJob[]> {
+    const ids = jobs.map((j) => String(j.id));
+    const [counts, open, reverts] = await Promise.all([
+      this.counts(ids, db),
+      withOpenReverts(db, ids),
+      ids.length === 0
+        ? []
+        : db
+            .selectFrom('bulk_jobs')
+            .select(['id', 'reverts_job_id', 'actor_display_name', 'created_at', 'status'])
+            .where('reverts_job_id', 'in', ids)
+            .orderBy('created_at', 'desc')
+            .orderBy('id', 'desc')
+            .execute(),
+    ]);
+    const latestRevert = new Map<string, (typeof reverts)[number]>();
+    for (const r of reverts) {
+      const of = String(r.reverts_job_id);
+      if (!latestRevert.has(of)) latestRevert.set(of, r);
+    }
+    return jobs.map((j) => {
+      const id = String(j.id);
+      const revert = latestRevert.get(id);
+      const job = {
+        id,
+        action: j.action,
+        revertsJobId: j.reverts_job_id === null ? null : String(j.reverts_job_id),
+        subject: j.subject_json,
+        status: j.status,
+        pauseReason: j.pause_reason,
+        actorDisplayName: j.actor_display_name,
+        createdAt: new Date(j.created_at).toISOString(),
+        finishedAt: j.finished_at ? new Date(j.finished_at).toISOString() : null,
+        counts: counts.get(id) ?? emptyCounts(),
+      };
+      return {
+        ...job,
+        revertible: revertRefusal(job, open.has(id)) === null,
+        revertedBy: revert
+          ? {
+              jobId: String(revert.id),
+              actorDisplayName: revert.actor_display_name,
+              createdAt: new Date(revert.created_at).toISOString(),
+              status: revert.status,
+            }
+          : null,
+      };
+    });
   }
 
-  private async counts(jobIds: string[]): Promise<Map<string, BulkJobCounts>> {
+  private async counts(jobIds: string[], db: Kysely<DB>): Promise<Map<string, BulkJobCounts>> {
     const out = new Map<string, BulkJobCounts>();
     if (jobIds.length === 0) return out;
-    const rows = await this.db
+    const rows = await db
       .selectFrom('bulk_job_rows')
       .select(['job_id', 'status', (eb) => eb.fn.countAll<string>().as('n')])
       .where('job_id', 'in', jobIds)

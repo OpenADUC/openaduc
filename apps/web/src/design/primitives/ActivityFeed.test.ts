@@ -82,6 +82,18 @@ describe('ActivityFeed', () => {
     ]);
   });
 
+  it('names the writes a revert makes', () => {
+    const page = feed([
+      anEvent({ id: '1', action: 'user.passwordMustChange.clear' }),
+      anEvent({ id: '2', action: 'user.passwordNeverExpires.set' }),
+    ]);
+
+    expect(page.findAll('.af-title').map((t) => t.text())).toEqual([
+      'No longer must change password',
+      'Password set never to expire',
+    ]);
+  });
+
   it('names the computer actions', () => {
     const page = feed(
       ['computer.disable', 'computer.enable', 'computer.account.reset'].map((action, i) =>

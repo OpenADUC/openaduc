@@ -5,7 +5,7 @@
 
 import type { ColumnType, Generated, JSONColumnType } from 'kysely';
 import type {
-  BulkJobAction,
+  BulkJobKind,
   BulkJobSubject,
   BulkJobPauseReason,
   BulkJobRowStatus,
@@ -211,11 +211,13 @@ export interface AuditEventsTable {
 export interface BulkJobsTable {
   id: Generated<string>;
   provider_id: number;
-  action: BulkJobAction;
+  action: BulkJobKind;
   status: BulkJobStatus;
   pause_reason: BulkJobPauseReason | null;
   run_token: string | null;
   subject_json: JSONColumnType<BulkJobSubject> | null;
+  /** The job this one reverts; see migrations/20261024000004_bulk_job_reverts.ts. */
+  reverts_job_id: ColumnType<string | null, string | null | undefined, never>;
   actor_user_id: string;
   actor_display_name: string | null;
   actor_username: string;

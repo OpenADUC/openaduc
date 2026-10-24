@@ -24,6 +24,16 @@ export type DirectoryObjectIdentifier =
   | { kind: 'samAccountName'; value: string }
   | { kind: 'userPrincipalName'; value: string };
 
+/** Any object, as found by its GUID or DN. */
+export interface DirectoryObjectRef {
+  objectGuid: string;
+  distinguishedName: string;
+  /** displayName, else name. */
+  name: string;
+  isOu: boolean;
+  isCriticalSystemObject: boolean;
+}
+
 export interface DirectoryUser {
   objectGuid: string;
   sid: string | null;
@@ -406,6 +416,8 @@ export interface DirectoryProvider {
   /** A PSO's lockout duration in ms (0 = until unlocked), or null if it can't be read. */
   getPsoLockoutDuration(psoDn: string): Promise<number | null>;
 
+  /** Any object in the directory by GUID or DN, read as the service account. */
+  findObject(identifier: DirectoryObjectIdentifier): Promise<DirectoryObjectRef | null>;
   getUser(identifier: DirectoryObjectIdentifier): Promise<DirectoryUser | null>;
   searchUsers(query: DirectoryUserSearchQuery): Promise<DirectoryUser[]>;
   getGroup(identifier: DirectoryObjectIdentifier): Promise<DirectoryGroup | null>;
@@ -456,9 +468,14 @@ export interface DirectoryProvider {
     ctx: WriteContext,
   ): Promise<MutationResult>;
   disableUser(userId: DirectoryObjectIdentifier, ctx: WriteContext): Promise<MutationResult>;
-  /** Make the user change their password at next sign-in: `pwdLastSet` 0. */
-  requirePasswordChange(
+  /**
+   * Make the user change their password at next sign-in (`pwdLastSet` 0),
+   * or stop asking them to (-1, which AD turns into now: the password's
+   * age restarts, as AD keeps no earlier value to go back to).
+   */
+  setPasswordMustChange(
     userId: DirectoryObjectIdentifier,
+    mustChange: boolean,
     ctx: WriteContext,
   ): Promise<MutationResult>;
   /** Set or clear "password never expires" (DONT_EXPIRE_PASSWORD in `userAccountControl`). */

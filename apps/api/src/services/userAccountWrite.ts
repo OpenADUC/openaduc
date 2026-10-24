@@ -62,7 +62,13 @@ export async function writeUserAccount(
   id: string,
   writeCtx: WriteContext,
   audit: Omit<AuditEventInput, 'action' | 'result' | 'providerId' | 'targetType'>,
-): Promise<{ user: DirectoryUser; result: WriteOpResult; unchanged: boolean } | null> {
+): Promise<{
+  user: DirectoryUser;
+  result: WriteOpResult;
+  unchanged: boolean;
+  /** The account as read back after the write, when one was made and the read worked. */
+  refreshed: DirectoryUser | null;
+} | null> {
   const before = await services.userLiveRefresh.refresh(provider, id);
   if (!before) return null;
   const snapshot = asAsked?.(before.user) ?? null;
@@ -81,7 +87,7 @@ export async function writeUserAccount(
       { ...base, metadata: { ...audit.metadata, ...metadata, unchanged: true } },
       async () => ({ ok: true, before: snapshot, after: snapshot }),
     );
-    return { user: before.user, result, unchanged: true };
+    return { user: before.user, result, unchanged: true, refreshed: null };
   }
   const result = await withAudit(
     services.audit,
@@ -97,8 +103,8 @@ export async function writeUserAccount(
       };
     },
   );
-  if (result.ok) await services.userLiveRefresh.refresh(provider, id);
-  return { user: before.user, result, unchanged: false };
+  const refreshed = result.ok ? await services.userLiveRefresh.refresh(provider, id) : null;
+  return { user: before.user, result, unchanged: false, refreshed: refreshed?.user ?? null };
 }
 
 export const DISABLE_USER = {
@@ -155,7 +161,20 @@ export const REQUIRE_PASSWORD_CHANGE = {
           passwordLastSetAt: user.passwordLastSetAt?.toISOString() ?? null,
         }
       : null,
-  write: (p, user, ctx) => p.requirePasswordChange(user, ctx),
+  write: (p, user, ctx) => p.setPasswordMustChange(user, true, ctx),
+} as const satisfies AccountWrite;
+
+/** Stop asking the user to change their password; AD restarts its age. */
+export const CLEAR_PASSWORD_MUST_CHANGE = {
+  action: 'user.passwordMustChange.clear',
+  asAsked: (user) =>
+    user.passwordMustChange
+      ? null
+      : {
+          passwordMustChange: false,
+          passwordLastSetAt: user.passwordLastSetAt?.toISOString() ?? null,
+        },
+  write: (p, user, ctx) => p.setPasswordMustChange(user, false, ctx),
 } as const satisfies AccountWrite;
 
 export const CLEAR_PASSWORD_NEVER_EXPIRES = {
@@ -169,4 +188,17 @@ export const CLEAR_PASSWORD_NEVER_EXPIRES = {
             Number(rawScalarValue(user.rawAttributes['userAccountControl'])) || null,
         },
   write: (p, user, ctx) => p.setPasswordNeverExpires(user, false, ctx),
+} as const satisfies AccountWrite;
+
+export const SET_PASSWORD_NEVER_EXPIRES = {
+  action: 'user.passwordNeverExpires.set',
+  asAsked: (user) =>
+    user.passwordNeverExpires
+      ? {
+          passwordNeverExpires: true,
+          userAccountControl:
+            Number(rawScalarValue(user.rawAttributes['userAccountControl'])) || null,
+        }
+      : null,
+  write: (p, user, ctx) => p.setPasswordNeverExpires(user, true, ctx),
 } as const satisfies AccountWrite;

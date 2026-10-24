@@ -383,6 +383,39 @@ export async function finishedJob(client: TestClient, id: string): Promise<BulkJ
   throw new Error(`bulk job ${id} didn’t finish`);
 }
 
+/**
+ * Start a bulk job the way the UI does: preview it at `preview`, then
+ * start it at `start` with the preview's token; wait for it to finish.
+ */
+export async function previewedJob(
+  client: TestClient,
+  preview: string,
+  start: string,
+  body: Record<string, unknown>,
+  previewBody: Record<string, unknown> = body,
+): Promise<BulkJob> {
+  const previewed = await client.post(preview, previewBody);
+  expectOk(previewed, `preview ${preview}`);
+  const { previewToken } = previewed.json<{ previewToken: string }>();
+  const started = await client.post(start, { ...body, previewToken });
+  expectOk(started, `start ${start}`);
+  return finishedJob(client, started.json<{ job: BulkJob }>().job.id);
+}
+
+/** Revert a job as previewed (with `body` added to the request), and wait for the revert. */
+export async function revertJob(
+  client: TestClient,
+  jobId: string,
+  body: Record<string, unknown> = {},
+): Promise<BulkJob> {
+  const preview = await client.get(`/api/bulk-jobs/${jobId}/revert/preview`);
+  expectOk(preview, 'revert preview');
+  const { previewToken } = preview.json<{ previewToken: string }>();
+  const res = await client.post(`/api/bulk-jobs/${jobId}/revert`, { previewToken, ...body });
+  expectOk(res, 'revert');
+  return finishedJob(client, res.json<{ job: BulkJob }>().job.id);
+}
+
 export function expectOk(res: LightMyRequestResponse, what: string): void {
   if (res.statusCode >= 300) {
     throw new Error(`${what} failed: HTTP ${res.statusCode} ${res.body}`);

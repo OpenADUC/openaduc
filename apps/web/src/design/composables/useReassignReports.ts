@@ -9,9 +9,11 @@
 import { computed, ref, watch } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
 import type { UserDetail, UserSummary } from '@openaduc/shared';
+import { bulkJobTitle } from '../lib/bulkJob.js';
 import { dnName } from '../lib/dn.js';
 import { useAttributeEditPreview } from './useAttributeEditPreview.js';
 import { useBulkActions } from './useBulkActions.js';
+import { useBulkJobRevert } from './useBulkJobRevert.js';
 import { useUserPick } from './useUserPick.js';
 
 export interface ListedReport {
@@ -62,6 +64,10 @@ export function useReassignReports(options: {
     selectedIds: selected,
     toast: options.toast,
     reload: options.reload,
+  });
+  const jobRevert = useBulkJobRevert({
+    bulk,
+    started: (job) => rememberJob(options.managerId(), job.id),
   });
   const visible = ref(false);
   const {
@@ -156,6 +162,17 @@ export function useReassignReports(options: {
     bulk.startAttributeEdit(edit, (job) => rememberJob(managerId, job.id));
   }
 
+  /** Revert the job shown, once it has stopped. */
+  function revertJob(): void {
+    const job = bulk.job.value;
+    if (!job) return;
+    void jobRevert.open({
+      jobId: job.id,
+      title: bulkJobTitle(job, job.counts.total, job.actorDisplayName),
+      action: job.action,
+    });
+  }
+
   // Another user's page reuses this one: leave the last manager's job to
   // the list, and show this manager's, if they have one.
   watch(
@@ -201,6 +218,8 @@ export function useReassignReports(options: {
     retryFailed: bulk.retryFailed,
     stopJob: bulk.stopJob,
     dismissJob: bulk.dismissJob,
+    jobRevert,
+    revertJob,
     open,
     close,
     review,
