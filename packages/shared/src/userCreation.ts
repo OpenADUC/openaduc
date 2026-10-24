@@ -6,7 +6,13 @@
 import type { NamingDeviation, NamingSuggestion } from './naming.js';
 import { normalizePhone, type NormalizedPhone } from './phone.js';
 import { checkPassword, type PasswordCheck, type PasswordPolicy } from './password.js';
-import type { PasswordMode, UserCreateRequest } from './schemas/userCreate.js';
+import {
+  PHONE_FIELDS,
+  type PasswordMode,
+  type PhoneField,
+  type UserCreatePassword,
+  type UserCreateRequest,
+} from './schemas/userCreate.js';
 
 /** What the operator enters. The account's names come from the naming check. */
 export interface NewUserForm {
@@ -71,6 +77,8 @@ export interface NewUserPlan {
   mustChangeNote: string | null;
   /** The policy checks of the password; empty in random mode. */
   passwordChecks: PasswordCheck[];
+  /** The password part of the request, once the password is ready. */
+  password: UserCreatePassword | null;
 }
 
 export const RANDOM_MODE_MUST_CHANGE_NOTE =
@@ -108,14 +116,10 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
     });
   }
 
-  const mobile = normalizePhone(form.mobile, { kind: 'mobile', defaultCountry: ctx.phoneCountry });
-  const telephoneNumber = normalizePhone(form.telephoneNumber, {
-    kind: 'telephone',
-    defaultCountry: ctx.phoneCountry,
-  });
-  if (mobile.warning) warnings.push({ field: 'mobile', message: mobile.warning });
-  if (telephoneNumber.warning) {
-    warnings.push({ field: 'telephoneNumber', message: telephoneNumber.warning });
+  const phones = readPhones(form, ctx.phoneCountry);
+  for (const field of PHONE_FIELDS) {
+    const warning = phones[field].warning;
+    if (warning) warnings.push({ field, message: warning });
   }
 
   const random = form.passwordMode === 'random';
@@ -126,13 +130,13 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
         displayName: s?.displayName ?? null,
       });
   const mustChange = !random && form.mustChange;
+  const password: UserCreatePassword | null = random
+    ? { mode: 'random' }
+    : passwordChecks.every((c) => c.met)
+      ? { mode: form.passwordMode as 'generate' | 'set', password: form.password, mustChange }
+      : null;
 
-  const incomplete =
-    !form.ouDn ||
-    !form.first.trim() ||
-    !form.last.trim() ||
-    !s ||
-    (!random && !passwordChecks.every((c) => c.met));
+  const incomplete = !form.ouDn || !form.first.trim() || !form.last.trim() || !s || !password;
 
   const request: UserCreateRequest | null =
     incomplete || blockers.length > 0 || unapproved.length > 0
@@ -147,15 +151,11 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
           userPrincipalName: s!.upn,
           mailFromUpn: form.mailFromUpn,
           personalEmail: personalEmail || null,
-          mobile: mobile.value || null,
-          telephoneNumber: telephoneNumber.value || null,
-          password: random
-            ? { mode: 'random' }
-            : {
-                mode: form.passwordMode as 'generate' | 'set',
-                password: form.password,
-                mustChange,
-              },
+          mobile: phones.mobile.value || null,
+          telephoneNumber: phones.telephoneNumber.value || null,
+          // The operator was shown why these can't be read, and went ahead.
+          keepPhonesAsTyped: PHONE_FIELDS.filter((f) => !phones[f].readable),
+          password: password!,
           enabled: form.enabled,
         };
 
@@ -165,12 +165,48 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
     blockers,
     warnings,
     unapproved,
-    mobile,
-    telephoneNumber,
+    mobile: phones.mobile,
+    telephoneNumber: phones.telephoneNumber,
     mustChange,
     mustChangeNote: random ? RANDOM_MODE_MUST_CHANGE_NOTE : null,
     passwordChecks,
+    password,
   };
+}
+
+function readPhones(
+  phones: Partial<Record<PhoneField, string | null>>,
+  country: string | null,
+): Record<PhoneField, NormalizedPhone> {
+  const read = (field: PhoneField) =>
+    normalizePhone(phones[field] ?? '', {
+      kind: field === 'mobile' ? 'mobile' : 'telephone',
+      defaultCountry: country,
+    });
+  return { mobile: read('mobile'), telephoneNumber: read('telephoneNumber') };
+}
+
+/**
+ * The phone numbers a create writes: each in Entra's form, or as typed
+ * when it can't be read and `keepAsTyped` names it; otherwise it's a
+ * problem. The server applies this to every create, whoever sends it.
+ */
+export function phonesToWrite(
+  phones: Partial<Record<PhoneField, string | null>>,
+  keepAsTyped: readonly PhoneField[],
+  country: string | null,
+): { values: Record<PhoneField, string | null>; problems: NewUserIssue[] } {
+  const read = readPhones(phones, country);
+  const problems: NewUserIssue[] = [];
+  const values = { mobile: null, telephoneNumber: null } as Record<PhoneField, string | null>;
+  for (const field of PHONE_FIELDS) {
+    const { value, warning, readable } = read[field];
+    if (!readable && !keepAsTyped.includes(field)) {
+      problems.push({ field, message: warning ?? `“${value}” isn’t a phone number.` });
+    }
+    values[field] = value || null;
+  }
+  return { values, problems };
 }
 
 /** The form field a deviation is about. */

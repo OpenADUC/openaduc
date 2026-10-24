@@ -524,7 +524,8 @@ function truncation(
   ];
 }
 
-const NOTHING_TAKEN: TakenNames = {
+/** No names held: the pattern and the typed names' own rules, without a directory. */
+export const NOTHING_TAKEN: TakenNames = {
   samAccountNames: [],
   userPrincipalNames: [],
   mailAddresses: [],

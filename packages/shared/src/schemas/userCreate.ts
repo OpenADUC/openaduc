@@ -52,6 +52,21 @@ export interface NewUserSettingsResponse {
 export const USER_CREATE_STEPS = ['create', 'password', 'enable'] as const;
 export type UserCreateStep = (typeof USER_CREATE_STEPS)[number];
 
+/** The steps a create runs: every one, less enabling when the account stays disabled. */
+export function plannedSteps(enabled: boolean): UserCreateStep[] {
+  return USER_CREATE_STEPS.filter((s) => s !== 'enable' || enabled);
+}
+
+export function remainingSteps(
+  planned: readonly UserCreateStep[],
+  completed: readonly UserCreateStep[],
+): UserCreateStep[] {
+  return planned.filter((s) => !completed.includes(s));
+}
+
+export const PHONE_FIELDS = ['mobile', 'telephoneNumber'] as const;
+export type PhoneField = (typeof PHONE_FIELDS)[number];
+
 const text = (max: number) =>
   z
     .string()
@@ -99,6 +114,11 @@ export const userCreateRequestSchema = z
     personalEmail: z.string().trim().email().max(256).nullable().optional(),
     mobile: optionalText(64),
     telephoneNumber: optionalText(64),
+    /**
+     * Phone numbers to write as typed though they can't be read as one;
+     * any other is written in Entra's form, or refused if unreadable.
+     */
+    keepPhonesAsTyped: z.array(z.enum(PHONE_FIELDS)).max(PHONE_FIELDS.length).optional(),
     password: userCreatePasswordSchema,
     enabled: z.boolean(),
   })
