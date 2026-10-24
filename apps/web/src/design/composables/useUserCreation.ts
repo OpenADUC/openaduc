@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // The create-user form behind New user, opened from the user list or from
-// an OU, and the start of copying a user and of an import.
+// an OU, and behind Copy on a user's page; an import will start from it too.
 //
 // The account's names come from the naming check, run as the operator
 // types: the pattern's suggestion, unique against the directory, or the
@@ -15,6 +15,7 @@ import {
   DEFAULT_NEW_USER_SETTINGS,
   NOTHING_TAKEN,
   approvalKey,
+  copyToForm,
   generatePassword,
   needsApproval,
   planNewUser,
@@ -27,6 +28,7 @@ import {
   type NewUserForm,
   type NewUserSettings,
   type PasswordMode,
+  type UserCopySource,
   type UserCreateResponse,
   type UserCreateStep,
 } from '@openaduc/shared';
@@ -59,6 +61,9 @@ function blankForm(): NewUserForm {
     password: '',
     mustChange: true,
     enabled: true,
+    organisation: {},
+    groups: [],
+    copiedFrom: null,
   };
 }
 
@@ -87,13 +92,19 @@ export function useUserCreation(options: {
   const error = ref<string | null>(null);
   /** A create that made the account but didn't finish it. */
   const unfinished = ref<UserCreateResponse | null>(null);
+  /** The user being copied, when this is a copy. */
+  const copySource = ref<UserCopySource | null>(null);
 
   /**
    * Start a new form: `initial` prefills it (the OU started from, or what
    * a copy carries over); the directory's defaults fill the rest.
    */
-  async function start(initial: Partial<NewUserForm> = {}): Promise<void> {
+  async function start(
+    initial: Partial<NewUserForm> = {},
+    from: UserCopySource | null = null,
+  ): Promise<void> {
     Object.assign(form, blankForm(), initial);
+    copySource.value = from;
     Object.assign(typed, {
       samAccountName: null,
       upnLocal: null,
@@ -131,6 +142,19 @@ export function useUserCreation(options: {
     } finally {
       loading.value = false;
     }
+  }
+
+  /** Start a copy of a user: its OU, organisation and groups, the rest blank. */
+  async function startCopy(sourceId: string): Promise<void> {
+    let source: UserCopySource;
+    try {
+      source = await api.users.copySource(sourceId);
+    } catch (err) {
+      await start();
+      loadError.value = errorMessage(err, 'Couldn’t load the user to copy');
+      return;
+    }
+    await start(copyToForm(source), source);
   }
 
   // ---- Names ---------------------------------------------------------------
@@ -266,6 +290,19 @@ export function useUserCreation(options: {
   // ---- Plan ----------------------------------------------------------------
 
   const canAddGroups = computed(() => auth.hasCapability('write:group.membership'));
+
+  /** The source's groups, each ticked while the copy is to be added to it. */
+  const groupChoices = computed(() =>
+    (copySource.value?.groups ?? []).map((g) => ({
+      ...g,
+      ticked: !!form.groups?.includes(g.id),
+    })),
+  );
+
+  function setGroup(id: string, ticked: boolean): void {
+    const rest = (form.groups ?? []).filter((g) => g !== id);
+    form.groups = ticked ? [...rest, id] : rest;
+  }
 
   const plan = computed(() =>
     planNewUser(form, {
@@ -406,6 +443,8 @@ export function useUserCreation(options: {
   return {
     form,
     start,
+    startCopy,
+    copySource,
     loading,
     loadError,
     naming,
@@ -425,6 +464,9 @@ export function useUserCreation(options: {
     approve,
     isApproved,
     plan,
+    canAddGroups,
+    groupChoices,
+    setGroup,
     tidyPhones,
     setPasswordMode,
     generate,
