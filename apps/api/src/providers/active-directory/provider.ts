@@ -38,6 +38,7 @@ import type {
   DirectoryObjectIdentifier,
   DirectoryObjectRef,
   DirectoryOu,
+  DirectoryPerson,
   DirectoryProvider,
   DirectoryGroupSearchQuery,
   DirectoryUser,
@@ -47,6 +48,7 @@ import type {
   NameHolders,
   NewObjectNames,
   OuAttributePatch,
+  PeopleLookups,
   RecycleBinStatus,
   ResetPasswordInput,
   RestoreResult,
@@ -1521,20 +1523,75 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
-  /** Everything matching any of `clauses`, in bounded filters so 500 names don't make one huge one. */
+  async findPeople(lookups: PeopleLookups): Promise<DirectoryPerson[]> {
+    return this.withServiceBind(async (client) => {
+      const clauses = [
+        ...lookups.employeeIds.map((v) => `(employeeID=${escapeLdapFilter(v)})`),
+        ...lookups.identifiers.map((v) => {
+          const e = escapeLdapFilter(v);
+          return `(mail=${e})(proxyAddresses=smtp:${e})(userPrincipalName=${e})(sAMAccountName=${e})`;
+        }),
+      ];
+      const entries = await this.searchAny(
+        client,
+        await this.domainRoot(client),
+        'sub',
+        clauses,
+        [
+          'objectGUID',
+          'distinguishedName',
+          'sAMAccountName',
+          'userPrincipalName',
+          'displayName',
+          'employeeID',
+          'mail',
+          'proxyAddresses',
+        ],
+        USER_FILTER_BASE,
+      );
+      const people = new Map<string, DirectoryPerson>();
+      for (const entry of entries) {
+        const ref = normalizeObjectRef(entry);
+        if (!ref) continue;
+        people.set(ref.objectGuid, {
+          objectGuid: ref.objectGuid,
+          distinguishedName: ref.distinguishedName,
+          samAccountName: asString(entry.sAMAccountName) ?? null,
+          userPrincipalName: asString(entry.userPrincipalName) ?? null,
+          displayName: asString(entry.displayName) ?? null,
+          employeeId: asString(entry.employeeID) ?? null,
+          addresses: [
+            ...asStringArray(entry.mail),
+            ...asStringArray(entry.proxyAddresses)
+              .filter((a) => /^smtp:/i.test(a))
+              .map((a) => a.slice(5)),
+          ],
+        });
+      }
+      return [...people.values()];
+    });
+  }
+
+  /**
+   * Everything matching any of `clauses` (and `within`, when given), in
+   * bounded filters so 500 names don't make one huge one.
+   */
   private async searchAny(
     client: Client,
     base: string,
     scope: 'one' | 'sub',
     clauses: string[],
     attributes: string[],
+    within?: string,
   ): Promise<Entry[]> {
     const entries: Entry[] = [];
     for (let i = 0; i < clauses.length; i += 50) {
+      const any = `(|${clauses.slice(i, i + 50).join('')})`;
       const { searchEntries } = await client.search(base, {
         scope,
-        filter: `(|${clauses.slice(i, i + 50).join('')})`,
+        filter: within ? `(&${within}${any})` : any,
         attributes,
+        explicitBufferAttributes: BINARY_ATTRS,
         paged: { pageSize: 500 },
       });
       entries.push(...searchEntries);

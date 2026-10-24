@@ -21,6 +21,7 @@ const READ_ONLY_POSTS = new Set([
   'POST /api/users/bulk-groups/preview',
   'POST /api/users/bulk-update/preview',
   'POST /api/users/bulk-account/preview',
+  'POST /api/users/import/lookup',
   'POST /api/directories/:id/naming/check',
 ]);
 

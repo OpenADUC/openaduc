@@ -10,6 +10,7 @@ import type {
   BulkJobPauseReason,
   BulkJobRowStatus,
   BulkJobStatus,
+  ImportField,
 } from '@openaduc/shared';
 
 // Common alias for `timestamp(useTz: true)`. Read as Date, write as ISO string or Date.
@@ -437,6 +438,18 @@ export interface EntraSignInEventsTable {
   detail_json: JSONColumnType<Record<string, unknown>>;
 }
 
+export interface ImportPlacementRulesTable {
+  id: Generated<string>;
+  provider_id: number;
+  grouping_column: ImportField;
+  value_key: string;
+  value: string;
+  ou_dn: string;
+  group_ids: JSONColumnType<string[]>;
+  updated_by: string | null;
+  updated_at: TimestampDefault;
+}
+
 export interface DB {
   directory_providers: DirectoryProvidersTable;
   directory_entra_integrations: DirectoryEntraIntegrationsTable;
@@ -454,6 +467,7 @@ export interface DB {
   audit_events: AuditEventsTable;
   bulk_jobs: BulkJobsTable;
   bulk_job_rows: BulkJobRowsTable;
+  import_placement_rules: ImportPlacementRulesTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;
   app_settings: AppSettingsTable;
