@@ -94,4 +94,10 @@ function undo(): void {
   margin-top: 6px;
   margin-left: -8px;
 }
+
+@media (max-width: 767.98px) {
+  .toast-undo {
+    min-height: var(--tap-target);
+  }
+}
 </style>

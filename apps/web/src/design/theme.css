@@ -1056,6 +1056,52 @@
   backdrop-filter: blur(3px);
 }
 
+/* A dialog with .ds-sheet becomes a sheet along the bottom edge at phone
+   width: full width, its buttons in thumb reach, above the on-screen
+   keyboard (useVisualViewport), and never taller than what's left of the
+   screen, its content scrolling instead. */
+@media (max-width: 767.98px) {
+  .p-dialog-mask:has(> .ds-sheet) {
+    align-items: flex-end !important;
+    padding-bottom: var(--keyboard-inset, 0px);
+  }
+
+  .p-dialog.ds-sheet {
+    width: 100% !important;
+    max-height: calc(100dvh - var(--visual-viewport-top, 0px) - var(--keyboard-inset, 0px) - 16px);
+    margin: 0 !important;
+    border-bottom: 0 !important;
+    border-radius: 14px 14px 0 0 !important;
+  }
+
+  .p-dialog.ds-sheet .p-dialog-content {
+    overscroll-behavior: contain;
+  }
+
+  .p-dialog.ds-sheet .p-dialog-close-button {
+    width: var(--tap-target);
+    height: var(--tap-target);
+  }
+
+  .p-dialog.ds-sheet .p-dialog-footer > .p-button {
+    flex: 1 1 0;
+    min-height: 48px;
+  }
+
+  .p-dialog.ds-sheet .p-inputtext {
+    min-height: var(--tap-target);
+  }
+}
+
+/* Safari zooms the page into any field set smaller than 16px. */
+@media (max-width: 767.98px) {
+  input:not([type='checkbox'], [type='radio']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
 /* PrimeVue Toast / Message */
 .p-message {
   background: var(--surface-2) !important;
@@ -1091,6 +1137,25 @@
   background: var(--bg-1) !important;
   border: 1px solid var(--border-strong) !important;
   color: var(--text) !important;
+}
+
+/* On a phone, toasts span the screen along the bottom, where a thumb
+   reaches Undo, clear of the on-screen keyboard and of an object page's
+   bar of primary actions (ObjectPageLayout). */
+@media (max-width: 767.98px) {
+  .p-toast {
+    top: auto !important;
+    right: 12px !important;
+    bottom: calc(12px + var(--keyboard-inset, 0px) + var(--primary-bar-height, 0px)) !important;
+    left: 12px !important;
+    width: auto !important;
+    transform: none !important;
+  }
+
+  .p-toast .p-toast-close-button {
+    width: var(--tap-target);
+    height: var(--tap-target);
+  }
 }
 
 /* PrimeVue Card (used for the bare login/setup layouts) */

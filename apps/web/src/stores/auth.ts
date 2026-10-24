@@ -116,31 +116,25 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  /**
-   * Open the StepUpDialog. Called from:
-   *   - `requireStepUp`, for a write while not elevated.
-   *   - The API client when a response says the cached step-up password
-   *     is missing/rejected (`reason` populated). In that case we also
-   *     clear the local `actor.elevated` flag so the UI stops showing
-   *     writes as unlocked.
-   */
+  /** Open the StepUpDialog, saying why when the operator couldn't know. */
   function requestStepUp(reason: string | null = null): void {
-    if (reason && actor.value?.elevated.active) {
-      actor.value = {
-        ...actor.value,
-        elevated: NOT_ELEVATED,
-      };
-    }
     stepUpReason.value = reason;
     stepUpRequested.value = true;
   }
 
-  // Wire the API client's auto-trigger. Calling this here (at store
-  // setup) means the very first `useAuthStore()` registration takes
-  // effect; subsequent calls overwrite with the same handler, which is
-  // a harmless no-op.
-  setStepUpRequiredHandler((message) => {
-    requestStepUp(message);
+  // The server refused a write for want of step-up. Writes that looked
+  // unlocked stop looking it, and the prompt says why it's back.
+  // Registered at store setup; a later store registers the same handler.
+  setStepUpRequiredHandler((refusal) => {
+    const looked = actor.value?.elevated.active ?? false;
+    if (actor.value && looked) actor.value = { ...actor.value, elevated: NOT_ELEVATED };
+    if (refusal === 'password_rejected') {
+      requestStepUp('The directory no longer accepts the password you unlocked writes with.');
+    } else {
+      requestStepUp(
+        looked ? 'Writes were locked again — confirm your password to continue.' : null,
+      );
+    }
   });
 
   // Every request while elevated moves the idle end; responses carry it.

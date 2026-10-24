@@ -9,6 +9,7 @@ import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ObjectAction, ObjectPageSkeleton, ObjectPageTab } from './objectPage.js';
 import type { ActionFailure } from '../../design/lib/actionFailure.js';
+import { atPhoneWidth } from '../../test/viewport.js';
 
 vi.mock('../../api/index.js', () => ({ api: {} }));
 
@@ -29,6 +30,7 @@ const onRefresh = vi.fn();
 let tabs: ObjectPageTab<TabId>[] = [];
 let actions: ObjectAction[] = [];
 let freshness: { cachedAt: string | null; liveRefreshedAt?: string | null } = { cachedAt: null };
+let withPrimary = false;
 
 // A group page reduced to the layout: each tab's body names the tab.
 const GroupPage = defineComponent({
@@ -57,6 +59,10 @@ const GroupPage = defineComponent({
               h('p', `showing ${tab}`),
               h('button', { class: 'see-members', onClick: () => select('members') }, 'See all'),
             ]),
+          ...(withPrimary && {
+            primary: ({ compact }: { compact: boolean }) =>
+              h('button', { class: 'fix' }, compact ? 'Fix (compact)' : 'Fix'),
+          }),
         },
       );
   },
@@ -71,8 +77,10 @@ async function open(
     freshness?: typeof freshness;
     loading?: boolean;
     skeleton?: ObjectPageSkeleton;
+    primary?: boolean;
   } = {},
 ) {
+  withPrimary = opts.primary ?? false;
   tabs = opts.tabs ?? [
     { id: 'overview', label: 'Overview', icon: 'pi-th-large', visible: true },
     { id: 'members', label: 'Members', icon: 'pi-users', count: 3, visible: true },
@@ -187,6 +195,23 @@ describe('the actions menu', () => {
   it('has no Actions button when nothing is on offer', async () => {
     const { page } = await open('/groups/g1', { capabilities: [], actions: [remove, rename] });
     expect(actionsButton(page)).toBeUndefined();
+  });
+
+  // The tabs scroll on a phone; Actions stays at the end of the bar, in reach.
+  it('is an icon beside the tabs at phone width, outside their scroll', async () => {
+    atPhoneWidth();
+    const { page } = await open('/groups/g1', {
+      capabilities: ['write:group.membership'],
+      actions: [remove],
+    });
+    const button = page.get('.object-tabs-actions button');
+    expect(button.attributes('aria-label')).toBe('Actions');
+    expect(button.text()).toBe('');
+    expect(page.find('[role="tablist"] .object-tabs-actions').exists()).toBe(false);
+
+    await button.trigger('click');
+    await flushPromises();
+    expect(page.findAll('[role="menuitem"]').map((i) => i.text())).toEqual(['Remove…']);
   });
 
   it('runs the chosen action', async () => {
@@ -318,6 +343,27 @@ describe('object page shortcuts', () => {
       'Disable account',
       'the group is still loading',
     ]);
+  });
+});
+
+describe('the primary actions', () => {
+  it('sit beside the identity', async () => {
+    const { page } = await open('/groups/g1', { primary: true });
+    expect(page.get('.detail-hero .fix').text()).toBe('Fix');
+    expect(page.find('.detail-primary-bar').exists()).toBe(false);
+  });
+
+  it('sit in a bar along the bottom at phone width, in thumb reach', async () => {
+    atPhoneWidth();
+    const { page } = await open('/groups/g1', { primary: true });
+    expect(page.find('.detail-hero .fix').exists()).toBe(false);
+    expect(page.get('.detail-primary-bar .fix').text()).toBe('Fix');
+  });
+
+  it('leave no bar when there are none', async () => {
+    atPhoneWidth();
+    const { page } = await open('/groups/g1');
+    expect(page.find('.detail-primary-bar').exists()).toBe(false);
   });
 });
 

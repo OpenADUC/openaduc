@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserDetail } from '@openaduc/shared';
 import { aUserDetail } from '../../test/userDetail.js';
 import { ApiError } from '../../api/client.js';
+import { atPhoneWidth } from '../../test/viewport.js';
 
 const salesUsers = async () => ({
   rows: [
@@ -438,6 +439,21 @@ describe('quick search actions', () => {
     await press(search, 'Tab');
     expect(actionsOn(search, 'Jim Doe')).toEqual(['Enable account', 'Reset password…']);
     await press(search, 'Enter');
+    expect(api.users.enable).toHaveBeenCalledExactlyOnceWith('u3');
+  });
+
+  // Nothing hovers on a phone, and tapping a row opens the user's page.
+  it('offers every user its actions at phone width', async () => {
+    atPhoneWidth();
+    const { search } = await searchFor('doe', OPERATOR);
+
+    expect(actionsOn(search, 'John Doe')).toEqual(['Reset password…', 'Disable account']);
+    expect(actionsOn(search, 'Jim Doe')).toEqual(['Enable account', 'Reset password…']);
+    await rowOf(search, 'Jim Doe')
+      .findAll('.gs-action')
+      .find((a) => a.text() === 'Enable account')!
+      .trigger('click');
+    await flushPromises();
     expect(api.users.enable).toHaveBeenCalledExactlyOnceWith('u3');
   });
 
