@@ -9,7 +9,7 @@ import { useToast } from 'primevue/usetoast';
 import Avatar from '../../design/primitives/Avatar.vue';
 import Card from '../../design/primitives/Card.vue';
 import InlineFailure from '../../design/feedback/InlineFailure.vue';
-import { fmtRelative } from '../../design/lib/format.js';
+import { capitalize, fmtRelative } from '../../design/lib/format.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useResponsive } from '../../design/composables/useResponsive.js';
 import { useShortcuts, type Shortcut } from '../../design/composables/useShortcuts.js';
@@ -89,7 +89,7 @@ const { setNav: setTabsNav, compact: tabsCompact } = useCompactTabs();
 // bottom, where a thumb reaches them.
 const { isMobile } = useResponsive();
 
-const kindLabel = computed(() => props.kind[0]!.toUpperCase() + props.kind.slice(1));
+const kindLabel = computed(() => capitalize(props.kind));
 
 // ---- Header ---------------------------------------------------------------
 

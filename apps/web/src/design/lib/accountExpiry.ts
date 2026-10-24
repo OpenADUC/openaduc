@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // An account expiry as the operator thinks of it: the last day it works.
-import { fmtAbsolute } from './format.js';
+import { capitalize, fmtAbsolute } from './format.js';
 
 /**
  * The expiry that lets the account work through `day` (a local calendar
@@ -31,5 +31,5 @@ export function expiryMoment(expiresAt: string): string {
 /** "expires at …" or "never expires"; `capital` starts it with a capital. */
 export function expiryText(expiresAt: string | null, capital = false): string {
   const text = expiresAt ? `expires at ${expiryMoment(expiresAt)}` : 'never expires';
-  return capital ? text[0]!.toUpperCase() + text.slice(1) : text;
+  return capital ? capitalize(text) : text;
 }
