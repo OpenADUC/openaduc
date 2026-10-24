@@ -55,6 +55,35 @@ export class GraphPermissionError extends Error {
   }
 }
 
+/** Graph kept refusing for being busy past what OpenADUC will wait. */
+export class GraphThrottledError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly statusCode: number,
+    /** How long Graph last asked to wait. */
+    public readonly retryAfterSeconds: number,
+  ) {
+    super(`Graph ${statusCode} on ${path}: throttled, retry after ${retryAfterSeconds}s`);
+    this.name = 'GraphThrottledError';
+  }
+}
+
+// Throttling: a few retries, waiting as long as Graph's Retry-After says,
+// within a total a page request can bear. A sync task that gives up runs
+// again at its next slot.
+const THROTTLE_RETRIES = 3;
+const THROTTLE_MAX_WAIT_MS = 10_000;
+const THROTTLE_BACKOFF_MS = 1_000;
+
+/** Retry-After as delta-seconds or an HTTP date, in milliseconds. */
+function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now());
+}
+
 export class GraphClient {
   private cachedToken: { value: string; expiresAt: number } | null = null;
   /**
@@ -63,10 +92,18 @@ export class GraphClient {
    */
   private inflightTokenFetch: Promise<string> | null = null;
 
+  private readonly throttle: { maxWaitMs: number; sleep: (ms: number) => Promise<unknown> };
+
   constructor(
     private readonly creds: EntraIntegrationCreds,
     private readonly log: FastifyBaseLogger,
-  ) {}
+    throttle: { maxWaitMs?: number; sleep?: (ms: number) => Promise<unknown> } = {},
+  ) {
+    this.throttle = {
+      maxWaitMs: throttle.maxWaitMs ?? THROTTLE_MAX_WAIT_MS,
+      sleep: throttle.sleep ?? ((ms) => delay(ms)),
+    };
+  }
 
   // ---- Public surface --------------------------------------------------
 
@@ -166,36 +203,42 @@ export class GraphClient {
     path: string,
     init: { method: string; headers?: Record<string, string>; body?: string | URLSearchParams },
   ): Promise<Response> {
-    const token = await this.getToken();
     const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
-    const res = await fetch(url, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-        ...(init.headers ?? {}),
-      },
-      ...(init.body !== undefined ? { body: init.body } : {}),
-    });
-
-    // One automatic retry on 401 — covers the rare race where the cached
-    // token expired between our check and Graph's eval. After that,
-    // surface as a permission error.
-    if (res.status === 401 && this.cachedToken) {
-      this.cachedToken = null;
-      const fresh = await this.getToken();
-      return await fetch(url, {
+    const send = async () =>
+      await fetch(url, {
         method: init.method,
         headers: {
-          Authorization: `Bearer ${fresh}`,
+          Authorization: `Bearer ${await this.getToken()}`,
           Accept: 'application/json',
           ...(init.headers ?? {}),
         },
         ...(init.body !== undefined ? { body: init.body } : {}),
       });
-    }
 
-    return res;
+    let waited = 0;
+    for (let attempt = 0; ; attempt++) {
+      let res = await send();
+      // One automatic retry on 401 — covers the rare race where the cached
+      // token expired between our check and Graph's eval. After that,
+      // surface as a permission error.
+      if (res.status === 401 && this.cachedToken) {
+        this.cachedToken = null;
+        res = await send();
+      }
+      // Throttled (429), or busy (503, retried only for a read, which a
+      // retry can't do twice). Graph says how long to wait; a wait past
+      // what's left of the budget fails now rather than holding a request.
+      const busy = res.status === 429 || (res.status === 503 && init.method === 'GET');
+      if (!busy) return res;
+      const wait =
+        retryAfterMs(res.headers.get('retry-after')) ?? THROTTLE_BACKOFF_MS * 2 ** attempt;
+      if (attempt >= THROTTLE_RETRIES || waited + wait > this.throttle.maxWaitMs) {
+        throw new GraphThrottledError(path, res.status, Math.ceil(wait / 1000));
+      }
+      this.log.warn({ path, status: res.status, waitMs: wait }, 'graph throttled; retrying');
+      await this.throttle.sleep(wait);
+      waited += wait;
+    }
   }
 
   private async getToken(): Promise<string> {
