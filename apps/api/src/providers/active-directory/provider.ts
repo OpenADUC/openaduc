@@ -4,6 +4,7 @@ import {
   type NamingLookups,
   type OuName,
   type TakenNames,
+  type UserCreateStep,
   escapeRdnValueRfc,
   isDnWithin,
 } from '@openaduc/shared';
@@ -51,6 +52,9 @@ import type {
   RestoreUserInput,
   SyncInput,
   UserAttributePatch,
+  UserCreateFinish,
+  UserCreateInput,
+  UserCreateResult,
   UserRenameInput,
   WriteContext,
 } from '../types.js';
@@ -1600,6 +1604,164 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
+  async createUser(
+    input: UserCreateInput,
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult> {
+    const result = await this.asOperator(ctx, async (client): Promise<UserCreateResult> => {
+      try {
+        const clash = await this.findNameClash(
+          client,
+          {
+            samAccountName: input.samAccountName,
+            userPrincipalName: input.userPrincipalName,
+            email: input.mail,
+            cn: input.cn,
+          },
+          parentDn(input.dn),
+        );
+        if (clash) return { ok: false, reason: 'conflict', errorMessage: clash, completed: [] };
+
+        const attrs: Record<string, string | string[]> = {
+          objectClass: ['top', 'person', 'organizationalPerson', 'user'],
+          cn: input.cn,
+          sAMAccountName: input.samAccountName,
+          userPrincipalName: input.userPrincipalName,
+          givenName: input.givenName,
+          sn: input.surname,
+          displayName: input.displayName,
+          // Disabled until it has a password: AD refuses an enabled account
+          // without one that meets the policy.
+          userAccountControl: String(UAC.NORMAL_ACCOUNT | UAC.ACCOUNTDISABLE),
+        };
+        if (input.mail) attrs.mail = input.mail;
+        if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
+        if (input.mobile) attrs.mobile = input.mobile;
+        if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
+        await client.add(input.dn, attrs);
+      } catch (err) {
+        return { ...classifyWriteError(err), completed: [] };
+      }
+      try {
+        const steps: UserCreateStep[] = finish.enable ? ['password', 'enable'] : ['password'];
+        return await this.runCreateSteps(client, input.dn, ['create'], steps, finish);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+    return 'completed' in result ? result : { ...result, completed: [] };
+  }
+
+  async finishUserCreate(
+    userId: DirectoryObjectIdentifier,
+    steps: readonly UserCreateStep[],
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult> {
+    const result = await this.asOperator(ctx, async (client): Promise<UserCreateResult> => {
+      try {
+        const target = await this.findUserEntry(client, userId);
+        if (!target) {
+          return { ok: false, reason: 'not_found', errorMessage: 'user not found', completed: [] };
+        }
+        return await this.runCreateSteps(
+          client,
+          normalizeUser(target).distinguishedName,
+          [],
+          steps,
+          finish,
+        );
+      } catch (err) {
+        return { ...classifyWriteError(err), completed: [] };
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+    return 'completed' in result ? result : { ...result, completed: [] };
+  }
+
+  /**
+   * The steps after the add, in order, stopping at the first that fails.
+   * The password and must-change are one modify, so a password AD refuses
+   * leaves `pwdLastSet` alone. Without must-change, setting the password
+   * sets `pwdLastSet` to now.
+   */
+  private async runCreateSteps(
+    client: Client,
+    dn: string,
+    done: UserCreateStep[],
+    steps: readonly UserCreateStep[],
+    finish: UserCreateFinish,
+  ): Promise<UserCreateResult> {
+    const completed = [...done];
+    const readBack = async () => {
+      const entry = await this.findUserEntry(client, {
+        kind: 'distinguishedName',
+        value: dn,
+      }).catch(() => null);
+      return entry ? normalizeUser(entry) : undefined;
+    };
+    for (const step of steps) {
+      try {
+        if (step === 'password') {
+          const changes = [
+            new Change({
+              operation: 'replace',
+              modification: new Attribute({
+                type: 'unicodePwd',
+                values: [encodeUnicodePassword(finish.password)],
+              }),
+            }),
+          ];
+          if (finish.mustChange) {
+            changes.push(
+              new Change({
+                operation: 'replace',
+                modification: new Attribute({ type: 'pwdLastSet', values: ['0'] }),
+              }),
+            );
+          }
+          await client.modify(dn, changes);
+        } else if (step === 'enable') {
+          const { searchEntries } = await client.search(dn, {
+            scope: 'base',
+            filter: '(objectClass=user)',
+            attributes: ['userAccountControl'],
+          });
+          const uac = searchEntries[0] ? userAccountControlOf(searchEntries[0]) : NaN;
+          if (!Number.isFinite(uac)) throw new Error('unreadable userAccountControl');
+          await client.modify(
+            dn,
+            new Change({
+              operation: 'replace',
+              modification: new Attribute({
+                type: 'userAccountControl',
+                values: [String(uac & ~UAC.ACCOUNTDISABLE)],
+              }),
+            }),
+          );
+        }
+        completed.push(step);
+      } catch (err) {
+        const refused = classifyWriteError(err);
+        // AD says a password breaks the policy as a constraint violation.
+        const reason =
+          step === 'password' && refused.reason === 'conflict'
+            ? 'policy_violation'
+            : refused.reason;
+        return {
+          ...refused,
+          ...(reason ? { reason } : {}),
+          completed,
+          failedStep: step,
+          ...withUser(await readBack()),
+        };
+      }
+    }
+    return { ok: true, completed, ...withUser(await readBack()) };
+  }
+
   async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {
     return this.withServiceBind((client) => this.groupDeleteFacts(client, group));
   }
@@ -2880,6 +3042,10 @@ function userAccountControlOf(entry: Entry): number {
  * Map an LDAP write failure to a MutationResult reason by result code
  * rather than by message text, which varies across DC versions.
  */
+function withUser(user: DirectoryUser | undefined): { user?: DirectoryUser } {
+  return user ? { user } : {};
+}
+
 function classifyWriteError(err: unknown): MutationResult {
   const errorMessage = err instanceof Error ? err.message : 'write failed';
   if (err instanceof InsufficientAccessError) {

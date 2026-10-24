@@ -62,8 +62,12 @@ const SYMBOLS = '!#%+-=?@';
 const ALL = UPPER + LOWER + DIGITS + SYMBOLS;
 
 /** Every kind of character, so it passes complexity even where it's off. */
-export function generatePassword(policy: PasswordPolicy | null, account: PasswordAccount): string {
-  const length = Math.max(GENERATED_LENGTH, minimumLength(policy));
+export function generatePassword(
+  policy: PasswordPolicy | null,
+  account: PasswordAccount,
+  minLength: number = GENERATED_LENGTH,
+): string {
+  const length = Math.max(minLength, minimumLength(policy));
   const strict = { minPwdLength: length, complexityRequired: true };
   for (;;) {
     const chars = [UPPER, LOWER, DIGITS, SYMBOLS].map(pick);
