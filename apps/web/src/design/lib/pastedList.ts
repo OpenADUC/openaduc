@@ -1,32 +1,28 @@
 // SPDX-License-Identifier: BUSL-1.1
-// A pasted list of people split into entries for matching: one per line,
-// or separated by commas or semicolons, the way lists arrive from email,
-// Outlook's recipient lines and spreadsheets.
+
+const INVISIBLE = /[​-‍⁠﻿]/g;
+const STRAY_SEPARATORS = /^[\s,;]+|[\s,;]+$/g;
 
 /**
- * The entries in `text`, trimmed, without blanks or repeats (ignoring
- * case). Semicolons always separate. Commas separate on a single line, or
- * between addresses, so a list of "Doe, Jane" display names one per line
- * stays whole. Rows copied from a spreadsheet give their first filled cell.
+ * The entries in a pasted list of people, the way lists arrive from email,
+ * Outlook recipient lines and spreadsheets: one per line, semicolons
+ * always separating, and commas separating addresses. Any other entry
+ * with commas goes to the server whole, which reads "Doe, Jane" as a name
+ * and splits "jdoe, bsmith" only when the whole matches nobody.
  */
 export function parsePastedList(text: string): string[] {
-  const lines = text
-    .split(/\r\n|\r|\n/)
-    .map(firstCell)
-    .filter((line) => line.trim() !== '');
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const line of lines) {
-    const pieces = splitOutside(line, ';');
-    const commaList = lines.length === 1 && pieces.length === 1;
-    for (const piece of pieces) {
-      const parts =
-        commaList || piece.includes('@') ? keepNamesWhole(splitOutside(piece, ',')) : [piece];
+  for (const line of text
+    .normalize('NFC')
+    .replace(INVISIBLE, '')
+    .split(/\r\n|\r|\n/)) {
+    for (const piece of splitOutside(pickCell(line), ';')) {
+      const parts = piece.includes('@') ? keepNamesWhole(splitOutside(piece, ',')) : [piece];
       for (const part of parts) {
-        const entry = part.trim();
-        const key = entry.toLowerCase();
-        if (!entry || seen.has(key)) continue;
-        seen.add(key);
+        const entry = part.replace(STRAY_SEPARATORS, '');
+        if (!entry || seen.has(entry)) continue;
+        seen.add(entry);
         out.push(entry);
       }
     }
@@ -34,12 +30,22 @@ export function parsePastedList(text: string): string[] {
   return out;
 }
 
-function firstCell(line: string): string {
+// A row copied from a spreadsheet: the cell most likely to name one
+// account, so a Name / Email / Department row is matched by its email.
+function pickCell(line: string): string {
   if (!line.includes('\t')) return line;
-  return line.split('\t').find((cell) => cell.trim() !== '') ?? '';
+  const cells = line
+    .split('\t')
+    .map((c) => c.trim())
+    .filter(Boolean);
+  return (
+    cells.find((c) => c.includes('@')) ??
+    cells.find((c) => /^\S+$/.test(c) && /[\\._\-\d]/.test(c)) ??
+    cells[0] ??
+    ''
+  );
 }
 
-/** Split on `sep` outside double quotes and angle brackets. */
 function splitOutside(s: string, sep: string): string[] {
   const out: string[] = [];
   let cur = '';
