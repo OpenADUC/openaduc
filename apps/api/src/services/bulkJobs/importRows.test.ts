@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { adoptable, generalizedTime, managersFirst } from './importRows.js';
+import { adoptable, createInput, generalizedTime, managersFirst } from './importRows.js';
 
 const rows = (...managers: (number | null)[]) => managers.map((managerRow) => ({ managerRow }));
 
@@ -50,5 +50,37 @@ describe('adoptable', () => {
   it('reads AD’s GeneralizedTime', () => {
     expect(generalizedTime('20261025061234.0Z')?.toISOString()).toBe('2026-10-25T06:12:34.000Z');
     expect(generalizedTime('soon')).toBeNull();
+  });
+});
+
+describe('createInput', () => {
+  const input = {
+    line: 2,
+    ouDn: 'OU=Staff,DC=corp,DC=test',
+    cn: 'Jane Doe',
+    samAccountName: 'jane.doe',
+    userPrincipalName: 'jane.doe@corp.test',
+    givenName: 'Jane',
+    surname: 'Doe',
+    displayName: 'Jane Doe',
+    initials: null,
+    mail: null,
+    otherMailbox: null,
+    mobile: null,
+    telephoneNumber: null,
+    employeeId: null,
+    description: null,
+    organisation: {},
+    managerId: null,
+    groupIds: [],
+    usageLocation: 'GB',
+    startDate: null,
+  };
+  const dn = 'CN=Jane Doe,OU=Staff,DC=corp,DC=test';
+
+  it('writes the usage location when the schema takes it, and not otherwise', () => {
+    expect(createInput(input, dn, true).usageLocation).toBe('GB');
+    expect(createInput(input, dn, false).usageLocation).toBeNull();
+    expect(createInput({ ...input, usageLocation: null }, dn, true).usageLocation).toBeNull();
   });
 });

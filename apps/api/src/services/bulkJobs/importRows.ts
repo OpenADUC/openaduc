@@ -12,6 +12,7 @@ import {
   IMPORT_STEPS,
   NEW_USER_ORGANISATION_FIELDS,
   PASSWORD_MODES,
+  USAGE_LOCATION_ATTRIBUTE,
   childDn,
   classTapRequestSchema,
   importPasswordSchema,
@@ -26,6 +27,7 @@ import {
   DirectoryUnavailableError,
   type DirectoryProvider,
   type DirectoryUser,
+  type UserCreateInput,
   type UserCreateResult,
 } from '../../providers/types.js';
 import { withAudit } from '../auditContext.js';
@@ -74,8 +76,9 @@ export const importPlanRowSchema = z.object({
   managerRow: z.number().int().nullable(),
   /** The bucket's groups, by objectGUID. */
   groupIds: z.array(z.string()),
-  // Not written yet: kept on the row for the steps that will use them.
+  /** Written to msExchUsageLocation when the schema has it. */
   usageLocation: text,
+  /** When the onboarding class's passes start, if by each person's start date. */
   startDate: text,
 });
 export type ImportPlanRow = z.infer<typeof importPlanRowSchema>;
@@ -503,7 +506,12 @@ async function passwordFor(
   return { password, mode, mustChange, fallback: false };
 }
 
-function createInput(input: RowInput, dn: string) {
+/** What the create writes: the row's attributes, its usage location only if the schema takes it. */
+export function createInput(
+  input: Omit<RowInput, 'options' | 'managerOrdinal'>,
+  dn: string,
+  usageLocationWritable: boolean,
+): UserCreateInput {
   return {
     dn,
     cn: input.cn,
@@ -522,6 +530,7 @@ function createInput(input: RowInput, dn: string) {
     initials: input.initials,
     employeeId: input.employeeId,
     description: input.description,
+    usageLocation: usageLocationWritable ? input.usageLocation : null,
   };
 }
 
@@ -579,10 +588,16 @@ async function createAccount(
   const { provider } = ctx;
   const dn = childDn('CN', input.cn, input.ouDn);
   const used = await passwordFor(row, input, job, ctx);
+  const create = createInput(
+    input,
+    dn,
+    !!input.usageLocation && (await provider.hasSchemaAttribute(USAGE_LOCATION_ATTRIBUTE)),
+  );
   const written = {
     distinguishedName: dn,
     mail: input.mail,
     ...(Object.keys(input.organisation).length > 0 ? { organisation: input.organisation } : {}),
+    ...(create.usageLocation ? { usageLocation: create.usageLocation } : {}),
   };
   const result = await withAudit(
     ctx.services.audit,
@@ -604,7 +619,7 @@ async function createAccount(
     },
     async () => {
       const r = await provider.createUser(
-        createInput(input, dn),
+        create,
         planned,
         { password: used.password, mustChange: used.mustChange, groups: [] },
         ctx.writeCtx,

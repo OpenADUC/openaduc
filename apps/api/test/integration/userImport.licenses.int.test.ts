@@ -5,7 +5,15 @@
 // has msExchUsageLocation, and the follow-up that reports each person's
 // license errors once they've synced. The follow-up's timer is stopped;
 // tests sweep it by hand.
-import type { ImportCheckResponse, ImportRequest, ImportRow } from '@openaduc/shared';
+import type {
+  BulkJob,
+  ImportCheckResponse,
+  ImportJobResponse,
+  ImportRequest,
+  ImportRow,
+  ImportUsageLocation,
+} from '@openaduc/shared';
+import type { DirectoryProvider, UserCreateInput } from '../../src/providers/types.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { replaceLicensedGroups } from '../../src/services/licenseCache.js';
 import { json, token } from './fakeGraph.js';
@@ -13,6 +21,8 @@ import {
   DC,
   asAdministrator,
   configureDirectory,
+  finishedJob,
+  readDirectoryUser,
   startApi,
   type TestApi,
   type TestClient,
@@ -131,6 +141,32 @@ describe('an import’s licenses', () => {
   let graph: FakeLicenseGraph;
   const groups: Record<string, { id: string; sid: string }> = {};
 
+  /** Replace some of the provider's methods, given the real provider, for what runs next. */
+  function tamper(make: (real: DirectoryProvider) => Partial<DirectoryProvider>) {
+    const providers = api.app.services.providers;
+    const original = providers.buildForDirectory.bind(providers);
+    return vi.spyOn(providers, 'buildForDirectory').mockImplementation(async (id) => {
+      const real = await original(id);
+      const over = make(real) as Record<PropertyKey, unknown>;
+      return new Proxy(real, {
+        get(target, key) {
+          if (key in over) return over[key];
+          const value = Reflect.get(target, key) as unknown;
+          return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
+        },
+      });
+    });
+  }
+  async function runImport(rows: ImportRow[]): Promise<BulkJob> {
+    const res = await operator.post('/api/users/import/run', { import: request(rows) });
+    expect(res.statusCode, res.body).toBe(202);
+    return finishedJob(operator, res.json<{ job: BulkJob }>().job.id);
+  }
+  const view = async (id: string) => {
+    const res = await operator.get(`/api/users/import/jobs/${id}`);
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json<ImportJobResponse>();
+  };
   const check = async (body: ImportRequest) => {
     const res = await operator.post('/api/users/import/check', body);
     expect(res.statusCode, res.body).toBe(200);
@@ -250,6 +286,49 @@ describe('an import’s licenses', () => {
           features: { licenses: true },
         });
       }
+    });
+  });
+
+  describe('usage location', () => {
+    it('isn’t written where the schema lacks msExchUsageLocation, and the wizard is told', async () => {
+      const res = await operator.get('/api/users/import/usage-location');
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json<ImportUsageLocation>()).toEqual({
+        attribute: 'msExchUsageLocation',
+        writable: false,
+      });
+
+      const job = await runImport([row('oto.ortiz', 2, [], { usageLocation: 'GB' })]);
+      expect(job.counts.succeeded).toBe(1);
+      const user = await readDirectoryUser('oto.ortiz', ['sAMAccountName', 'msExchUsageLocation']);
+      expect(user?.sAMAccountName).toBe('oto.ortiz');
+      expect(user?.msExchUsageLocation ?? []).toEqual([]);
+    });
+
+    it('is written with the account where the schema has it', async () => {
+      const created: UserCreateInput[] = [];
+      tamper((real) => ({
+        hasSchemaAttribute: async (name: string) => name === 'msExchUsageLocation',
+        // The dev DC's schema really lacks it: what's asked is kept, the rest made.
+        createUser: async (...[input, ...rest]: Parameters<DirectoryProvider['createUser']>) => {
+          created.push(input);
+          return real.createUser({ ...input, usageLocation: null }, ...rest);
+        },
+      }));
+      const res = await operator.get('/api/users/import/usage-location');
+      expect(res.json<ImportUsageLocation>().writable).toBe(true);
+
+      const job = await runImport([row('pia.park', 2, [], { usageLocation: 'de' })]);
+      expect(job.counts.succeeded).toBe(1);
+      expect(created).toEqual([expect.objectContaining({ usageLocation: 'DE' })]);
+      const audit = await api.app.db
+        .selectFrom('audit_events')
+        .select('after_json')
+        .where('bulk_job_id', '=', job.id)
+        .where('action', '=', 'user.create')
+        .executeTakeFirstOrThrow();
+      expect(audit.after_json).toMatchObject({ usageLocation: 'DE' });
+      expect((await view(job.id)).rows[0]?.status).toBe('succeeded');
     });
   });
 });

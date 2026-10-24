@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  USAGE_LOCATION_ATTRIBUTE,
   type ImportPerson,
   type LdapTlsMode,
   type NamingLookups,
@@ -139,6 +140,10 @@ const COMPUTER_FILTER_BASE = '(&(objectCategory=computer)(objectClass=computer))
 // directly so the route doesn't need to know how to build that DN — the
 // objectClass filter is already exact enough.
 const GPO_FILTER_BASE = '(objectClass=groupPolicyContainer)';
+/** A schema is extended rarely: what it defines is asked again after this long. */
+const SCHEMA_TTL_MS = 60 * 60_000;
+/** What each directory's schema was found to define, by directory and lDAPDisplayName. */
+const schemaAttributes = new Map<string, { at: number; defined: boolean }>();
 
 /**
  * All inputs the AD provider needs at runtime. Built either from a
@@ -1685,6 +1690,30 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     });
   }
 
+  async hasSchemaAttribute(ldapDisplayName: string): Promise<boolean> {
+    const key = `${this.id}:${ldapDisplayName.toLowerCase()}`;
+    const known = schemaAttributes.get(key);
+    if (known && Date.now() - known.at < SCHEMA_TTL_MS) return known.defined;
+    const defined = await this.withServiceBind(async (client) => {
+      const { searchEntries } = await client.search('', {
+        scope: 'base',
+        filter: '(objectClass=*)',
+        attributes: ['schemaNamingContext'],
+      });
+      const schemaNc = asString(searchEntries[0]?.schemaNamingContext);
+      if (!schemaNc) return false;
+      const { searchEntries: found } = await client.search(schemaNc, {
+        scope: 'one',
+        filter: `(&(objectClass=attributeSchema)(lDAPDisplayName=${escapeLdapFilter(ldapDisplayName)}))`,
+        attributes: ['lDAPDisplayName'],
+        sizeLimit: 1,
+      });
+      return found.length > 0;
+    });
+    schemaAttributes.set(key, { at: Date.now(), defined });
+    return defined;
+  }
+
   /**
    * Create a group at `input.dn`, bound as the operator. The names are
    * checked again on this bind: the preflight the dialog ran may be stale.
@@ -1774,6 +1803,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (input.initials) attrs.initials = input.initials;
         if (input.employeeId) attrs.employeeID = input.employeeId;
         if (input.description) attrs.description = input.description;
+        if (input.usageLocation) attrs[USAGE_LOCATION_ATTRIBUTE] = input.usageLocation;
         Object.assign(attrs, input.organisation);
         if (input.manager) attrs.manager = input.manager;
         try {

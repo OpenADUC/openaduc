@@ -240,6 +240,20 @@ export const importRequestSchema = z
 export type ImportRequest = z.input<typeof importRequestSchema>;
 export type CheckedImportRequest = z.output<typeof importRequestSchema>;
 
+/**
+ * The AD attribute an import writes usage location to, which Connect Sync
+ * carries to Entra's usageLocation. Exchange's schema extension adds it;
+ * without it, Entra gives new accounts the tenant's location.
+ */
+export const USAGE_LOCATION_ATTRIBUTE = 'msExchUsageLocation';
+
+/** Whether this directory's schema can take the usage location an import maps. */
+export const importUsageLocationSchema = z.object({
+  attribute: z.literal(USAGE_LOCATION_ATTRIBUTE),
+  writable: z.boolean(),
+});
+export type ImportUsageLocation = z.infer<typeof importUsageLocationSchema>;
+
 // ---- The run ------------------------------------------------------------
 
 /**

@@ -2,6 +2,7 @@
 import {
   IMPORT_JOB_ACTION,
   TAP_POLICY_OFF_MESSAGE,
+  USAGE_LOCATION_ATTRIBUTE,
   bulkJobResponseSchema,
   classTapProblems,
   importJobResponseSchema,
@@ -16,6 +17,7 @@ import {
   type ImportCheckResponse,
   type ImportJobResponse,
   type ImportLookupResponse,
+  type ImportUsageLocation,
   type PlacementRulesResponse,
   type PlacementRulesSaveResponse,
 } from '@openaduc/shared';
@@ -145,6 +147,20 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       if (body.employeeIds.length + body.identifiers.length === 0) return { people: [] };
       const provider = await app.services.providers.buildForRequest(req);
       return { people: await provider.findPeople(body) };
+    },
+  });
+
+  // ---- GET /api/users/import/usage-location -----------------------------
+  // Whether a mapped usage location reaches Entra: the schema has the
+  // attribute Connect Sync carries it from, or it isn't written.
+  app.get('/api/users/import/usage-location', {
+    config: { policy: { capability: 'write:user.create', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<ImportUsageLocation> => {
+      const provider = await app.services.providers.buildForRequest(req);
+      return {
+        attribute: USAGE_LOCATION_ATTRIBUTE,
+        writable: await provider.hasSchemaAttribute(USAGE_LOCATION_ATTRIBUTE),
+      };
     },
   });
 
