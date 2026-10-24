@@ -17,9 +17,9 @@ import {
 } from '@openaduc/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { groupPrivilege } from '../lib/groupDeletion.js';
+import { groupPrivilege } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
-import { ridOf } from '../lib/sid.js';
+import { isDomainSid, ridOf } from '../lib/sid.js';
 import { BadRequest, Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { parentDn } from '../providers/active-directory/normalize.js';
 import type {
@@ -30,7 +30,11 @@ import type {
 } from '../providers/types.js';
 import type { AuditEventInput } from '../services/audit.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
-import { findCachedGroups, type CachedGroup } from '../services/groupCache.js';
+import {
+  findCachedGroups,
+  findCachedGroupsById,
+  type CachedGroup,
+} from '../services/groupCache.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
 import { findCachedUser, upsertUser } from '../services/userCache.js';
@@ -359,18 +363,17 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       app.services.authorization.roleGroups(),
     ]);
     const primaryRid = Number(rawScalarValue(user.rawAttributes['primaryGroupID']));
-    const roleOf = new Map(roleGroups.map((g) => [g.dn.toLowerCase(), g.role]));
     return groups
       .filter((g) => {
         const rid = ridOf(g.sid);
-        const ownDomain = !!g.sid?.startsWith('S-1-5-21-');
+        const ownDomain = isDomainSid(g.sid);
         return !(ownDomain && (rid === DOMAIN_USERS_RID || rid === primaryRid));
       })
       .map((g) => ({
         id: g.id,
         name: g.name,
         distinguishedName: g.distinguishedName,
-        privilege: groupPrivilege(g, roleOf.get(g.distinguishedName.toLowerCase())),
+        privilege: groupPrivilege(g, roleGroups),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -380,9 +383,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
     providerId: number,
     ids: readonly string[],
   ): Promise<{ found: GroupToAdd[]; missing: string[] }> {
-    const byId = new Map(
-      (await findCachedGroups(app.db, providerId, { ids })).map((g) => [g.id.toLowerCase(), g]),
-    );
+    const byId = await findCachedGroupsById(app.db, providerId, ids);
     const found: GroupToAdd[] = [];
     const missing: string[] = [];
     for (const id of ids) {

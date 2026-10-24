@@ -6,31 +6,10 @@ import type {
   BulkGroupPreviewUser,
 } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
-import { groupPrivilege, type RoleGroup } from '../lib/groupDeletion.js';
+import { groupPrivilege, type RoleGroup } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
-import { ridOf } from '../lib/sid.js';
-import { findCachedGroups, type CachedGroup } from './groupCache.js';
-
-/** How a user is in a group: in its member, as their primary group, or through a nested group. */
-export type MembershipState = 'direct' | 'primary' | 'nested' | 'none';
-
-/** True when `group` is the user's primary group, which their memberOf leaves out. */
-export function isPrimaryGroup(
-  group: Pick<CachedGroup, 'sid'>,
-  primaryGroupId: string | null,
-): boolean {
-  const rid = ridOf(group.sid);
-  return rid !== null && !!group.sid?.startsWith('S-1-5-21-') && primaryGroupId === String(rid);
-}
-
-/**
- * Whether a membership job leaves this user alone: an add skips members
- * already in it (a primary group's included, which AD won't add to
- * member), and a remove skips anyone not in its member.
- */
-export function alreadyAsAsked(op: 'add' | 'remove', state: MembershipState): boolean {
-  return op === 'add' ? state === 'direct' || state === 'primary' : state !== 'direct';
-}
+import { findCachedGroupsById } from './groupCache.js';
+import { alreadyAsAsked, membershipState } from './membershipState.js';
 
 /**
  * What adding these users to these groups, or removing them, would change,
@@ -45,8 +24,7 @@ export async function previewGroupMembership(
 ): Promise<BulkGroupMembershipPreview | null> {
   const ids = request.ids.map((id) => id.toLowerCase());
   const groupIds = request.groupIds.map((id) => id.toLowerCase());
-  const cached = await findCachedGroups(db, providerId, { ids: groupIds });
-  const byGroupId = new Map(cached.map((g) => [g.id.toLowerCase(), g]));
+  const byGroupId = await findCachedGroupsById(db, providerId, groupIds);
   if (groupIds.some((id) => !byGroupId.has(id))) return null;
 
   const users = await db
@@ -94,7 +72,6 @@ export async function previewGroupMembership(
     `${userId.toLowerCase()} ${groupId.toLowerCase()}`;
   const directSet = new Set(direct.map((m) => key(m.user_id, m.group_id)));
   const nestedSet = new Set(nested.map((m) => key(m.user_id, m.group_id)));
-  const roleOf = new Map(roleGroups.map((g) => [g.dn.toLowerCase(), g.role]));
   const known = users
     .map((u) => ({
       id: u.object_guid.toLowerCase(),
@@ -113,13 +90,11 @@ export async function previewGroupMembership(
       const indirect: BulkGroupPreviewUser[] = [];
       let changes = 0;
       for (const user of known) {
-        const state: MembershipState = directSet.has(key(user.id, groupId))
-          ? 'direct'
-          : isPrimaryGroup(group, user.primaryGroupId)
-            ? 'primary'
-            : nestedSet.has(key(user.id, groupId))
-              ? 'nested'
-              : 'none';
+        const state = membershipState(group, {
+          primaryGroupId: user.primaryGroupId,
+          direct: directSet.has(key(user.id, groupId)),
+          nested: nestedSet.has(key(user.id, groupId)),
+        });
         const entry = { id: user.id, name: user.name };
         if (alreadyAsAsked(request.op, state)) unchanged.push(entry);
         else changes++;
@@ -131,7 +106,7 @@ export async function previewGroupMembership(
         id: group.id,
         name: group.name,
         distinguishedName: group.distinguishedName,
-        privilege: groupPrivilege(group, roleOf.get(group.distinguishedName.toLowerCase())),
+        privilege: groupPrivilege(group, roleGroups),
         changes,
         unchanged,
         indirect,

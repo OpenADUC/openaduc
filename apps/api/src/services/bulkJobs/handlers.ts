@@ -12,12 +12,17 @@ import {
 } from '@openaduc/shared';
 import type { DB } from '../../db/types.js';
 import { rawScalarValue } from '../../lib/rawAttributes.js';
-import { NotFound } from '../../plugins/errorHandler.js';
 import type { DirectoryProvider, WriteContext } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
-import { findCachedGroups } from '../groupCache.js';
-import { alreadyAsAsked, isPrimaryGroup } from '../groupMembershipPreview.js';
-import { refreshMembershipCache, writeGroupMembership } from '../groupMembershipWrite.js';
+import { findCachedGroupsById } from '../groupCache.js';
+import {
+  refreshMembershipCache,
+  writeGroupMembership,
+  type MembershipCacheDeps,
+} from '../groupMembershipWrite.js';
+import { alreadyAsAsked, membershipState } from '../membershipState.js';
+import { BulkJobRequestError } from './errors.js';
+import { failureMessage } from './rowMessages.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -25,7 +30,6 @@ import {
   writeUserAccount,
   type AccountWrite,
 } from '../userAccountWrite.js';
-import type { UserLiveRefreshService } from '../userLiveRefresh.js';
 
 export interface BulkRowContext {
   db: Kysely<DB>;
@@ -35,7 +39,7 @@ export interface BulkRowContext {
   audit: Omit<AuditEventInput, 'action' | 'result'>;
   services: {
     audit: Pick<AuditService, 'recordEvent'>;
-    userLiveRefresh: Pick<UserLiveRefreshService, 'refresh' | 'reconcileDirectMemberships'>;
+    userLiveRefresh: MembershipCacheDeps['userLiveRefresh'];
   };
 }
 
@@ -72,8 +76,8 @@ export interface BulkJobRowInput<Input> {
  * would (else returns `audited: false` and the job audits the failure),
  * and reports the before/after a revert would restore. Throwing
  * DirectoryUnavailableError pauses the job. `subject`, for a job that acts
- * with more than its rows, names what with (and throws an HTTP error when
- * it can't), so the job's progress and its audit entry can say it.
+ * with more than its rows, names what with (throwing BulkJobRequestError
+ * when it can't), so the job's progress and its audit entry can say it.
  */
 export interface BulkJobHandler<Request = unknown, Input = unknown> {
   action: BulkJobAction;
@@ -157,13 +161,11 @@ function groupMembershipHandler(
     input: groupIdsInputSchema,
     async subject({ groupIds }, { db, directoryId }) {
       const ids = groupIds.map((id) => id.toLowerCase());
-      const found = new Map(
-        (await findCachedGroups(db, directoryId, { ids })).map((g) => [g.id.toLowerCase(), g]),
-      );
+      const found = await findCachedGroupsById(db, directoryId, ids);
       return {
         groups: ids.map((id) => {
           const group = found.get(id);
-          if (!group) throw NotFound('group not found');
+          if (!group) throw new BulkJobRequestError('group_not_found', 'group not found');
           return { id, name: group.name };
         }),
       };
@@ -172,12 +174,7 @@ function groupMembershipHandler(
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
       const { user } = live;
-      const groups = new Map(
-        (await findCachedGroups(ctx.db, ctx.provider.id, { ids: row.input.groupIds })).map((g) => [
-          g.id.toLowerCase(),
-          g,
-        ]),
-      );
+      const groups = await findCachedGroupsById(ctx.db, ctx.provider.id, row.input.groupIds);
       const memberOf = new Set(user.memberOfDns.map((dn) => dn.toLowerCase()));
       const primaryGroupId = rawScalarValue(user.rawAttributes['primaryGroupID']);
       const changed: { id: string; name: string }[] = [];
@@ -202,11 +199,10 @@ function groupMembershipHandler(
           failed.push(`${notDone} a group that no longer exists.`);
           continue;
         }
-        const state = memberOf.has(group.distinguishedName.toLowerCase())
-          ? 'direct'
-          : isPrimaryGroup(group, primaryGroupId)
-            ? 'primary'
-            : 'none';
+        const state = membershipState(group, {
+          primaryGroupId,
+          direct: memberOf.has(group.distinguishedName.toLowerCase()),
+        });
         if (alreadyAsAsked(op, state)) continue;
         const result = await writeGroupMembership(
           ctx.services.audit,
@@ -254,20 +250,3 @@ export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
 };
-
-/** What a failed row says to the operator. */
-export function failureMessage(code: string, detail: string | null): string {
-  const reason = detail ? `: ${detail}` : '';
-  switch (code) {
-    case 'not_found':
-      return 'No such user in the directory.';
-    case 'permission_denied':
-      return `The directory refused the change${reason}`;
-    case 'directory_unavailable':
-      return 'No domain controller could be reached.';
-    case 'interrupted':
-      return 'OpenADUC stopped while changing this account. Check it, then retry.';
-    default:
-      return `The change failed${reason}`;
-  }
-}
