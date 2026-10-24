@@ -1224,7 +1224,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
           return { ok: true, before, after: before };
         }
 
-        const conflict = await this.findRenameConflict(client, user, plan);
+        const conflict = await this.findNameClash(
+          client,
+          {
+            samAccountName: plan.newSamAccountName,
+            userPrincipalName: plan.newUserPrincipalName,
+            email: plan.newEmail,
+            cn: plan.newCn,
+          },
+          parentDn(user.distinguishedName),
+          user.objectGuid,
+        );
         if (conflict) return { ok: false, reason: 'conflict', errorMessage: conflict, before };
 
         let dn = user.distinguishedName;
@@ -1336,49 +1346,56 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * Look for another object already holding a value the rename would take.
+   * Look for another object already holding a value an account would take.
    * Searches the whole domain naming context, not just the configured base
-   * DN, because sAMAccountName and UPN must be unique domain-wide. Returns
-   * a message naming the clash, or null.
+   * DN, because sAMAccountName, UPN and email must be unique domain-wide;
+   * the CN only among `parentDn`'s children. Returns a message naming the
+   * clash, or null. A holder outside the base DN isn't named.
    */
-  private async findRenameConflict(
+  private async findNameClash(
     client: Client,
-    user: DirectoryUser,
-    plan: ReturnType<typeof planUserRename>,
+    names: {
+      samAccountName?: string | null;
+      userPrincipalName?: string | null;
+      email?: string | null;
+      cn?: string | null;
+    },
+    parentDn: string | null,
+    exceptObjectGuid?: string,
   ): Promise<string | null> {
     const domainRoot = await this.domainRoot(client);
     const checks: { label: string; base: string; scope: 'sub' | 'one'; filter: string }[] = [];
-    if (plan.newSamAccountName) {
+    if (names.samAccountName) {
       checks.push({
-        label: `logon name "${plan.newSamAccountName}"`,
+        label: `logon name "${names.samAccountName}"`,
         base: domainRoot,
         scope: 'sub',
-        filter: `(sAMAccountName=${escapeLdapFilter(plan.newSamAccountName)})`,
+        filter: `(sAMAccountName=${escapeLdapFilter(names.samAccountName)})`,
       });
     }
-    if (plan.newUserPrincipalName) {
+    if (names.userPrincipalName) {
       checks.push({
-        label: `UPN "${plan.newUserPrincipalName}"`,
+        label: `UPN "${names.userPrincipalName}"`,
         base: domainRoot,
         scope: 'sub',
-        filter: `(userPrincipalName=${escapeLdapFilter(plan.newUserPrincipalName)})`,
+        filter: `(userPrincipalName=${escapeLdapFilter(names.userPrincipalName)})`,
       });
     }
-    if (plan.newEmail) {
-      const v = escapeLdapFilter(plan.newEmail);
+    if (names.email) {
+      const v = escapeLdapFilter(names.email);
       checks.push({
-        label: `email address "${plan.newEmail}"`,
+        label: `email address "${names.email}"`,
         base: domainRoot,
         scope: 'sub',
         filter: `(|(mail=${v})(proxyAddresses=smtp:${v}))`,
       });
     }
-    if (plan.newCn) {
+    if (names.cn) {
       checks.push({
-        label: `name "${plan.newCn}" in this OU`,
-        base: parentDn(user.distinguishedName) ?? domainRoot,
+        label: `name "${names.cn}" in this OU`,
+        base: parentDn ?? domainRoot,
         scope: 'one',
-        filter: `(cn=${escapeLdapFilter(plan.newCn)})`,
+        filter: `(cn=${escapeLdapFilter(names.cn)})`,
       });
     }
 
@@ -1391,9 +1408,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
       });
       const other = searchEntries.find((e) => {
         const guid = e.objectGUID;
-        return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === user.objectGuid);
+        return !(Buffer.isBuffer(guid) && objectGuidToString(guid) === exceptObjectGuid);
       });
-      if (other) return `the ${check.label} is already used by ${other.dn}`;
+      if (other) {
+        return isDnWithin(other.dn, this.config.baseDn)
+          ? `the ${check.label} is already used by ${other.dn}`
+          : `the ${check.label} is already used elsewhere in the domain`;
+      }
     }
     return null;
   }
