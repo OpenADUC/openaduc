@@ -187,6 +187,7 @@ describe('the user list, coming back to a bulk job', () => {
       pending: 2 - succeeded - failed,
       running: 0,
       succeeded,
+      partial: 0,
       failed,
       skipped: 0,
     },
@@ -256,7 +257,7 @@ describe('the user list, adding the selection to groups', () => {
       actorDisplayName: 'OpenADUC Operator',
       createdAt: new Date().toISOString(),
       finishedAt: null,
-      counts: { total: 2, pending: 2, running: 0, succeeded: 0, failed: 0, skipped: 0 },
+      counts: { total: 2, pending: 2, running: 0, succeeded: 0, partial: 0, failed: 0, skipped: 0 },
     };
     api.bulkJobs.startGroupChange.mockResolvedValue({ job: running });
     api.bulkJobs.get.mockResolvedValue({ job: running });

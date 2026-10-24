@@ -12,7 +12,11 @@ import {
 } from '@openaduc/shared';
 import type { DB } from '../../db/types.js';
 import { rawScalarValue } from '../../lib/rawAttributes.js';
-import type { DirectoryProvider, WriteContext } from '../../providers/types.js';
+import {
+  DirectoryUnavailableError,
+  type DirectoryProvider,
+  type WriteContext,
+} from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import {
@@ -46,6 +50,8 @@ export interface BulkRowContext {
 export type BulkRowOutcome =
   | {
       ok: true;
+      /** Nothing needed changing: the row is skipped rather than succeeded. */
+      unchanged?: boolean;
       before: Record<string, unknown> | null;
       after: Record<string, unknown> | null;
       targetDn?: string;
@@ -59,6 +65,8 @@ export type BulkRowOutcome =
       targetDn?: string;
       /** What the row says to the operator, in place of the message for its code. */
       message?: string;
+      /** Some of the row's changes were made: the row is partial rather than failed. */
+      partial?: boolean;
       /** The row's failure is in the audit log already. */
       audited: boolean;
     };
@@ -90,7 +98,14 @@ export interface BulkJobHandler<Request = unknown, Input = unknown> {
   ): Promise<BulkJobSubject>;
   input: z.ZodType<Input>;
   run(
-    row: { targetId: string; targetDn: string | null; input: Input },
+    row: {
+      targetId: string;
+      targetDn: string | null;
+      input: Input;
+      /** What an earlier run of this row recorded, for a retry to keep. */
+      before: Record<string, unknown> | null;
+      after: Record<string, unknown> | null;
+    },
     ctx: BulkRowContext,
   ): Promise<BulkRowOutcome>;
 }
@@ -175,11 +190,11 @@ function groupMembershipHandler(
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
       const { user } = live;
       const groups = await findCachedGroupsById(ctx.db, ctx.provider.id, row.input.groupIds);
-      const memberOf = new Set(user.memberOfDns.map((dn) => dn.toLowerCase()));
       const primaryGroupId = rawScalarValue(user.rawAttributes['primaryGroupID']);
-      const changed: { id: string; name: string }[] = [];
-      const failed: string[] = [];
-      let errorCode: string | null = null;
+      // A retry keeps what earlier runs changed, so the row still says what a revert restores.
+      const changes = new Map(changedGroups(row.after).map((g) => [g.id, g]));
+      const changedNow: string[] = [];
+      const failures: { code: string; text: string }[] = [];
 
       for (const groupId of row.input.groupIds) {
         const group = groups.get(groupId);
@@ -195,52 +210,146 @@ function groupMembershipHandler(
             targetDn: user.distinguishedName,
             metadata: { groupId },
           });
-          errorCode ??= 'not_found';
-          failed.push(`${notDone} a group that no longer exists.`);
+          failures.push({
+            code: 'not_found',
+            text: `${notDone} a group that’s no longer in the directory.`,
+          });
+          continue;
+        }
+        // AD keeps the primary group out of member and refuses to add it
+        // there, so an add records it as already done rather than failing.
+        if (
+          op === 'add' &&
+          membershipState(group, { primaryGroupId, direct: false }) === 'primary'
+        ) {
+          const snapshot = {
+            isMember: true,
+            group: group.distinguishedName,
+            member: user.distinguishedName,
+            memberKind: 'user',
+            primaryGroup: true,
+          };
+          await ctx.services.audit.recordEvent({
+            ...ctx.audit,
+            action,
+            result: 'success',
+            actorAuthMethod: 'ad-password',
+            targetType: 'user',
+            targetId: user.objectGuid,
+            targetDn: user.distinguishedName,
+            metadata: {
+              groupId: group.id,
+              groupDn: group.distinguishedName,
+              groupName: group.name,
+            },
+            before: snapshot,
+            after: snapshot,
+          });
+          continue;
+        }
+        // Whether the user is in the group is the directory's to say: the
+        // provider checks member live, by the group's GUID, so a group
+        // renamed or moved since the last sync is still found.
+        let result;
+        try {
+          result = await writeGroupMembership(
+            ctx.services.audit,
+            ctx.provider,
+            { kind: 'user', op, member: user, group },
+            ctx.writeCtx,
+            ctx.audit,
+          );
+        } catch (err) {
+          if (!(err instanceof DirectoryUnavailableError)) throw err;
+          failures.push({
+            code: 'directory_unavailable',
+            text: membershipFailure(op, group.name, 'directory_unavailable', null),
+          });
+          break;
+        }
+        if (!result.ok) {
+          const code = result.errorCode ?? 'directory_error';
+          failures.push({
+            code,
+            text: membershipFailure(op, group.name, code, result.errorMessage ?? null),
+          });
           continue;
         }
         const state = membershipState(group, {
           primaryGroupId,
-          direct: memberOf.has(group.distinguishedName.toLowerCase()),
+          direct: result.before?.['isMember'] === true,
         });
-        if (alreadyAsAsked(op, state)) continue;
-        const result = await writeGroupMembership(
-          ctx.services.audit,
-          ctx.provider,
-          { kind: 'user', op, member: user, group },
-          ctx.writeCtx,
-          ctx.audit,
-        );
-        if (result.ok) {
-          changed.push({ id: group.id, name: group.name });
-        } else {
-          const code = result.errorCode ?? 'directory_error';
-          errorCode ??= code;
-          failed.push(
-            `${notDone} ${group.name}: ${failureMessage(code, result.errorMessage ?? null)}`,
-          );
+        if (alreadyAsAsked(op, state)) {
+          continue;
         }
+        changes.set(group.id, { id: group.id, name: group.name, isMember: op === 'add' });
+        changedNow.push(group.name);
       }
 
-      if (changed.length > 0) {
+      if (changedNow.length > 0) {
         await refreshMembershipCache(
           { db: ctx.db, userLiveRefresh: ctx.services.userLiveRefresh },
           ctx.provider,
           { kind: 'user', memberId: row.targetId },
-        );
+        ).catch((err: unknown) => {
+          // The writes are made and audited; the next sync brings the cache up to date.
+          if (!(err instanceof DirectoryUnavailableError)) throw err;
+        });
       }
-      const snapshot = (isMember: boolean) =>
-        changed.length === 0 ? null : { groups: changed.map((g) => ({ ...g, isMember })) };
+      const merged = [...changes.values()];
       const fields = {
-        before: snapshot(op === 'remove'),
-        after: snapshot(op === 'add'),
+        before: merged.length
+          ? { groups: merged.map((g) => ({ ...g, isMember: !g.isMember })) }
+          : null,
+        after: merged.length ? { groups: merged } : null,
         targetDn: user.distinguishedName,
       };
-      return errorCode === null
-        ? { ok: true, ...fields }
-        : { ok: false, errorCode, message: failed.join(' '), audited: true, ...fields };
+      if (failures.length === 0) return { ok: true, unchanged: merged.length === 0, ...fields };
+      const done = merged.length
+        ? `${op === 'add' ? 'Added to' : 'Removed from'} ${merged.map((g) => g.name).join(', ')}. `
+        : '';
+      return {
+        ok: false,
+        errorCode: failures[0]!.code,
+        message: done + failures.map((f) => f.text).join(' '),
+        partial: merged.length > 0,
+        audited: true,
+        ...fields,
+      };
     },
   };
+}
+
+/** The groups a membership row's after-snapshot says it changed. */
+function changedGroups(
+  after: Record<string, unknown> | null,
+): { id: string; name: string; isMember: boolean }[] {
+  const groups = after?.['groups'];
+  return Array.isArray(groups) ? (groups as { id: string; name: string; isMember: boolean }[]) : [];
+}
+
+/** Why one group's change in a membership row failed, naming the group. */
+function membershipFailure(
+  op: BulkMembershipOp,
+  groupName: string,
+  code: string,
+  detail: string | null,
+): string {
+  const head = `${op === 'add' ? 'Not added to' : 'Not removed from'} ${groupName}`;
+  const reason = detail ? `: ${detail}` : '.';
+  switch (code) {
+    case 'not_found':
+      return `${head}: the group or the account is no longer in the directory.`;
+    case 'conflict':
+      return `${head}: the directory refused it as a conflict${reason}`;
+    case 'permission_denied':
+    case 'policy_violation':
+      return `${head}: the directory refused the change${reason}`;
+    case 'directory_unavailable':
+      return `${head}: no domain controller could be reached.`;
+    default:
+      return `${head}: the change failed${reason}`;
+  }
 }
 
 export const BULK_JOB_HANDLERS: BulkJobHandlers = {

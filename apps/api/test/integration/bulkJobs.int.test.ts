@@ -148,7 +148,15 @@ describe('bulk actions run as server-side jobs', () => {
             status: 'finished',
             pauseReason: null,
             total: 3,
-            counts: { total: 3, pending: 0, running: 0, succeeded: 2, failed: 1, skipped: 0 },
+            counts: {
+              total: 3,
+              pending: 0,
+              running: 0,
+              succeeded: 2,
+              partial: 0,
+              failed: 1,
+              skipped: 0,
+            },
           },
         }),
       ]);

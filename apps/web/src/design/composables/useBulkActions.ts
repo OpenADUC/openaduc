@@ -157,8 +157,13 @@ export function useBulkActions(opts: {
   }
 
   async function settle(done: BulkJob, announce: boolean): Promise<void> {
-    const { rows: failures } =
-      done.counts.failed > 0 ? await api.bulkJobs.rows(done.id, 'failed') : { rows: [] };
+    const failures = (
+      await Promise.all(
+        (['failed', 'partial'] as const)
+          .filter((status) => done.counts[status] > 0)
+          .map(async (status) => (await api.bulkJobs.rows(done.id, status)).rows),
+      )
+    ).flat();
     if (job.value?.id !== done.id) return;
     bulkErrors.value = new Map(
       failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
@@ -172,6 +177,7 @@ export function useBulkActions(opts: {
       opts.toast.add({
         severity: 'success',
         summary: `${ed} ${accounts(done.counts.succeeded)}${bulkJobTarget(done.action, done.subject)}`,
+        ...(done.counts.skipped > 0 ? { detail: `${done.counts.skipped} needed no change.` } : {}),
         life: 4000,
       });
       dismissJob();

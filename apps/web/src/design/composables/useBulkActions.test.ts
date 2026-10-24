@@ -47,7 +47,16 @@ function aJob(
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: status === 'finished' || status === 'cancelled' ? new Date().toISOString() : null,
-    counts: { total: 3, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0, ...counts },
+    counts: {
+      total: 3,
+      pending: 0,
+      running: 0,
+      succeeded: 0,
+      partial: 0,
+      failed: 0,
+      skipped: 0,
+      ...counts,
+    },
     ...more,
   };
 }
