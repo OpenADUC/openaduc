@@ -197,6 +197,23 @@ describe('the actions menu', () => {
     expect(actionsButton(page)).toBeUndefined();
   });
 
+  // The tabs scroll on a phone; Actions stays at the end of the bar, in reach.
+  it('is an icon beside the tabs at phone width, outside their scroll', async () => {
+    atPhoneWidth();
+    const { page } = await open('/groups/g1', {
+      capabilities: ['write:group.membership'],
+      actions: [remove],
+    });
+    const button = page.get('.object-tabs-actions button');
+    expect(button.attributes('aria-label')).toBe('Actions');
+    expect(button.text()).toBe('');
+    expect(page.find('[role="tablist"] .object-tabs-actions').exists()).toBe(false);
+
+    await button.trigger('click');
+    await flushPromises();
+    expect(page.findAll('[role="menuitem"]').map((i) => i.text())).toEqual(['Remove…']);
+  });
+
   it('runs the chosen action', async () => {
     run.mockClear();
     const { page } = await open('/groups/g1', {
