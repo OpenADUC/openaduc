@@ -73,10 +73,13 @@ export type TapIssueOutcome =
 
 const POLICY_PATH =
   '/policies/authenticationMethodsPolicy/authenticationMethodConfigurations/TemporaryAccessPass';
-const ROLE_PATHS = [
-  '/roleManagement/directory/roleAssignments?$select=principalId',
-  '/roleManagement/directory/roleEligibilityScheduleInstances?$select=principalId',
-];
+const ASSIGNMENTS_PATH = '/roleManagement/directory/roleAssignments?$select=principalId';
+const ELIGIBILITIES_PATH =
+  '/roleManagement/directory/roleEligibilityScheduleInstances?$select=principalId';
+// Without an explicit language Node's fetch sends `Accept-Language: *`,
+// which the role-management backend has been seen to refuse as an unknown
+// culture (400 CultureNotFoundException).
+const ROLE_HEADERS = { 'Accept-Language': 'en-US' };
 const passesPath = (entraUserId: string) =>
   `/users/${encodeURIComponent(entraUserId)}/authentication/temporaryAccessPassMethods`;
 // Guards against a runaway nextLink chain. More than this fails closed: the
@@ -358,10 +361,20 @@ async function entraRoles(graph: TapGraph, entraUserId: string): Promise<EntraRo
       principals.add(m.id);
       if (m['@odata.type'] === '#microsoft.graph.group') groupIds.add(m.id);
     }
-    for (const path of ROLE_PATHS) {
-      const assigned = await allPages(graph, path, principalSchema);
-      if (!assigned) return { status: 'unknown', hint: null };
-      if (assigned.some((a) => principals.has(a.principalId))) return { status: 'holds' };
+    const assigned = await allPages(graph, ASSIGNMENTS_PATH, principalSchema, ROLE_HEADERS);
+    const eligible = await allPages(graph, ELIGIBILITIES_PATH, principalSchema, ROLE_HEADERS).catch(
+      (err: unknown) => {
+        // A tenant without Entra ID P2 or Governance has no PIM, so nothing
+        // can be eligible; Graph says so with this 400 rather than an empty list.
+        if (err instanceof GraphPermissionError && err.graphCode === 'AadPremiumLicenseRequired') {
+          return [];
+        }
+        throw err;
+      },
+    );
+    if (!assigned || !eligible) return { status: 'unknown', hint: null };
+    if ([...assigned, ...eligible].some((a) => principals.has(a.principalId))) {
+      return { status: 'holds' };
     }
     return { status: 'none', groupIds };
   } catch (err) {
@@ -375,11 +388,14 @@ async function allPages<T extends z.ZodType>(
   graph: TapGraph,
   first: string,
   item: T,
+  headers?: Record<string, string>,
 ): Promise<z.infer<T>[] | null> {
   const items: z.infer<T>[] = [];
   let next: string | undefined = first;
   for (let i = 0; next && i < MAX_PAGES; i++) {
-    const page = listOf(item).parse((await graph.getJson(next)).data);
+    const page = listOf(item).parse(
+      (await graph.getJson(next, headers ? { headers } : undefined)).data,
+    );
     items.push(...page.value);
     next = page['@odata.nextLink'];
   }
