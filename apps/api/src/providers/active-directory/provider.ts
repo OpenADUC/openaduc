@@ -7,7 +7,6 @@ import {
   type UserCreateStep,
   escapeRdnValueRfc,
   isDnWithin,
-  plannedSteps,
 } from '@openaduc/shared';
 import {
   Attribute,
@@ -54,7 +53,7 @@ import type {
   SyncInput,
   UserAttributePatch,
   UserCreateFinish,
-  UserCreateGroups,
+  GroupsStepResult,
   UserCreateInput,
   UserCreateResult,
   AccountFingerprint,
@@ -1548,6 +1547,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 
   async createUser(
     input: UserCreateInput,
+    steps: readonly UserCreateStep[],
     finish: UserCreateFinish,
     ctx: WriteContext,
   ): Promise<UserCreateResult> {
@@ -1581,18 +1581,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
         if (input.mobile) attrs.mobile = input.mobile;
         if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
-        for (const [attribute, value] of Object.entries(input.organisation)) {
-          if (value) attrs[attribute] = value;
-        }
+        Object.assign(attrs, input.organisation);
         if (input.manager) attrs.manager = input.manager;
         try {
           await client.add(input.dn, attrs);
         } catch (err) {
           return { ...classifyWriteError(err), completed: [] };
         }
-        const steps = plannedSteps(finish.enable, finish.groups.length > 0).filter(
-          (s) => s !== 'create',
-        );
         return await this.runCreateSteps(client, input.dn, ['create'], steps, finish);
       } catch (err) {
         return { ...classifyWriteError(err), completed: [] };
@@ -1660,7 +1655,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   }
 
   /**
-   * The steps after the add, in order, stopping at the first that fails,
+   * The steps not yet `done`, in order, stopping at the first that fails,
    * then the account as they left it. The password step also clears
    * PASSWD_NOTREQD, and enabling leaves exactly a normal account, so a
    * new account carries no flags nobody chose.
@@ -1682,8 +1677,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         ...(fingerprint ? { fingerprint } : {}),
       };
     };
-    let groups: UserCreateGroups | undefined;
+    let groups: GroupsStepResult | undefined;
     for (const step of steps) {
+      if (completed.includes(step)) continue;
       if (step === 'groups') {
         groups = await this.addToGroups(client, dn, finish.groups);
         const failed = groups.failed;
@@ -1732,13 +1728,17 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     client: Client,
     dn: string,
     groupDns: readonly string[],
-  ): Promise<UserCreateGroups> {
-    const done: UserCreateGroups = { added: [], failed: [] };
+  ): Promise<GroupsStepResult> {
+    const done: GroupsStepResult = { added: [], failed: [], missing: [] };
     for (const groupDn of groupDns) {
       try {
         await this.setMember(client, groupDn, dn, true);
         done.added.push(groupDn);
       } catch (err) {
+        if ((err as { name?: string }).name === 'NoSuchObjectError') {
+          done.missing.push(groupDn);
+          continue;
+        }
         const { reason, errorMessage } = classifyWriteError(err);
         done.failed.push({
           dn: groupDn,

@@ -58,7 +58,7 @@ export const USER_CREATE_STEPS = ['create', 'password', 'groups', 'enable'] as c
 export type UserCreateStep = (typeof USER_CREATE_STEPS)[number];
 
 /** The steps a create runs: less the groups when there are none, and enabling when it stays disabled. */
-export function plannedSteps(enabled: boolean, groups = false): UserCreateStep[] {
+export function plannedSteps(enabled: boolean, groups: boolean): UserCreateStep[] {
   return USER_CREATE_STEPS.filter((s) => (s !== 'enable' || enabled) && (s !== 'groups' || groups));
 }
 
@@ -101,6 +101,8 @@ const optionalLines = (max: number) =>
  * The organisation attributes copying a user carries over: ADUC's
  * (department, company, manager and the address but the street) and
  * title, office and street, which a template user's team shares too.
+ * The country is three attributes (c, co, countryCode) that travel
+ * together, so Entra Connect sees one country.
  */
 export const NEW_USER_ORGANISATION_FIELDS = [
   'title',
@@ -113,6 +115,7 @@ export const NEW_USER_ORGANISATION_FIELDS = [
   'postalCode',
   'c',
   'co',
+  'countryCode',
 ] as const;
 export type NewUserOrganisationField = (typeof NEW_USER_ORGANISATION_FIELDS)[number];
 
@@ -132,10 +135,21 @@ export const newUserOrganisationSchema = z
     c: optionalText(3),
     /** The country's name. */
     co: optionalText(128),
+    /** The country's ISO 3166 number. */
+    countryCode: optionalText(3).refine((v) => v === null || /^\d+$/.test(v), {
+      message: 'must be a number',
+    }),
     /** The manager's objectGUID. */
     managerId: z.guid().nullable().optional(),
   })
-  .strict();
+  .strict()
+  // Only what has a value is written; the rest is left unset.
+  .transform(({ managerId, ...fields }) => ({
+    attributes: Object.fromEntries(Object.entries(fields).filter(([, v]) => v)) as Partial<
+      Record<NewUserOrganisationField, string>
+    >,
+    managerId: managerId ?? null,
+  }));
 export type NewUserOrganisation = z.input<typeof newUserOrganisationSchema>;
 
 /** More than any template user is in; it bounds one create's writes. */
@@ -251,6 +265,8 @@ export interface UserCreateResponse {
   completed: UserCreateStep[];
   /** What's left, in order; empty when the account is finished. */
   remaining: UserCreateStep[];
+  /** Groups the create was to add the account to that no longer exist, so were left out. */
+  groupsSkipped?: string[];
   /** Why the first remaining step failed, or null. */
   failure: { step: UserCreateStep; message: string } | null;
 }

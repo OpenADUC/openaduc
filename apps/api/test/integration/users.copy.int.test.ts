@@ -20,7 +20,7 @@ const ENGINEERING_DN = 'CN=Engineering,OU=Groups,OU=OpenADUC Test,DC=openaduc,DC
 // Outside OU=OpenADUC Test, so oa.operator can't change its members, and
 // flagged the way AdminSDHolder flags an administrative group.
 const ADMINS_DN = 'CN=Copy Test Admins,CN=Users,DC=openaduc,DC=test';
-const NEW_SAMS = ['vera.vance', 'walt.west', 'xena.xu'];
+const NEW_SAMS = ['vera.vance', 'walt.west', 'xena.xu', 'yara.york', 'zane.zhu'];
 
 // What Alice has that a copy takes, and what it doesn't.
 const ALICE_ORGANISATION: Record<string, string> = {
@@ -31,6 +31,7 @@ const ALICE_ORGANISATION: Record<string, string> = {
   postalCode: 'LS1 5AB',
   c: 'GB',
   co: 'United Kingdom',
+  countryCode: '826',
   manager: BOB_DN,
 };
 const ALICE_OWN: Record<string, string> = {
@@ -91,7 +92,9 @@ const removeNewUsers = () =>
 /** Give Alice, or take back, what a template user has besides her fixture's. */
 async function setAlice(set: boolean): Promise<void> {
   for (const [attribute, value] of Object.entries({ ...ALICE_ORGANISATION, ...ALICE_OWN })) {
-    await setUserAttribute('alice.anders', attribute, set ? [value] : []);
+    // AD won't delete countryCode; 0 is its "no country".
+    const unset = attribute === 'countryCode' ? ['0'] : [];
+    await setUserAttribute('alice.anders', attribute, set ? [value] : unset);
   }
 }
 
@@ -195,6 +198,7 @@ describe('copying a user', () => {
       postalCode: 'LS1 5AB',
       c: 'GB',
       co: 'United Kingdom',
+      countryCode: '826',
     });
     expect(copy.manager).toMatchObject({ distinguishedName: BOB_DN, displayName: 'Bob Baker' });
     // Direct groups only: not All Staff (through Engineering), nor Domain
@@ -209,6 +213,13 @@ describe('copying a user', () => {
       ['OpenADUC Auditors', { reason: 'role', role: 'auditor' }],
     ]);
     for (const value of Object.values(ALICE_OWN)) expect(res.body).not.toContain(value);
+    expect((await auditRows('user.view')).at(-1)).toMatchObject({ target_id: alice });
+  });
+
+  it('is only for those who may create users', async () => {
+    const auditor = api.client();
+    await auditor.signIn(api, 'oa.auditor');
+    expect((await auditor.get(`/api/users/${alice}/copy`)).statusCode).toBe(403);
   });
 
   it('is a 404 for a user that isn’t there', async () => {
@@ -315,6 +326,18 @@ describe('copying a user', () => {
           metadata_json: expect.objectContaining({ groupId: admins }),
         }),
       ]);
+      expect(await auditRows('user.copied')).toEqual([
+        expect.objectContaining({
+          result: 'success',
+          target_id: alice,
+          correlation_id: create!.correlation_id,
+          metadata_json: {
+            copyId: created.id,
+            copyDn: `CN=Vera Vance,${STAFF_OU}`,
+            copySamAccountName: 'vera.vance',
+          },
+        }),
+      ]);
     });
 
     it('needs group membership rights to retry the group', async () => {
@@ -357,15 +380,98 @@ describe('copying a user', () => {
     });
   });
 
-  it('copies without groups when none are left ticked', async () => {
-    const res = await operator.post('/api/users', copyOfAlice('walt.west', []));
+  it('copies in one call when every group goes in, and enables the account', async () => {
+    const { engineering } = groupIds();
 
-    expect(res.json<UserCreateResponse>()).toMatchObject({
-      completed: ['create', 'password', 'enable'],
+    const res = await operator.post('/api/users', copyOfAlice('walt.west', [engineering]));
+
+    expect(res.statusCode, res.body).toBe(200);
+    const created = res.json<UserCreateResponse>();
+    expect(created).toMatchObject({
+      completed: ['create', 'password', 'groups', 'enable'],
       remaining: [],
+      failure: null,
     });
     const entry = await directoryUser('walt.west');
-    expect(entry).toMatchObject({ department: 'Engineering', company: 'OpenADUC Ltd' });
-    expect(memberOf(entry)).toEqual([]);
+    expect(entry).toMatchObject({ department: 'Engineering', ...ALICE_ORGANISATION });
+    expect(entry?.userAccountControl).toBe('512');
+    expect(memberOf(entry)).toEqual([ENGINEERING_DN.toLowerCase()]);
+    const create = (await auditRows('user.create')).at(-1)!;
+    expect(create).toMatchObject({
+      result: 'success',
+      target_id: created.id,
+      metadata_json: expect.objectContaining({
+        copiedFrom: expect.objectContaining({ id: alice }),
+      }),
+    });
+    expect((await auditRows('user.group.add')).at(-1)).toMatchObject({
+      result: 'success',
+      target_id: created.id,
+      correlation_id: create.correlation_id,
+    });
+    expect((await auditRows('user.copied')).at(-1)).toMatchObject({
+      target_id: alice,
+      correlation_id: create.correlation_id,
+      metadata_json: expect.objectContaining({ copyId: created.id }),
+    });
+    const groups = (await operator.get(`/api/users/${created.id}`)).json<{
+      user: { groupMemberships: { id: string; direct: boolean }[] };
+    }>().user.groupMemberships;
+    expect(groups).toContainEqual(expect.objectContaining({ id: engineering, direct: true }));
+  });
+
+  describe('a group still to add that no longer exists', () => {
+    const unfinished = async (sam: string) => {
+      const { engineering, admins } = groupIds();
+      const res = await operator.post('/api/users', copyOfAlice(sam, [engineering, admins]));
+      const created = res.json<UserCreateResponse>();
+      expect(created.remaining).toEqual(['groups', 'enable']);
+      return created.id!;
+    };
+    const finish = (id: string) =>
+      operator.post(`/api/users/${id}/finish-create`, { enabled: true });
+    const setAdminsDeletedInCache = (deleted: boolean) =>
+      api.app.db
+        .updateTable('group_cache_records')
+        .set({ deleted_at: deleted ? new Date().toISOString() : null })
+        .where('object_guid', '=', groupIds().admins)
+        .execute();
+
+    it('is left out once the cache has seen it go, and the rest finishes', async () => {
+      const { admins } = groupIds();
+      const id = await unfinished('yara.york');
+      await setAdminsDeletedInCache(true);
+
+      const res = await finish(id);
+      await setAdminsDeletedInCache(false);
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json<UserCreateResponse>()).toMatchObject({
+        completed: ['create', 'password', 'groups', 'enable'],
+        remaining: [],
+        groupsSkipped: [admins],
+      });
+      expect((await directoryUser('yara.york'))?.userAccountControl).toBe('512');
+      expect((await auditRows('user.create.finish')).at(-1)).toMatchObject({
+        result: 'success',
+        target_id: id,
+        after_json: expect.objectContaining({ groupsSkipped: [admins] }),
+      });
+    });
+
+    it('is left out when the directory no longer has it, though the cache still does', async () => {
+      const { admins } = groupIds();
+      const id = await unfinished('zane.zhu');
+      await asAdministrator((client) => client.del(ADMINS_DN));
+
+      const res = await finish(id);
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json<UserCreateResponse>()).toMatchObject({
+        remaining: [],
+        groupsSkipped: [admins],
+      });
+      expect((await directoryUser('zane.zhu'))?.userAccountControl).toBe('512');
+    });
   });
 });

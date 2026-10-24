@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
 import { suggestNames, type NamingDeviation, type NamingSuggestion } from './naming.js';
-import type { UserCopySource } from './schemas/userCreate.js';
+import { userCreateRequestSchema, type UserCopySource } from './schemas/userCreate.js';
 import {
   RANDOM_MODE_MUST_CHANGE_NOTE,
   approvalKey,
@@ -205,6 +205,7 @@ describe('copying a user', () => {
       postalCode: 'LS1 5AB',
       c: 'GB',
       co: 'United Kingdom',
+      countryCode: '826',
     },
     manager: { id: BOB, distinguishedName: `CN=Bob Baker,${OU}`, displayName: 'Bob Baker' },
     groups: [
@@ -284,14 +285,26 @@ describe('copying a user', () => {
         postalCode: 'LS1 5AB',
         c: 'GB',
         co: 'United Kingdom',
+        countryCode: '826',
         managerId: BOB,
       },
       groups: [ENGINEERING, ALL_STAFF],
       copiedFrom: ALICE,
     });
-    // An attribute the source doesn't have isn't written at all.
-    expect(plan.request?.organisation).not.toHaveProperty('st');
     expect(plan.groups).toEqual([ENGINEERING, ALL_STAFF]);
+    // What the source doesn't have isn't written at all.
+    const parsed = userCreateRequestSchema.parse(plan.request);
+    expect(parsed.organisation?.attributes).not.toHaveProperty('st');
+    expect(parsed.organisation?.attributes).toMatchObject({ c: 'GB', countryCode: '826' });
+    expect(parsed.organisation?.managerId).toBe(BOB);
+  });
+
+  it('needs an OU picked when the source isn’t in one', () => {
+    const plan = planNewUser(copyOf({ ouDn: null }), ctx());
+    expect(plan.request).toBeNull();
+    expect(plan.blockers).toEqual([
+      { field: 'ouDn', message: expect.stringContaining('isn’t in an OU') },
+    ]);
   });
 
   it('adds only the groups left ticked, privileged ones only when ticked on purpose', () => {
