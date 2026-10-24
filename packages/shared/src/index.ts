@@ -4,6 +4,7 @@ export * from './schemas/auth.js';
 export * from './elevatedSession.js';
 export * from './schemas/freshness.js';
 export * from './schemas/user.js';
+export * from './schemas/bulkJob.js';
 export * from './schemas/deletedUser.js';
 export * from './schemas/group.js';
 export * from './schemas/groupPolicy.js';

@@ -15,6 +15,7 @@ const querySchema = z.object({
   result: z.enum(['success', 'failure', 'denied']).optional(),
   sourceIp: z.string().optional(),
   correlationId: z.string().optional(),
+  bulkJobId: z.coerce.number().int().positive().optional(),
 });
 
 export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
@@ -57,6 +58,7 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
       if (q.result) baseQuery = baseQuery.where('result', '=', q.result);
       if (q.sourceIp) baseQuery = baseQuery.where('source_ip', '=', q.sourceIp);
       if (q.correlationId) baseQuery = baseQuery.where('correlation_id', '=', q.correlationId);
+      if (q.bulkJobId) baseQuery = baseQuery.where('bulk_job_id', '=', String(q.bulkJobId));
 
       const [rows, totalRow] = await Promise.all([
         baseQuery
@@ -90,6 +92,7 @@ export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
           before: r.before_json,
           after: r.after_json,
           metadata: r.metadata_json,
+          bulkJobId: r.bulk_job_id === null ? null : String(r.bulk_job_id),
         })),
         page: q.page,
         pageSize: q.pageSize,

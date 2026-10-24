@@ -49,18 +49,19 @@ A request from the SPA hits the web container's nginx, which proxies `/api/*` to
 
 Key tables:
 
-| Table                                                                 | Purpose                                                                                                                    |
-| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `directory_providers`                                                 | One row per configured directory. LDAPS URLs, base DN, encrypted bind credentials.                                         |
-| `admin_sessions`                                                      | One row per signed-in user session. Stores a snapshot of capabilities at sign-in time.                                     |
-| `elevated_sessions`                                                   | Step-up sessions. Child of an admin session, ends when idle or at an absolute lifetime, write-only capability subset.      |
-| `audit_events`                                                        | Append-only. Database triggers reject `UPDATE`, `DELETE`, `TRUNCATE`. Indexed on timestamp, actor, target, correlation id. |
-| `user_cache_records`, `group_cache_records`, `computer_cache_records` | Local cache of LDAP objects, refreshed by sync tasks. Search/list endpoints read from these for speed.                     |
-| `user_group_memberships`                                              | Materialized user→group edges for fast membership queries.                                                                 |
-| `group_group_memberships`                                             | Materialized group→group edges (groups nested directly in other groups), rebuilt alongside `user_group_memberships`.       |
-| `directory_ous`                                                       | OU hierarchy cache.                                                                                                        |
-| `directory_sync_tasks`                                                | One row per (directory, task type). Schedule, last run, last status, cursor for delta syncs.                               |
-| `app_settings`                                                        | Operational key/value config (timeouts, schedules, branding).                                                              |
+| Table                                                                 | Purpose                                                                                                                              |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `directory_providers`                                                 | One row per configured directory. LDAPS URLs, base DN, encrypted bind credentials.                                                   |
+| `admin_sessions`                                                      | One row per signed-in user session. Stores a snapshot of capabilities at sign-in time.                                               |
+| `elevated_sessions`                                                   | Step-up sessions. Child of an admin session, ends when idle or at an absolute lifetime, write-only capability subset.                |
+| `audit_events`                                                        | Append-only. Database triggers reject `UPDATE`, `DELETE`, `TRUNCATE`. Indexed on timestamp, actor, target, correlation id, bulk job. |
+| `bulk_jobs`, `bulk_job_rows`                                          | One row per bulk job (action, status, operator, the session it writes on), one per object it acts on (status, error, before/after).  |
+| `user_cache_records`, `group_cache_records`, `computer_cache_records` | Local cache of LDAP objects, refreshed by sync tasks. Search/list endpoints read from these for speed.                               |
+| `user_group_memberships`                                              | Materialized user→group edges for fast membership queries.                                                                           |
+| `group_group_memberships`                                             | Materialized group→group edges (groups nested directly in other groups), rebuilt alongside `user_group_memberships`.                 |
+| `directory_ous`                                                       | OU hierarchy cache.                                                                                                                  |
+| `directory_sync_tasks`                                                | One row per (directory, task type). Schedule, last run, last status, cursor for delta syncs.                                         |
+| `app_settings`                                                        | Operational key/value config (timeouts, schedules, branding).                                                                        |
 
 The cache tables are the answer to "why is search so fast" — every UI list view hits Postgres, not LDAP. Writes go to LDAP first, then trigger a refresh of the affected cache rows.
 
@@ -78,6 +79,8 @@ All LDAP/AD access goes through a `Provider` interface (`apps/api/src/providers/
 Sync work runs **in-process** in the API container — there is no separate worker process. A small scheduler in [`services/syncTasks/scheduler.ts`](../apps/api/src/services/syncTasks/scheduler.ts) ticks periodically, picks the next due task per directory from `directory_sync_tasks`, and dispatches to a runner under `services/syncTasks/runners/` (one per task type — `usersDelta`, `usersFull`, `groupsDelta`, `domainPolicy`, `usersLocked`, etc.).
 
 Each task type has a default schedule (interval, hourly, monthly) and a watchdog timeout. Failures bump a consecutive-failure counter; crossing a per-task threshold raises an operator notification.
+
+Bulk jobs run in-process too ([`services/bulkJobs.ts`](../apps/api/src/services/bulkJobs.ts)). Starting one writes a `bulk_jobs` row and a `bulk_job_rows` row per object, then the process that took the request runs it, a few rows at a time, each row through the same write and audit as the single-object route. A job writes as its operator, with the password cached for their elevated session, so it can only run in a process holding that password; that is also why it isn't a graphile-worker job, whose payload would have to carry the password through Postgres. While a job runs it beats a heartbeat; a job whose heartbeat stops (the process died) is paused as interrupted by the next sweep, its in-flight rows failed so the operator can check and retry them. See [security](security.md#step-up-authentication) for how a job pauses when the elevated session ends.
 
 Choosing in-process over a separate worker keeps deployment simple (one API container does everything) and avoids the operational overhead of a queue at this scale. If a future workload needs queue semantics, the abstraction is small enough to lift out.
 
