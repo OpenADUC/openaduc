@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  IMPORT_JOB_ACTION,
+  bulkJobResponseSchema,
   importLookupRequestSchema,
   importRequestSchema,
+  importRunRequestSchema,
   isDnWithin,
   parseDn,
   placementRulesSaveSchema,
+  type CheckedImportRequest,
   type ImportCheckResponse,
+  type ImportJobResponse,
   type ImportLookupResponse,
+  type ImportResultsDownload,
   type PlacementRulesResponse,
   type PlacementRulesSaveResponse,
 } from '@openaduc/shared';
@@ -15,15 +21,35 @@ import { z } from 'zod';
 import { BadRequest, NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedGroupsById } from '../services/groupCache.js';
-import { checkImport, loadPlacementRules, savePlacementRules } from '../services/userImport.js';
+import { BulkJobRequestError, refuseBulkRequest } from '../services/bulkJobs/errors.js';
+import { takePasswords } from '../services/importPasswords.js';
+import { importJobRows, resultsCsv, resultsSummary } from '../services/importResults.js';
+import {
+  checkImport,
+  importPlan,
+  loadPlacementRules,
+  savePlacementRules,
+} from '../services/userImport.js';
+import { actorFrom, requireFor } from './bulkJobs.js';
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
+
+const describeCheck = (problems: ImportCheckResponse['problems']) =>
+  `The import has changed since the final check, or the directory has: ${problems
+    .slice(0, 3)
+    .map((p) => p.message)
+    .join(
+      ' ',
+    )}${problems.length > 3 ? ` (and ${problems.length - 3} more)` : ''} Run the final check again.`;
 
 const lower = (v: string) => v.toLowerCase();
 
 // Importing users from a spreadsheet. The wizard keeps its draft in the
 // browser; the server answers lookups, runs the final check right before
-// the run, and stores the placement rules when the import runs.
+// the run, and stores the placement rules when the import runs. Running
+// it starts a bulk job (services/bulkJobs/importRows.ts) whose results
+// page reads the job back, and whose results CSV hands out the passwords
+// once.
 export async function registerUserImportRoutes(app: FastifyInstance): Promise<void> {
   async function directoryOf(req: FastifyRequest) {
     const { id } = idParamSchema.parse(req.params);
@@ -117,31 +143,164 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     },
   });
 
+  /** The final check, as the operator may run it: what the run takes, against the directory now. */
+  async function finalCheck(req: FastifyRequest, body: CheckedImportRequest) {
+    if (body.rows.some((r) => r.groups?.length)) {
+      await app.requireCapability(req, 'write:group.membership');
+    }
+    const provider = await app.services.providers.buildForRequest(req);
+    const directory = await app.services.directoryConfig.getById(provider.id);
+    if (!directory) throw NotFound('directory not found');
+    const result = await checkImport(
+      {
+        db: app.db,
+        provider,
+        directory,
+        roleGroups: await app.services.authorization.roleGroups(),
+        canGrantRoles: app.services.authorization.has(
+          req.actor!.session.capabilities,
+          'configure:security',
+        ),
+      },
+      body,
+    );
+    return { result, directory };
+  }
+
   // ---- POST /api/users/import/check -------------------------------------
   // Nothing is written, but it's the run's gate, so it takes what the run takes.
   app.post('/api/users/import/check', {
     config: { policy: { capability: 'write:user.create', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<ImportCheckResponse> => {
       const body = importRequestSchema.parse(req.body);
-      if (body.rows.some((r) => r.groups?.length)) {
-        await app.requireCapability(req, 'write:group.membership');
-      }
-      const provider = await app.services.providers.buildForRequest(req);
-      const directory = await app.services.directoryConfig.getById(provider.id);
-      if (!directory) throw NotFound('directory not found');
-      return checkImport(
-        {
-          db: app.db,
-          provider,
-          directory,
-          roleGroups: await app.services.authorization.roleGroups(),
-          canGrantRoles: app.services.authorization.has(
-            req.actor!.session.capabilities,
-            'configure:security',
-          ),
-        },
-        body,
-      );
+      return (await finalCheck(req, body)).result;
+    },
+  });
+
+  // ---- POST /api/users/import/run ---------------------------------------
+  // The final check again, then the import as a job the operator can leave
+  // and come back to. Refused, with nothing written, if the check finds
+  // anything now.
+  app.post('/api/users/import/run', {
+    config: { policy: { capability: 'write:user.create', stepUp: true, directory: 'caller' } },
+    handler: async (req, reply) => {
+      const body = importRunRequestSchema.parse(req.body);
+      const { result, directory } = await finalCheck(req, body.import);
+      const jobs = app.services.bulkJobs;
+      const id = await (async () => {
+        if (result.problems.length > 0) {
+          throw new BulkJobRequestError('check_failed', describeCheck(result.problems));
+        }
+        const guarded = result.protectedGroups[0];
+        if (guarded && !body.acknowledgeProtected) {
+          throw new BulkJobRequestError(
+            'protected_unacknowledged',
+            `Adding users to ${guarded.name} gives them admin rights in AD. Confirm that they need them.`,
+          );
+        }
+        return jobs.create(
+          actorFrom(req),
+          IMPORT_JOB_ACTION,
+          importPlan(body.import, directory.newUsers.phoneCountry),
+          (subject) => requireFor(app, req, jobs.handlers[IMPORT_JOB_ACTION], subject),
+        );
+      })().catch(refuseBulkRequest);
+      return reply
+        .status(202)
+        .send(bulkJobResponseSchema.parse({ job: await jobs.describeOne(id) }));
+    },
+  });
+
+  /** An import job of the operator's own, in this directory. */
+  async function ownImport(req: FastifyRequest) {
+    const { id } = idParamSchema.parse(req.params);
+    const job = await app.services.bulkJobs.find(
+      String(id),
+      req.directoryId!,
+      req.actor!.session.actorUserId,
+    );
+    if (!job || job.action !== IMPORT_JOB_ACTION) throw NotFound('import not found');
+    return job;
+  }
+
+  // ---- GET /api/users/import/jobs/:id -----------------------------------
+  // The import's results page, polled while it runs. Like any bulk job,
+  // it's its operator's own; others see it through the audit log.
+  app.get('/api/users/import/jobs/:id', {
+    config: {
+      policy: { capability: null, stepUp: false, directory: 'caller' },
+      rateLimit: { max: 600, timeWindow: '1 minute' },
+    },
+    handler: async (req): Promise<ImportJobResponse> => {
+      const job = await ownImport(req);
+      const rows = await importJobRows(app.db, job.id);
+      return {
+        job: await app.services.bulkJobs.describeOne(job.id),
+        rows: rows.map(({ rowId: _, ...row }) => row),
+        results: resultsSummary(job),
+      };
+    },
+  });
+
+  // ---- POST /api/users/import/jobs/:id/results --------------------------
+  // The results CSV, once the job has stopped. In generate and set modes
+  // it holds the passwords: it can be downloaded once, within
+  // IMPORT_PASSWORDS_HELD_HOURS, and taking it purges them. Each download
+  // is audited with the job's id, never with a password.
+  app.post('/api/users/import/jobs/:id/results', {
+    config: { policy: { capability: 'write:user.create', stepUp: true, directory: 'caller' } },
+    handler: async (req, reply): Promise<ImportResultsDownload> => {
+      const job = await ownImport(req);
+      const described = await app.services.bulkJobs.describeOne(job.id);
+      const download = await (async () => {
+        if (
+          described.status === 'queued' ||
+          described.status === 'running' ||
+          described.status === 'paused' ||
+          described.counts.running > 0
+        ) {
+          throw new BulkJobRequestError(
+            'job_running',
+            'The import hasn’t stopped. Let it finish, or stop it, then download its results.',
+          );
+        }
+        const { passwords } = resultsSummary(job);
+        if (passwords === 'downloaded') {
+          throw new BulkJobRequestError(
+            'results_downloaded',
+            'The results, with their passwords, have been downloaded already. Reset the passwords of anyone who didn’t get theirs.',
+          );
+        }
+        if (passwords === 'expired') {
+          throw new BulkJobRequestError(
+            'passwords_expired',
+            'The passwords were purged, unseen, after 24 hours. Reset the new accounts’ passwords.',
+          );
+        }
+        const rows = await importJobRows(app.db, job.id);
+        await app.services.audit.recordEvent({
+          ...auditContextFromRequest(req),
+          action: 'import.results.download',
+          result: 'success',
+          actorAuthMethod: 'ad-password',
+          providerId: job.provider_id,
+          targetType: 'user',
+          bulkJobId: String(job.id),
+          metadata: { rows: rows.length, passwords: passwords === 'held' },
+        });
+        if (passwords === 'none') return resultsCsv(job, rows, null);
+        const taken = await takePasswords(app.db, job.id);
+        if (!taken) {
+          throw new BulkJobRequestError(
+            'results_downloaded',
+            'The results, with their passwords, have been downloaded already.',
+          );
+        }
+        return resultsCsv(job, rows, taken);
+      })().catch(refuseBulkRequest);
+      // It can hold credentials: not for any cache between here and the browser.
+      reply.header('Cache-Control', 'no-store');
+      return download;
     },
   });
 }

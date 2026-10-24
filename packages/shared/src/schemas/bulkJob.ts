@@ -5,7 +5,7 @@ import type { Capability } from '../capabilities.js';
 import { moveRequestSchema, ouRefSchema } from './ou.js';
 import { accountExpiryRequestSchema, CONTROL_CHARS } from './user.js';
 import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
-import { groupPrivilegeSchema } from './userCreate.js';
+import { groupPrivilegeSchema, PASSWORD_MODES } from './userCreate.js';
 
 /** What a bulk job does to each of its rows; also each row's audit action. */
 export const BULK_JOB_ACTIONS = [
@@ -40,9 +40,20 @@ export const BULK_REVERT_ACTIONS = {
 } as const satisfies Partial<Record<BulkJobAction, string>>;
 export type BulkRevertableAction = keyof typeof BULK_REVERT_ACTIONS;
 
-/** Every action a job has: a bulk action's, or a revert's, which only reverts start. */
+/**
+ * An import is a job too, creating its rows' accounts; it starts from the
+ * import's own route, after the final check, rather than at bulkJobPath.
+ */
+export const IMPORT_JOB_ACTION = 'user.create';
+export type ImportJobAction = typeof IMPORT_JOB_ACTION;
+
+/** The jobs a handler runs: a bulk action's, or an import's. */
+export type BulkJobHandledAction = BulkJobAction | ImportJobAction;
+
+/** Every action a job has: a bulk action's, an import's, or a revert's, which only reverts start. */
 export const BULK_JOB_KINDS = [
   ...BULK_JOB_ACTIONS,
+  IMPORT_JOB_ACTION,
   'user.passwordMustChange.clear',
   'user.passwordNeverExpires.set',
 ] as const;
@@ -403,6 +414,7 @@ export const BULK_JOB_CAPABILITIES = {
   'user.accountExpiry.set': BULK_ACCOUNT_CAPABILITIES.accountExpiry,
   'user.passwordMustChange.set': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
   'user.passwordNeverExpires.clear': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
+  'user.create': 'write:user.create',
   'user.passwordMustChange.clear': BULK_ACCOUNT_CAPABILITIES.mustChangePassword,
   'user.passwordNeverExpires.set': BULK_ACCOUNT_CAPABILITIES.clearPasswordNeverExpires,
 } as const satisfies Record<BulkJobKind, Capability>;
@@ -518,6 +530,14 @@ export const bulkJobSubjectSchema = z.object({
     .optional(),
   ou: ouRefSchema.optional(),
   expiresAt: z.string().nullable().optional(),
+  /** How an import sets its accounts up; never the password itself. */
+  import: z
+    .object({
+      passwordMode: z.enum(PASSWORD_MODES),
+      mustChange: z.boolean(),
+      enabled: z.boolean(),
+    })
+    .optional(),
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 
@@ -552,7 +572,8 @@ export const bulkJobResponseSchema = z.object({ job: bulkJobSchema });
 export const bulkJobListResponseSchema = z.object({ jobs: z.array(bulkJobSchema) });
 
 export const bulkJobRowSchema = z.object({
-  targetId: z.string(),
+  /** Null for an import's row until its account is created. */
+  targetId: z.string().nullable(),
   targetName: z.string().nullable(),
   status: z.enum(BULK_JOB_ROW_STATUSES),
   errorCode: z.string().nullable(),
@@ -611,7 +632,10 @@ export function revertRefusal(
   if (!canRevert(job.action)) {
     return {
       code: 'not_revertible',
-      message: 'An unlock can’t be reverted: AD can’t lock an account again.',
+      message:
+        job.action === IMPORT_JOB_ACTION
+          ? 'An import can’t be reverted: it created the accounts. Disable or delete them instead.'
+          : 'An unlock can’t be reverted: AD can’t lock an account again.',
     };
   }
   if (

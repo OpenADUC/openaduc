@@ -4,6 +4,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { sql, type Kysely, type Selectable, type Transaction } from 'kysely';
 import {
   BULK_REVERT_ACTIONS,
+  IMPORT_JOB_ACTION,
   bulkJobRevertRequestSchema,
   canRevert,
   revertedAction,
@@ -12,7 +13,7 @@ import {
   type BulkRevertableAction,
   type AuditBulkSummary,
   type BulkJob,
-  type BulkJobAction,
+  type BulkJobHandledAction,
   type BulkJobCounts,
   type BulkJobPauseReason,
   type BulkJobRevertPreview,
@@ -31,11 +32,12 @@ import {
 import type { AuditEventInput, AuditService } from '../audit.js';
 import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
+import { holdPassword, purgeExpiredPasswords } from '../importPasswords.js';
 import type { SessionsService } from '../sessions.js';
 import type { MembershipCacheDeps } from '../groupMembershipWrite.js';
 import { BulkJobRequestError } from './errors.js';
 import {
-  BULK_JOB_HANDLERS,
+  BULK_ACTION_HANDLERS,
   type BulkJobHandlers,
   type BulkJobRowInput,
   type BulkRowOutcome,
@@ -49,7 +51,13 @@ import {
   type BulkRevertRunner,
   type RevertPlan,
 } from './reverts.js';
+import { importHandler } from './importRows.js';
 import { failureMessage } from './rowMessages.js';
+
+export const BULK_JOB_HANDLERS: BulkJobHandlers = {
+  ...BULK_ACTION_HANDLERS,
+  [IMPORT_JOB_ACTION]: importHandler(),
+};
 
 export type JobRecord = Selectable<BulkJobsTable>;
 type RowRecord = Selectable<BulkJobRowsTable>;
@@ -82,6 +90,8 @@ const STALE_AFTER = sql<Date>`now() - interval '60 seconds'`;
 const SWEEP_MS = 30_000;
 const STOP_WAIT_MS = 4_000;
 const INSERT_CHUNK = 1_000;
+/** How long a worker waits for the row a pending row waits for. */
+const WAIT_MS = 200;
 /** The rows a retry runs again: those with changes still to make. */
 const RETRIED: BulkJobRowStatus[] = ['failed', 'partial'];
 /** A job in these may still write; one revert of a job at a time may be (bulk_jobs_one_open_revert_uq). */
@@ -178,8 +188,12 @@ export class BulkJobService {
 
   start(): void {
     if (this.sweepHandle) return;
-    void this.recoverStale();
-    this.sweepHandle = setInterval(() => void this.recoverStale(), SWEEP_MS);
+    const sweep = () => {
+      void this.recoverStale();
+      void this.purgeExpiredPasswords();
+    };
+    sweep();
+    this.sweepHandle = setInterval(sweep, SWEEP_MS);
     this.sweepHandle.unref?.();
   }
 
@@ -205,7 +219,7 @@ export class BulkJobService {
    */
   async create(
     actor: JobActor,
-    action: BulkJobAction,
+    action: BulkJobHandledAction,
     body: unknown,
     authorize?: (subject: BulkJobSubject | null) => Promise<void>,
   ): Promise<string> {
@@ -215,7 +229,7 @@ export class BulkJobService {
     const subject =
       (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
     await authorize?.(subject);
-    return this.insert(actor, action, subject, rows);
+    return this.insert(actor, action, subject, rows, undefined, handler.secret?.(request) ?? null);
   }
 
   /**
@@ -306,7 +320,7 @@ export class BulkJobService {
   /** What runs a job's rows: its action's handler, or for a revert, what puts them back. */
   runner(job: Pick<JobRecord, 'action' | 'reverts_job_id'>): BulkRevertRunner {
     return job.reverts_job_id === null
-      ? this.handlers[job.action as BulkJobAction]
+      ? this.handlers[job.action as BulkJobHandledAction]
       : revertRunner(revertedAction(job.action));
   }
 
@@ -321,17 +335,19 @@ export class BulkJobService {
       /** Run in the transaction that stores the job, first; throws to refuse it. */
       guard: (trx: Transaction<DB>) => Promise<void>;
     },
+    /** The one secret every row uses, held encrypted for the job. */
+    secret: string | null = null,
   ): Promise<string> {
-    const cached = await this.db
-      .selectFrom('user_cache_records')
-      .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
-      .where('provider_id', '=', actor.directoryId)
-      .where(
-        'object_guid',
-        'in',
-        rows.map((r) => r.targetId),
-      )
-      .execute();
+    const targets = rows.flatMap((r) => (r.targetId === null ? [] : [r.targetId]));
+    const cached =
+      targets.length === 0
+        ? []
+        : await this.db
+            .selectFrom('user_cache_records')
+            .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
+            .where('provider_id', '=', actor.directoryId)
+            .where('object_guid', 'in', targets)
+            .execute();
     const byId = new Map(cached.map((u) => [u.object_guid, u]));
 
     const jobId = await this.db.transaction().execute(async (trx) => {
@@ -346,26 +362,30 @@ export class BulkJobService {
           subject_json: subject ? JSON.stringify(subject) : null,
           reverts_job_id: revert?.revertsJobId ?? null,
         })
-        .returning('id')
+        .returning(['id', 'created_at'])
         .executeTakeFirstOrThrow();
       for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
         await trx
           .insertInto('bulk_job_rows')
           .values(
             rows.slice(i, i + INSERT_CHUNK).map((row, j) => {
-              const user = byId.get(row.targetId);
+              const user = row.targetId === null ? undefined : byId.get(row.targetId);
               return {
                 job_id: job.id,
                 ordinal: i + j,
                 target_id: row.targetId,
                 target_dn: user?.distinguished_name ?? null,
-                target_name: user ? (user.display_name ?? user.sam_account_name) : null,
+                target_name: user
+                  ? (user.display_name ?? user.sam_account_name)
+                  : (row.targetName ?? null),
                 input_json: row.input === null ? null : JSON.stringify(row.input),
+                after_ordinal: row.after ?? null,
               };
             }),
           )
           .execute();
       }
+      if (secret !== null) await holdPassword(trx, job, null, secret);
       return job.id;
     });
 
@@ -580,6 +600,15 @@ export class BulkJobService {
     }
   }
 
+  /** Delete import passwords held past their time; the sweep runs it. */
+  async purgeExpiredPasswords(): Promise<void> {
+    try {
+      await purgeExpiredPasswords(this.db);
+    } catch (err) {
+      this.logger.error({ err }, 'purging expired import passwords failed');
+    }
+  }
+
   private kick(jobId: string): void {
     if (this.stopping) return;
     // A run still winding down goes first; the next one only claims the job
@@ -629,7 +658,11 @@ export class BulkJobService {
           }
           if (stopped.pause) return;
           const row = await this.claimRow(jobId, token);
-          if (!row) return;
+          if (!row) {
+            if (!(await this.waiting(jobId, token))) return;
+            await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
+            continue;
+          }
           await this.runRow(job, token, provider, row, writeCtx, (reason) => {
             stopped.pause = reason;
           });
@@ -696,7 +729,11 @@ export class BulkJobService {
     };
   }
 
-  /** The next pending row, marked running for this run; null once none are left or the run lost the job. */
+  /**
+   * The next pending row, marked running for this run; null once none are
+   * left, the run lost the job, or those left wait for a row still to
+   * finish (the one creating their manager).
+   */
   private async claimRow(jobId: string, token: string): Promise<RowRecord | null> {
     const { rows } = await sql<RowRecord>`
       UPDATE bulk_job_rows
@@ -706,6 +743,11 @@ export class BulkJobService {
         JOIN bulk_jobs j ON j.id = r.job_id
         WHERE r.job_id = ${jobId} AND r.status = 'pending'
           AND j.status = 'running' AND j.run_token = ${token}
+          AND NOT EXISTS (
+            SELECT 1 FROM bulk_job_rows first
+            WHERE first.job_id = r.job_id AND first.ordinal = r.after_ordinal
+              AND first.status IN ('pending', 'running')
+          )
         ORDER BY r.ordinal
         LIMIT 1
         FOR UPDATE OF r SKIP LOCKED
@@ -713,6 +755,21 @@ export class BulkJobService {
       RETURNING *
     `.execute(this.db);
     return rows[0] ?? null;
+  }
+
+  /** Whether the run still has rows pending: ones waiting for another to finish. */
+  private async waiting(jobId: string, token: string): Promise<boolean> {
+    const pending = await this.db
+      .selectFrom('bulk_job_rows as r')
+      .innerJoin('bulk_jobs as j', 'j.id', 'r.job_id')
+      .select('r.id')
+      .where('r.job_id', '=', jobId)
+      .where('r.status', '=', 'pending')
+      .where('j.status', '=', 'running')
+      .where('j.run_token', '=', token)
+      .limit(1)
+      .executeTakeFirst();
+    return pending !== undefined;
   }
 
   /**
@@ -734,13 +791,14 @@ export class BulkJobService {
     try {
       outcome = await handler.run(
         {
+          id: String(row.id),
           targetId: row.target_id,
           targetDn: row.target_dn,
           input: handler.input.parse(row.input_json),
           before: row.before_json,
           after: row.after_json,
         },
-        { db: this.db, provider, writeCtx, audit, services: this.deps },
+        { db: this.db, jobId: String(job.id), provider, writeCtx, audit, services: this.deps },
       );
     } catch (err) {
       if (err instanceof DirectoryUnavailableError && !wasAudited(err)) {
@@ -772,7 +830,7 @@ export class BulkJobService {
           result: 'failure',
           errorCode: outcome.errorCode,
           targetType: 'user',
-          targetId: row.target_id,
+          targetId: outcome.targetId ?? row.target_id,
           targetDn: outcome.targetDn ?? row.target_dn,
         })
         .catch((err) => this.logger.error({ err }, 'audit insert failed'));
@@ -795,6 +853,7 @@ export class BulkJobService {
         before_json: outcome.before ? JSON.stringify(outcome.before) : null,
         after_json: outcome.after ? JSON.stringify(outcome.after) : null,
         ...(outcome.targetDn ? { target_dn: outcome.targetDn } : {}),
+        ...(outcome.targetId ? { target_id: outcome.targetId } : {}),
         finished_at: sql`now()`,
       })
       .where('id', '=', row.id)

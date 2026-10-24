@@ -14,6 +14,7 @@ import {
   type BulkAccountOp,
   type BulkGroupMembershipRequest,
   type BulkJobAction,
+  type BulkJobHandledAction,
   type BulkJobSubject,
   type BulkMembershipOp,
   type Capability,
@@ -61,6 +62,7 @@ import {
 
 export interface BulkRowContext {
   db: Kysely<DB>;
+  jobId: string;
   provider: DirectoryProvider;
   writeCtx: WriteContext;
   /** The row's audit fields, the bulk id included. */
@@ -81,6 +83,8 @@ export type BulkRowOutcome =
       before: Record<string, unknown> | null;
       after: Record<string, unknown> | null;
       targetDn?: string;
+      /** For a row that created its target: the new object's id. */
+      targetId?: string;
     }
   | {
       ok: false;
@@ -89,6 +93,7 @@ export type BulkRowOutcome =
       before?: Record<string, unknown> | null;
       after?: Record<string, unknown> | null;
       targetDn?: string;
+      targetId?: string;
       /** What the row says to the operator, in place of the message for its code. */
       message?: string;
       /** Some of the row's changes were made: the row is partial rather than failed. */
@@ -98,9 +103,14 @@ export type BulkRowOutcome =
     };
 
 export interface BulkJobRowInput<Input> {
-  targetId: string;
+  /** Null for a row that creates its target. */
+  targetId: string | null;
+  /** How the row is named before its target exists, when the cache can't say. */
+  targetName?: string;
   /** Stored in the row's input_json, and handed back to `run`. */
   input: Input;
+  /** The row, by its index among the job's rows, that must finish first. */
+  after?: number;
 }
 
 /**
@@ -113,25 +123,31 @@ export interface BulkJobRowInput<Input> {
  * with more than its rows, checks the request against the directory
  * (throwing BulkJobRequestError when it can't start) and names what the
  * job acts with, so its progress and its audit entry can say it.
+ * `secret`, for a job whose rows all use one secret (an import's shared
+ * password), names it: it's held encrypted for the job, never stored with
+ * its rows. A handler whose rows create their targets takes rows without
+ * one (`Target`).
  */
-export interface BulkJobHandler<Request = unknown, Input = unknown> {
-  action: BulkJobAction;
+export interface BulkJobHandler<Request = unknown, Input = unknown, Target = string> {
+  action: BulkJobHandledAction;
   capability: Capability;
   request: z.ZodType<Request>;
   rows(request: Request): BulkJobRowInput<Input>[];
+  secret?(request: Request): string | null;
   prepare?(
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },
   ): Promise<BulkJobSubject | null>;
-  /** A capability the job's subject takes beyond `capability`, checked at start, continue and retry. */
+  /** Capabilities the job's subject takes beyond `capability`, checked at start, continue and retry. */
   requires?(
     subject: BulkJobSubject | null,
     roleGroups: readonly RoleGroup[],
-  ): MembershipRequirement | null;
+  ): MembershipRequirement[];
   input: z.ZodType<Input>;
   run(
     row: {
-      targetId: string;
+      id: string;
+      targetId: Target;
       targetDn: string | null;
       input: Input;
       /** What an earlier run of this row recorded, for a retry to keep. */
@@ -142,7 +158,10 @@ export interface BulkJobHandler<Request = unknown, Input = unknown> {
   ): Promise<BulkRowOutcome>;
 }
 
-export type BulkJobHandlers = Record<BulkJobAction, BulkJobHandler>;
+export type BulkJobHandlers = Record<
+  BulkJobHandledAction,
+  BulkJobHandler<unknown, unknown, string | null>
+>;
 
 function userAccountHandler(
   account: AccountWrite & { action: BulkJobAction },
@@ -313,7 +332,8 @@ function groupMembershipHandler(
         })),
       };
     },
-    requires: (subject, roleGroups) => membershipRequirement(op, subject?.groups ?? [], roleGroups),
+    requires: (subject, roleGroups) =>
+      [membershipRequirement(op, subject?.groups ?? [], roleGroups)].filter((r) => r !== null),
     async run(row, ctx) {
       const live = await ctx.services.userLiveRefresh.refresh(ctx.provider, row.targetId);
       if (!live) return { ok: false, errorCode: 'not_found', audited: false };
@@ -604,7 +624,11 @@ export async function attributesRow(
   }
 }
 
-export const BULK_JOB_HANDLERS: BulkJobHandlers = {
+/** The bulk actions' handlers; an import's is in importRows.ts. */
+export const BULK_ACTION_HANDLERS: Record<
+  BulkJobAction,
+  BulkJobHandler<unknown, unknown, string | null>
+> = {
   'user.disable': userAccountHandler(DISABLE_USER),
   'user.enable': userAccountHandler(ENABLE_USER),
   'user.unlock': userAccountHandler(UNLOCK_USER),

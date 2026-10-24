@@ -1739,6 +1739,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         if (input.otherMailbox) attrs.otherMailbox = input.otherMailbox;
         if (input.mobile) attrs.mobile = input.mobile;
         if (input.telephoneNumber) attrs.telephoneNumber = input.telephoneNumber;
+        if (input.initials) attrs.initials = input.initials;
+        if (input.employeeId) attrs.employeeID = input.employeeId;
+        if (input.description) attrs.description = input.description;
         Object.assign(attrs, input.organisation);
         if (input.manager) attrs.manager = input.manager;
         try {

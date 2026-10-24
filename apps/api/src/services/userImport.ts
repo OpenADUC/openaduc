@@ -27,6 +27,7 @@ import type { DirectoryProviderSummary } from './directoryConfig.js';
 import { findCachedGroupsById } from './groupCache.js';
 import { membershipRequirement } from './groupMembershipWrite.js';
 import { directoryUpnSuffixes } from './upnSuffixes.js';
+import type { ImportPlan } from './bulkJobs/importRows.js';
 import { cachedUserName, findCachedUser } from './userCache.js';
 
 const lower = (v: string) => v.toLowerCase();
@@ -233,6 +234,44 @@ export async function checkImport(
   });
 
   return { checkedAt: new Date().toISOString(), problems, warnings, protectedGroups };
+}
+
+/**
+ * The checked import as its job runs it: each row's attributes as they'll
+ * be written (mail from the UPN when asked, phones in Entra's form or as
+ * typed), its manager and groups by id.
+ */
+export function importPlan(body: CheckedImportRequest, phoneCountry: string | null): ImportPlan {
+  return {
+    password: body.password,
+    enabled: body.enabled,
+    rows: body.rows.map((r) => {
+      const phones = phonesToWrite(r, r.keepPhonesAsTyped ?? [], phoneCountry).values;
+      return {
+        line: r.line,
+        ouDn: r.ouDn,
+        cn: r.cn,
+        samAccountName: r.samAccountName,
+        userPrincipalName: r.userPrincipalName,
+        givenName: r.givenName,
+        surname: r.surname,
+        displayName: r.displayName,
+        initials: r.initials,
+        mail: r.email ?? (body.mailFromUpn ? r.userPrincipalName : null),
+        otherMailbox: r.personalEmail ?? null,
+        mobile: phones.mobile,
+        telephoneNumber: phones.telephoneNumber,
+        employeeId: r.employeeId,
+        description: r.description,
+        organisation: r.organisation?.attributes ?? {},
+        managerId: r.organisation?.managerId ? lower(r.organisation.managerId) : null,
+        managerRow: r.managerRow ?? null,
+        groupIds: (r.groups ?? []).map(lower),
+        usageLocation: r.usageLocation?.toUpperCase() ?? null,
+        startDate: r.startDate ?? null,
+      };
+    }),
+  };
 }
 
 // ---- Placement rules ------------------------------------------------------
