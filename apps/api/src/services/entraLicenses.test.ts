@@ -39,8 +39,14 @@ class FakeGraph implements GraphReader {
   failing = new Map<string, Error>();
   gets: string[] = [];
 
-  async getJson<T>(path: string): Promise<GraphResponse<T>> {
+  headers = new Map<string, Record<string, string> | undefined>();
+
+  async getJson<T>(
+    path: string,
+    opts?: { headers?: Record<string, string> },
+  ): Promise<GraphResponse<T>> {
     this.gets.push(path);
+    this.headers.set(path, opts?.headers);
     for (const [prefix, err] of this.failing) if (path.startsWith(prefix)) throw err;
     const sid = /onPremisesSecurityIdentifier eq '([^']+)'/.exec(path)?.[1];
     if (path.startsWith('/users?$filter=')) {
@@ -57,7 +63,7 @@ class FakeGraph implements GraphReader {
     if (path.startsWith('/groups?$filter=id in')) {
       return ok({ value: this.groups.filter((g) => path.includes(`'${String(g.id)}'`)) });
     }
-    if (path.startsWith('/groups?$filter=assignedLicenses/any()')) {
+    if (path.startsWith('/groups?$filter=assignedLicenses/$count ne 0&$count=true&')) {
       return ok({ value: this.groups.filter((g) => Array.isArray(g.assignedLicenses)) });
     }
     const one = /^\/groups\/([^?]+)\?/.exec(path)?.[1];
@@ -117,14 +123,14 @@ describe('userLicenses', () => {
               group: null,
               state: 'active',
               error: null,
-              disabledPlans: 2,
+              disabledPlanCount: 2,
               lastUpdatedAt: '2026-10-20T09:00:00.000Z',
             },
             {
               group: { entraGroupId: ENGINEERING.id, name: 'Engineering', groupId: AD_ENGINEERING },
               state: 'active',
               error: null,
-              disabledPlans: 0,
+              disabledPlanCount: 0,
               lastUpdatedAt: '2026-10-20T09:00:00.000Z',
             },
           ],
@@ -143,7 +149,7 @@ describe('userLicenses', () => {
     });
   });
 
-  it('says why Entra couldn’t assign a licence', async () => {
+  it('says why Entra couldn’t assign a license', async () => {
     const graph = new FakeGraph();
     graph.states = [
       state(E3, ENGINEERING.id, { state: 'Error', error: 'CountViolation' }),
@@ -174,7 +180,7 @@ describe('userLicenses', () => {
     });
   });
 
-  it('keeps a licence whose group Entra won’t describe, and part numbers it can’t read', async () => {
+  it('keeps a license whose group Entra won’t describe, and part numbers it can’t read', async () => {
     const graph = new FakeGraph();
     graph.states = [state(CUSTOM, ENGINEERING.id)];
     const denied = new GraphPermissionError('Graph 403', 403, 'Authorization_RequestDenied', null);
@@ -211,8 +217,13 @@ describe('groupLicenses', () => {
     expect(licenses).toEqual({
       status: 'synced',
       licenses: [
-        { skuId: CUSTOM, skuPartNumber: 'CONTOSO_PLAN', name: 'CONTOSO_PLAN', disabledPlans: 0 },
-        { skuId: E3, skuPartNumber: 'SPE_E3', name: 'Microsoft 365 E3', disabledPlans: 1 },
+        {
+          skuId: CUSTOM,
+          skuPartNumber: 'CONTOSO_PLAN',
+          name: 'CONTOSO_PLAN',
+          disabledPlanCount: 0,
+        },
+        { skuId: E3, skuPartNumber: 'SPE_E3', name: 'Microsoft 365 E3', disabledPlanCount: 1 },
       ],
       processingState: 'ProcessingComplete',
     });
@@ -230,24 +241,29 @@ describe('groupLicenses', () => {
 });
 
 describe('licensedEntraGroups', () => {
-  it('lists every group that grants a licence, cloud-only ones included', async () => {
+  it('lists every group that grants a license, cloud-only ones included', async () => {
     const graph = new FakeGraph();
     graph.groups = [
       { ...ENGINEERING, assignedLicenses: [{ skuId: E3, disabledPlans: [] }] },
       { ...CLOUD, assignedLicenses: [{ skuId: VISIO }] },
     ];
-    expect(await licensedEntraGroups(deps(graph))).toEqual([
+    const groups = await licensedEntraGroups(deps(graph));
+    // An advanced query: Graph refuses $count in a filter without both.
+    const list = graph.gets.find((p) => p.includes('assignedLicenses/$count'))!;
+    expect(list).toContain('$count=true');
+    expect(graph.headers.get(list)).toEqual({ ConsistencyLevel: 'eventual' });
+    expect(groups).toEqual([
       {
         entraGroupId: ENGINEERING.id,
         displayName: 'Engineering',
         onPremisesSid: GROUP_SID,
-        skus: [{ skuId: E3, skuPartNumber: 'SPE_E3', disabledPlans: 0 }],
+        skus: [{ skuId: E3, skuPartNumber: 'SPE_E3', disabledPlanCount: 0 }],
       },
       {
         entraGroupId: CLOUD.id,
         displayName: 'Cloud Licensing',
         onPremisesSid: null,
-        skus: [{ skuId: VISIO, skuPartNumber: null, disabledPlans: 0 }],
+        skus: [{ skuId: VISIO, skuPartNumber: null, disabledPlanCount: 0 }],
       },
     ]);
   });

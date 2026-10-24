@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
 
-// Microsoft licences as Entra holds them, read-only: which products a user
+// Microsoft licenses as Entra holds them, read-only: which products a user
 // has and where each comes from, what a group grants, and which groups
 // grant any. OpenADUC never assigns one. A product is named as Microsoft's
 // admin centers name it, falling back to its part number.
@@ -41,7 +41,7 @@ export const licenseSkuSchema = z.object({
 });
 export type LicenseSku = z.infer<typeof licenseSkuSchema>;
 
-/** A group a licence comes from. */
+/** A group a license comes from. */
 export const licenseGroupSchema = z.object({
   entraGroupId: z.string(),
   /** Its name in Entra; null when Entra wouldn't say. */
@@ -58,7 +58,7 @@ export const licenseAssignmentSchema = z.object({
   state: z.enum(['active', 'activeWithError', 'disabled', 'error']),
   error: z.enum(LICENSE_ASSIGNMENT_ERRORS).nullable(),
   /** Service plans of the product this assignment turns off. */
-  disabledPlans: z.number().int(),
+  disabledPlanCount: z.number().int(),
   lastUpdatedAt: z.string().nullable(),
 });
 export type LicenseAssignment = z.infer<typeof licenseAssignmentSchema>;
@@ -83,7 +83,7 @@ export type UserLicenses = z.infer<typeof userLicensesSchema>;
 export const groupLicensesSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('synced'),
-    licenses: z.array(licenseSkuSchema.extend({ disabledPlans: z.number().int() })),
+    licenses: z.array(licenseSkuSchema.extend({ disabledPlanCount: z.number().int() })),
     /** Graph's licenseProcessingState, e.g. `ProcessingComplete`; null when it has none. */
     processingState: z.string().nullable(),
   }),
@@ -91,12 +91,14 @@ export const groupLicensesSchema = z.discriminatedUnion('status', [
 ]);
 export type GroupLicenses = z.infer<typeof groupLicensesSchema>;
 
-/** Every AD group that grants a licence, from the cache a sync task keeps. */
+/** Every AD group that grants a license, from the cache a sync task keeps. */
 export const licensedGroupsSchema = z.object({
-  /** The directory's Entra integration shows licences. */
+  /** The directory's Entra integration shows licenses. */
   enabled: z.boolean(),
-  /** When the cache was last refreshed from Entra; null before its first run. */
+  /** When the task last read every licensed group from Entra; null before it first has. */
   refreshedAt: z.string().nullable(),
+  /** The task's latest run failed, so the badges may be out of date. */
+  refreshFailed: z.boolean(),
   groups: z.array(z.object({ id: z.string(), licenses: z.array(licenseSkuSchema) })),
 });
 export type LicensedGroups = z.infer<typeof licensedGroupsSchema>;

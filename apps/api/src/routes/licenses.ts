@@ -11,12 +11,13 @@ import {
 import { z } from 'zod';
 import { AppError, NotFound } from '../plugins/errorHandler.js';
 import { groupLicenses, userLicenses } from '../services/entraLicenses.js';
-import { adGroupsBySid, licensedAdGroups, storeLicensedGroup } from '../services/licenseCache.js';
+import {
+  adGroupsBySid,
+  licensedAdGroups,
+  licensedGroupsRefresh,
+  storeLicensedGroup,
+} from '../services/licenseCache.js';
 import { graphFailure } from './graphFailure.js';
-
-// Microsoft licences, read-only, when the directory's Entra integration
-// has the licenses feature on: a user's and a group's read live from
-// Graph, and every licensed group from the cache for group pickers.
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -68,20 +69,16 @@ export async function registerLicenseRoutes(app: FastifyInstance): Promise<void>
     handler: async (req): Promise<LicensedGroups> => {
       const directoryId = req.directoryId!;
       if (!(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'licenses'))) {
-        return { enabled: false, refreshedAt: null, groups: [] };
+        return { enabled: false, refreshedAt: null, refreshFailed: false, groups: [] };
       }
-      const [groups, task] = await Promise.all([
+      const [groups, refresh] = await Promise.all([
         licensedAdGroups(app.db, directoryId),
-        app.db
-          .selectFrom('directory_sync_tasks')
-          .select(['last_cursor'])
-          .where('provider_id', '=', directoryId)
-          .where('task_key', '=', 'entra.licenses.groups')
-          .executeTakeFirst(),
+        licensedGroupsRefresh(app.db, directoryId),
       ]);
       return licensedGroupsSchema.parse({
         enabled: true,
-        refreshedAt: task?.last_cursor ?? null,
+        refreshedAt: refresh.refreshedAt?.toISOString() ?? null,
+        refreshFailed: refresh.failed,
         groups,
       });
     },

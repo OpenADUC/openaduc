@@ -10,7 +10,7 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import type { EntraGroupSku } from '../db/types.js';
-import { skuName } from '../lib/skuNames.js';
+import { byName, licenseSku } from '../lib/skuNames.js';
 import {
   allPages,
   findEntraGroup,
@@ -21,9 +21,9 @@ import {
 } from './entraLookup.js';
 import { GraphPermissionError } from './graphClient.js';
 
-// Reading Microsoft licences from Entra: a user's, with the group or direct
+// Reading Microsoft licenses from Entra: a user's, with the group or direct
 // assignment each comes from and any error assigning it, and a group's.
-// Read-only; OpenADUC never assigns a licence.
+// Read-only; OpenADUC never assigns a license.
 
 export interface LicenseDeps {
   graph: GraphReader;
@@ -32,7 +32,7 @@ export interface LicenseDeps {
   now?: () => Date;
 }
 
-/** An Entra group that grants licences, as the cache keeps it. */
+/** An Entra group that grants licenses, as the cache keeps it. */
 export interface LicensedEntraGroup {
   entraGroupId: string;
   displayName: string | null;
@@ -99,14 +99,7 @@ async function skuPartNumbers(graph: GraphReader, now: Date): Promise<Map<string
   return parts;
 }
 
-/** A product as the page shows it, from its id and the part number if known. */
-export function licenseSku(skuId: string, skuPartNumber: string | null): LicenseSku {
-  return { skuId, skuPartNumber, name: skuName(skuId, skuPartNumber) };
-}
-
-const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name);
-
-/** The licences of the AD user with this SID, each with where it comes from. */
+/** The licenses of the AD user with this SID, each with where it comes from. */
 export async function userLicenses(deps: LicenseDeps, sid: string): Promise<UserLicenses> {
   const { graph } = deps;
   const now = deps.now?.() ?? new Date();
@@ -144,13 +137,12 @@ export async function userLicenses(deps: LicenseDeps, sid: string): Promise<User
       group: s.assignedByGroup ? groups.get(s.assignedByGroup)! : null,
       state: STATES[(s.state ?? '').toLowerCase()] ?? (error ? 'error' : 'active'),
       error,
-      disabledPlans: s.disabledPlans?.length ?? 0,
+      disabledPlanCount: s.disabledPlans?.length ?? 0,
       lastUpdatedAt: s.lastUpdatedDateTime ? new Date(s.lastUpdatedDateTime).toISOString() : null,
     });
   }
   const licenses = [...bySku.values()].map(({ sku, assignments }) => ({
     ...sku,
-    // Direct first, then by group name.
     assignments: assignments.sort(
       (a, b) =>
         Number(a.group !== null) - Number(b.group !== null) ||
@@ -213,7 +205,7 @@ async function licenseGroups(
 }
 
 /**
- * The licences the AD group with this SID grants, read live, and the group
+ * The licenses the AD group with this SID grants, read live, and the group
  * as the cache keeps it (null when it isn't in Entra).
  */
 export async function groupLicenses(
@@ -243,7 +235,10 @@ export async function groupLicenses(
     licenses: {
       status: 'synced',
       licenses: entraGroup.skus
-        .map((s) => ({ ...licenseSku(s.skuId, s.skuPartNumber), disabledPlans: s.disabledPlans }))
+        .map((s) => ({
+          ...licenseSku(s.skuId, s.skuPartNumber),
+          disabledPlanCount: s.disabledPlanCount,
+        }))
         .sort(byName),
       processingState: (typeof processing === 'string' ? processing : processing?.state) ?? null,
     },
@@ -251,16 +246,19 @@ export async function groupLicenses(
   };
 }
 
-/** Every group in the tenant that grants a licence, for the cache. */
+// Filtering on a collection's $count is an advanced query, which a plain
+// list would refuse.
+const LICENSED_GROUPS_PATH =
+  '/groups?$filter=assignedLicenses/$count ne 0&$count=true&$select=id,displayName,onPremisesSecurityIdentifier,assignedLicenses&$top=999';
+
+/** Every group in the tenant that grants a license, for the cache. */
 export async function licensedEntraGroups(
   deps: Pick<LicenseDeps, 'graph' | 'now'>,
 ): Promise<LicensedEntraGroup[]> {
   const now = deps.now?.() ?? new Date();
-  const groups = await allPages(
-    deps.graph,
-    '/groups?$filter=assignedLicenses/any()&$select=id,displayName,onPremisesSecurityIdentifier,assignedLicenses&$top=999',
-    entraGroupSchema,
-  );
+  const groups = await allPages(deps.graph, LICENSED_GROUPS_PATH, entraGroupSchema, {
+    ConsistencyLevel: 'eventual',
+  });
   // A partial list would drop the badge from groups it missed.
   if (!groups) throw new Error('too many licensed groups to list in one run');
   const parts = await skuPartNumbers(deps.graph, now);
@@ -278,7 +276,7 @@ function toCached(
     skus: (group.assignedLicenses ?? []).map((l) => ({
       skuId: l.skuId,
       skuPartNumber: parts.get(l.skuId.toLowerCase()) ?? null,
-      disabledPlans: l.disabledPlans?.length ?? 0,
+      disabledPlanCount: l.disabledPlans?.length ?? 0,
     })),
   };
 }

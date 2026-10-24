@@ -73,6 +73,13 @@ export type GroupMember = z.infer<typeof groupMemberSchema>;
 
 export const groupDetailSchema = groupSummarySchema.extend({
   email: z.string().nullable(),
+  /** Null when the directory has no Entra integration turned on. */
+  entra: z
+    .object({
+      /** The integration's licenses feature is on, so the page shows what the group grants. */
+      licenses: z.boolean(),
+    })
+    .nullable(),
   members: z.array(groupMemberSchema),
   freshness: z.object({
     cachedAt: z.string().nullable(),

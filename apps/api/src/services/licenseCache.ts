@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { Kysely } from 'kysely';
+import { sql, type Kysely } from 'kysely';
 import type { LicenseSku } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
-import { licenseSku, type LicensedEntraGroup } from './entraLicenses.js';
+import { byName, licenseSku } from '../lib/skuNames.js';
+import type { LicensedEntraGroup } from './entraLicenses.js';
 
 // The licensed Entra groups as entra.licenses.groups last read them
 // (entra_group_licenses), so a group picker can badge them without asking
 // Graph. An AD group is matched by SID when read, so one the AD sync
-// caches after the licence task ran still finds its licences.
+// caches after the license task ran still finds its licenses.
+
+const TASK_KEY = 'entra.licenses.groups';
+// Five values a row; Postgres takes at most 65,535 parameters a statement.
+const INSERT_CHUNK = 1000;
 
 const rowOf = (providerId: number, g: LicensedEntraGroup) => ({
   provider_id: providerId,
@@ -15,7 +20,6 @@ const rowOf = (providerId: number, g: LicensedEntraGroup) => ({
   display_name: g.displayName,
   on_premises_sid: g.onPremisesSid,
   skus: JSON.stringify(g.skus),
-  refreshed_at: new Date(),
 });
 
 /** Replace the directory's licensed groups with a fresh read of every one. */
@@ -26,10 +30,10 @@ export async function replaceLicensedGroups(
 ): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx.deleteFrom('entra_group_licenses').where('provider_id', '=', providerId).execute();
-    if (groups.length) {
+    for (let i = 0; i < groups.length; i += INSERT_CHUNK) {
       await trx
         .insertInto('entra_group_licenses')
-        .values(groups.map((g) => rowOf(providerId, g)))
+        .values(groups.slice(i, i + INSERT_CHUNK).map((g) => rowOf(providerId, g)))
         .execute();
     }
   });
@@ -57,7 +61,7 @@ export async function storeLicensedGroup(
   });
 }
 
-/** Every cached AD group that grants a licence, by objectGUID. */
+/** Every cached AD group that grants a license, by objectGUID. */
 export async function licensedAdGroups(
   db: Kysely<DB>,
   providerId: number,
@@ -73,10 +77,39 @@ export async function licensedAdGroups(
     .execute();
   return rows.map((r) => ({
     id: r.object_guid,
-    licenses: r.skus
-      .map((s) => licenseSku(s.skuId, s.skuPartNumber))
-      .sort((a, b) => a.name.localeCompare(b.name)),
+    licenses: r.skus.map((s) => licenseSku(s.skuId, s.skuPartNumber)).sort(byName),
   }));
+}
+
+/**
+ * When the task last read every licensed group, from its run history (a
+ * run that skipped, the feature being off, read nothing), and whether its
+ * latest run failed.
+ */
+export async function licensedGroupsRefresh(
+  db: Kysely<DB>,
+  providerId: number,
+): Promise<{ refreshedAt: Date | null; failed: boolean }> {
+  const [run, task] = await Promise.all([
+    db
+      .selectFrom('directory_sync_task_runs')
+      .select((eb) => eb.fn.max('finished_at').as('finished_at'))
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', TASK_KEY)
+      .where('status', '=', 'succeeded')
+      .where(sql<boolean>`coalesce(stats_json ->> 'skipped', '') = ''`)
+      .executeTakeFirst(),
+    db
+      .selectFrom('directory_sync_tasks')
+      .select(['last_status'])
+      .where('provider_id', '=', providerId)
+      .where('task_key', '=', TASK_KEY)
+      .executeTakeFirst(),
+  ]);
+  return {
+    refreshedAt: run?.finished_at ? new Date(run.finished_at) : null,
+    failed: task?.last_status === 'failed',
+  };
 }
 
 /** The cached AD groups with these SIDs, as objectGUID by SID. */

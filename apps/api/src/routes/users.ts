@@ -45,6 +45,7 @@ import {
 } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
+import { entraFeatureOn } from '../services/entraIntegration.js';
 import { previewAccountChange } from '../services/bulkAccountChange.js';
 import { previewAttributes } from '../services/bulkAttributes.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
@@ -839,9 +840,8 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                         status: parseEnrichmentStatus(entraEnrichment.mfa_last_status),
                       }
                     : null,
-                temporaryAccessPass:
-                  integration.hasClientSecret && integration.features.temporaryAccessPass === true,
-                licenses: integration.hasClientSecret && integration.features.licenses === true,
+                temporaryAccessPass: entraFeatureOn(integration, 'temporaryAccessPass'),
+                licenses: entraFeatureOn(integration, 'licenses'),
               }
             : null,
         rawAttributes: rawAttributesFor(

@@ -45,24 +45,22 @@ export const TAP_PERMISSIONS = {
   },
 } as const satisfies Record<string, GraphPermission>;
 
-/** What showing licences needs: all reads, as OpenADUC never assigns one. */
+/** What showing licenses needs: all reads, as OpenADUC never assigns one. */
 export const LICENSE_PERMISSIONS = {
-  /** A user's licences and where each comes from (licenseAssignmentStates). */
+  /** A user's licenses and where each comes from (licenseAssignmentStates). */
   users: TAP_PERMISSIONS.users,
-  /** The licences a group grants, and the groups a user's licences come from. */
+  /** The licenses a group grants, and the groups a user's licenses come from. */
   groups: {
     name: 'Group.Read.All',
     alsoMetBy: ['Group.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
   },
-  /** The tenant's subscriptions, for the part number of a product OpenADUC can't name. */
-  skus: {
-    name: 'LicenseAssignment.Read.All',
-    alsoMetBy: [
-      'Organization.Read.All',
-      'Organization.ReadWrite.All',
-      'Directory.Read.All',
-      'Directory.ReadWrite.All',
-    ],
+  /**
+   * The tenant's subscriptions (part numbers for products Microsoft's name
+   * list lacks) and its last sync from AD, for a user or group not synced yet.
+   */
+  organization: {
+    name: 'Organization.Read.All',
+    alsoMetBy: ['Organization.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
   },
 } as const satisfies Record<string, GraphPermission>;
 

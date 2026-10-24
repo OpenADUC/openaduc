@@ -455,11 +455,11 @@ export interface ImportPlacementRulesTable {
   updated_at: TimestampDefault;
 }
 
-/** A licence an Entra group grants. */
+/** A license an Entra group grants. */
 export interface EntraGroupSku {
   skuId: string;
   skuPartNumber: string | null;
-  disabledPlans: number;
+  disabledPlanCount: number;
 }
 
 /** See migrations/20261026000001_entra_group_licenses.ts. */
@@ -469,7 +469,6 @@ export interface EntraGroupLicensesTable {
   display_name: string | null;
   on_premises_sid: string | null;
   skus: JSONColumnType<EntraGroupSku[]>;
-  refreshed_at: TimestampDefault;
 }
 
 /** See migrations/20261025000001_bulk_job_creates.ts. */

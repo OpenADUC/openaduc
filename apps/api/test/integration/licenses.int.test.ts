@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GroupLicenses, LicensedGroups, UserLicenses } from '@openaduc/shared';
+import { replaceLicensedGroups } from '../../src/services/licenseCache.js';
 import { json, token } from './fakeGraph.js';
 import { configureDirectory, startApi, type TestApi, type TestClient } from './harness.js';
 
@@ -9,7 +10,7 @@ import { configureDirectory, startApi, type TestApi, type TestClient } from './h
 
 const E3 = '05e9a617-0261-4cee-bb44-138d3ef5d965';
 const CUSTOM = '00000000-0000-0000-0000-00000000c0de';
-const ALL_PERMISSIONS = ['User.Read.All', 'Group.Read.All', 'LicenseAssignment.Read.All'];
+const ALL_PERMISSIONS = ['User.Read.All', 'Group.Read.All', 'Organization.Read.All'];
 
 interface FakeGroup {
   id: string;
@@ -18,22 +19,31 @@ interface FakeGroup {
   assignedLicenses: { skuId: string; disabledPlans: string[] }[];
 }
 
-/** Microsoft Graph as far as licences and the connection test use it. */
+/** Microsoft Graph as far as licenses and the connection test use it. */
 class FakeGraph {
   roles = [...ALL_PERMISSIONS];
   /** AD objectSid → Entra user, for the users Connect Sync has synced. */
   users = new Map<string, { id: string; licenseAssignmentStates: unknown[] }>();
   groups: FakeGroup[] = [];
+  /** Paths Graph answers as throttled, asking for this many seconds. */
+  throttled = new Map<string, number>();
+  /** Fail listing the licensed groups, as an outage would. */
+  listFails = false;
   requests: string[] = [];
 
-  fetch = async (input: string | URL): Promise<Response> => {
+  fetch = async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
     const url = new URL(String(input));
     this.requests.push(url.toString());
+    const headers = new Headers(init.headers);
     if (url.hostname === 'login.microsoftonline.com') {
       return json({ access_token: token(this.roles), expires_in: 3600 });
     }
     const path = url.pathname.replace(/^\/v1\.0/, '');
     const filter = url.searchParams.get('$filter') ?? '';
+    const wait = this.throttled.get(path);
+    if (wait !== undefined) {
+      return json({ error: { code: 'TooManyRequests' } }, 429, { 'Retry-After': String(wait) });
+    }
     const sid = /onPremisesSecurityIdentifier eq '([^']+)'/.exec(filter)?.[1];
     if (path === '/organization') {
       return json({
@@ -60,7 +70,15 @@ class FakeGraph {
       if (filter.startsWith('id in')) {
         return json({ value: this.groups.filter((g) => filter.includes(`'${g.id}'`)) });
       }
-      if (filter === 'assignedLicenses/any()') {
+      if (filter === 'assignedLicenses/$count ne 0') {
+        // Graph refuses a $count filter that isn't an advanced query.
+        if (
+          headers.get('ConsistencyLevel') !== 'eventual' ||
+          url.searchParams.get('$count') !== 'true'
+        ) {
+          return json({ error: { code: 'Request_UnsupportedQuery' } }, 400);
+        }
+        if (this.listFails) return json({ error: { code: 'InternalServerError' } }, 500);
         return json({ value: this.groups.filter((g) => g.assignedLicenses.length > 0) });
       }
     }
@@ -157,9 +175,24 @@ describe('Licenses', () => {
     await api?.close();
   });
 
-  it('are shown on the user’s page', async () => {
+  it('are shown on the user’s and the group’s page', async () => {
     const res = await auditor.get(`/api/users/${users['alice.anders']!.id}`);
     expect(res.json()).toMatchObject({ user: { entra: { licenses: true } } });
+    const group = await auditor.get(`/api/groups/${groups['Engineering']!.id}`);
+    expect(group.json()).toMatchObject({ group: { entra: { licenses: true } } });
+  });
+
+  it('say Microsoft Graph is busy when it throttles past what OpenADUC waits for', async () => {
+    graph.throttled.set('/users/entra-alice', 60);
+    const { res, body } = await userLicenses(auditor, 'alice.anders');
+    expect(res.statusCode).toBe(503);
+    expect(body).toMatchObject({
+      error: {
+        code: 'entra_throttled',
+        message: 'Microsoft Graph is busy. Try again in a minute.',
+        details: { retryAfterSeconds: 60 },
+      },
+    });
   });
 
   it('name each of a user’s licenses, the AD group it comes from or that it’s direct, and its error', async () => {
@@ -177,7 +210,7 @@ describe('Licenses', () => {
               group: null,
               state: 'error',
               error: 'CountViolation',
-              disabledPlans: 0,
+              disabledPlanCount: 0,
               lastUpdatedAt: null,
             },
           ],
@@ -195,7 +228,7 @@ describe('Licenses', () => {
               },
               state: 'active',
               error: null,
-              disabledPlans: 0,
+              disabledPlanCount: 0,
               lastUpdatedAt: null,
             },
           ],
@@ -218,7 +251,9 @@ describe('Licenses', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json<GroupLicenses>()).toEqual({
       status: 'synced',
-      licenses: [{ skuId: E3, skuPartNumber: null, name: 'Microsoft 365 E3', disabledPlans: 1 }],
+      licenses: [
+        { skuId: E3, skuPartNumber: null, name: 'Microsoft 365 E3', disabledPlanCount: 1 },
+      ],
       processingState: 'ProcessingComplete',
     });
     expect((await auditor.get('/api/groups/licensed')).json<LicensedGroups>().groups).toEqual([
@@ -254,6 +289,35 @@ describe('Licenses', () => {
     expect((await auditor.get('/api/groups/licensed')).json<LicensedGroups>().groups).toEqual([]);
   });
 
+  it('keep the badges they had, and say the refresh failed, when the task can’t read Entra', async () => {
+    await api.app.services.sync.runOnce(api.directoryId!, 'entra.licenses.groups');
+    const before = (await auditor.get('/api/groups/licensed')).json<LicensedGroups>();
+    expect(before).toMatchObject({ refreshFailed: false });
+
+    graph.listFails = true;
+    const run = await api.app.services.sync.runOnce(api.directoryId!, 'entra.licenses.groups');
+    expect(run).toMatchObject({ ok: false });
+    const after = (await auditor.get('/api/groups/licensed')).json<LicensedGroups>();
+    expect(after).toEqual({ ...before, refreshFailed: true });
+  });
+
+  it('store a tenant’s worth of licensed groups', async () => {
+    const many = Array.from({ length: 15_000 }, (_, i) => ({
+      entraGroupId: `entra-${i}`,
+      displayName: `Group ${i}`,
+      onPremisesSid: null,
+      skus: [{ skuId: E3, skuPartNumber: null, disabledPlanCount: 0 }],
+    }));
+    await replaceLicensedGroups(api.app.db, api.directoryId!, many);
+    const { count } = await api.app.db
+      .selectFrom('entra_group_licenses')
+      .select((eb) => eb.fn.countAll<string>().as('count'))
+      .where('provider_id', '=', api.directoryId!)
+      .executeTakeFirstOrThrow();
+    expect(Number(count)).toBe(15_000);
+    await api.app.db.deleteFrom('entra_group_licenses').execute();
+  });
+
   it('are unavailable until the feature is turned on', async () => {
     await api.app.services.entraIntegration.update(api.directoryId!, {
       features: { licenses: false },
@@ -268,6 +332,7 @@ describe('Licenses', () => {
       expect((await auditor.get('/api/groups/licensed')).json()).toEqual({
         enabled: false,
         refreshedAt: null,
+        refreshFailed: false,
         groups: [],
       });
       const page = await auditor.get(`/api/users/${users['alice.anders']!.id}`);
@@ -286,6 +351,11 @@ describe('Licenses', () => {
       ok: false,
       missingPermissions: ['User.Read.All', 'Group.Read.All'],
     });
+
+    graph.roles = ['User.Read.All', 'Group.Read.All'];
+    expect(
+      (await admin.post(`/api/directories/${api.directoryId}/entra/test`)).json(),
+    ).toMatchObject({ ok: false, missingPermissions: ['Organization.Read.All'] });
 
     graph.roles = ['Directory.Read.All'];
     expect(

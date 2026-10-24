@@ -3,10 +3,10 @@
 // Pieces of a Microsoft Graph played behind a stubbed fetch, so the API's
 // own Graph client, token request and all, talks to a test's fake.
 
-export function json(body: unknown, status = 200): Response {
+export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
   });
 }
 

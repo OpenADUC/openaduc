@@ -378,7 +378,7 @@ function permissionHintForPath(status: number, path: string, code: string | null
       return `${TAP_PERMISSIONS.roles.name} (Application) is required to read Entra role assignments and eligibilities`;
     }
     if (path.startsWith('/subscribedSkus')) {
-      return `${LICENSE_PERMISSIONS.skus.name} (Application) is required to read the tenant’s subscriptions`;
+      return `${LICENSE_PERMISSIONS.organization.name} (Application) is required to read the tenant’s subscriptions`;
     }
     if (path.startsWith('/groups')) {
       return `${LICENSE_PERMISSIONS.groups.name} (Application) is required to read groups and the licenses they grant`;
