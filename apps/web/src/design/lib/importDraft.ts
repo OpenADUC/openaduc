@@ -50,11 +50,18 @@ export interface ImportDraft {
   options: ImportOptions;
 }
 
-const key = (directoryId: number) => `openaduc.userImport.${directoryId}`;
+/** Whose draft: one per operator and directory, so a shared browser keeps them apart. */
+export interface DraftOwner {
+  directoryId: number;
+  actorId: string;
+}
 
-export function loadDraft(directoryId: number): ImportDraft | null {
+const PREFIX = 'openaduc.userImport.';
+const key = (owner: DraftOwner) => `${PREFIX}${owner.directoryId}.${owner.actorId}`;
+
+export function loadDraft(owner: DraftOwner): ImportDraft | null {
   try {
-    const raw = sessionStorage.getItem(key(directoryId));
+    const raw = sessionStorage.getItem(key(owner));
     const draft = raw ? (JSON.parse(raw) as ImportDraft) : null;
     return draft?.version === 1 ? draft : null;
   } catch {
@@ -62,17 +69,47 @@ export function loadDraft(directoryId: number): ImportDraft | null {
   }
 }
 
-export function saveDraft(directoryId: number, draft: ImportDraft): void {
+/**
+ * The draft as stored: only the columns it maps, so a column left out,
+ * such as an HR sheet's temporary passwords, isn't kept in the browser.
+ */
+export function storedDraft(draft: ImportDraft): ImportDraft {
+  const table = draft.table;
+  if (!table) return draft;
+  const kept = draft.mapping.flatMap((field, i) => (field ? [i] : []));
+  return {
+    ...draft,
+    table: {
+      ...table,
+      header: kept.map((i) => table.header[i]!),
+      rows: table.rows.map((row) => kept.map((i) => row[i]!)),
+    },
+    mapping: kept.map((i) => draft.mapping[i]!),
+  };
+}
+
+export function saveDraft(owner: DraftOwner, draft: ImportDraft): void {
   try {
-    sessionStorage.setItem(key(directoryId), JSON.stringify(draft));
+    sessionStorage.setItem(key(owner), JSON.stringify(storedDraft(draft)));
   } catch {
     // Storage full or blocked: the import still works, it just won't survive a reload.
   }
 }
 
-export function clearDraft(directoryId: number): void {
+export function clearDraft(owner: DraftOwner): void {
   try {
-    sessionStorage.removeItem(key(directoryId));
+    sessionStorage.removeItem(key(owner));
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+/** Every operator's drafts in this tab, as signing out leaves none behind. */
+export function clearAllDrafts(): void {
+  try {
+    for (const k of Object.keys(sessionStorage)) {
+      if (k.startsWith(PREFIX)) sessionStorage.removeItem(k);
+    }
   } catch {
     // Nothing to clear.
   }
