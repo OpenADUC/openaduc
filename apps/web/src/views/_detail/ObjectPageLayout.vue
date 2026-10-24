@@ -806,7 +806,7 @@ const freshnessText = computed(() => {
     display: flex;
     flex: 1 1 auto;
     min-width: 0;
-    overflow-x: auto;
+    overflow: auto hidden;
     scrollbar-width: none;
     scroll-snap-type: x proximity;
   }
@@ -814,6 +814,11 @@ const freshnessText = computed(() => {
   .object-tab {
     flex: 0 0 auto;
     scroll-snap-align: start;
+  }
+
+  /* Inside the scroller, where the bar's bottom border can't be reached. */
+  .object-tab.active::after {
+    bottom: 0;
   }
 
   .object-tab-label,
