@@ -20,6 +20,7 @@ const NOT_ELEVATED: ElevatedSessionState = {
 
 const bulkJobs = {
   start: vi.fn(),
+  startAttributeEdit: vi.fn(),
   list: vi.fn(),
   get: vi.fn(),
   rows: vi.fn(),
@@ -356,5 +357,42 @@ describe('bulk actions', () => {
 
     await vi.waitFor(() => expect(bulk.jobFailure.value).toBe('the job has already stopped'));
     expect(bulkJobs.cancel).toHaveBeenCalledExactlyOnceWith('7');
+  });
+
+  it('stops following a job on detaching, without dismissing it, and shows it again by id', async () => {
+    const { bulk } = setup();
+    bulkJobs.list.mockResolvedValue({ jobs: [aJob('running', { pending: 2, succeeded: 1 })] });
+    await bulk.restore();
+
+    bulk.detach();
+    expect(bulk.job.value).toBeNull();
+    await after(POLL.maxMs);
+    expect(bulkJobs.get).not.toHaveBeenCalled();
+
+    // Not dismissed: the list still shows it.
+    await bulk.restore();
+    expect(bulk.job.value?.id).toBe('7');
+    bulk.detach();
+    bulkJobs.get.mockResolvedValueOnce({ job: aJob('running', { pending: 1, succeeded: 2 }) });
+    await bulk.restore('7');
+    expect(bulkJobs.get).toHaveBeenCalledWith('7');
+    expect(bulk.job.value?.counts.succeeded).toBe(2);
+  });
+
+  it('doesn’t show a job started before detaching, but says it started', async () => {
+    const { bulk } = setup();
+    let answer!: (v: { job: BulkJob }) => void;
+    bulkJobs.startAttributeEdit.mockReturnValueOnce(new Promise((r) => (answer = r)));
+    const started = vi.fn();
+
+    bulk.startAttributeEdit({ ids: ['a'], changes: { title: null }, previewToken: 't' }, started);
+    await flushPromises();
+    bulk.detach();
+    answer({ job: aJob('running', { pending: 1 }) });
+    await flushPromises();
+
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ id: '7' }));
+    expect(bulk.job.value).toBeNull();
+    expect(bulk.busy.value).toBe(false);
   });
 });

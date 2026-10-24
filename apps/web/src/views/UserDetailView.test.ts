@@ -808,6 +808,7 @@ describe('reassigning the direct reports', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
     api.users.get.mockResolvedValue({ user: manager });
     api.users.search.mockResolvedValue({
       rows: [{ id: MAX_ID, displayName: 'Max Boss', samAccountName: 'max.boss' }],
@@ -929,6 +930,55 @@ describe('reassigning the direct reports', () => {
     await runAction(page, 'Reassign direct reports…');
     expect(ticked(page)).toEqual(['Ben Baker']);
     expect(dialog(page).text()).toContain('Access denied');
+  });
+
+  it('leaves a running job on the manager’s page, and shows it again on coming back', async () => {
+    const other = aUserDetail({ id: 'u2', displayName: 'Omar Other' });
+    api.users.get.mockImplementation(async (id: string) => ({
+      user: id === 'u2' ? other : manager,
+    }));
+    const { page, router } = await openTab(
+      'organization',
+      ['read:user', 'write:user.attributes'],
+      true,
+    );
+    await runAction(page, 'Reassign direct reports…');
+    await chooseNewManager(page);
+    api.users.previewAttributeEdit.mockResolvedValueOnce(
+      aPreview({ changed: { count: 3, offset: 0, users: [] } }),
+    );
+    await click(page, 'Preview');
+    const running = { ...aJob({ total: 3, pending: 3 }), status: 'running', finishedAt: null };
+    api.bulkJobs.startAttributeEdit.mockResolvedValueOnce({ job: running });
+    await click(page, 'Reassign 3 reports');
+    expect(page.text()).toContain('Editing 3 accounts (manager)…');
+
+    await router.push('/users/u2?tab=organization');
+    await flushPromises();
+    expect(page.text()).toContain('Omar Other');
+    expect(page.text()).not.toContain('Editing 3 accounts');
+
+    api.bulkJobs.get.mockResolvedValue({ job: running });
+    await router.push('/users/u1?tab=organization');
+    await flushPromises();
+    expect(api.bulkJobs.get).toHaveBeenCalledWith('9');
+    expect(page.text()).toContain('Editing 3 accounts (manager)…');
+  });
+
+  it('says to sync when none of the reports is in the cache', async () => {
+    api.users.get.mockResolvedValue({
+      user: aUserDetail({
+        directReports: [
+          { id: null, distinguishedName: 'CN=Gone,DC=corp', displayName: null, enabled: null },
+        ],
+      }),
+    });
+    const { page } = await openTab('organization', ['read:user', 'write:user.attributes'], true);
+
+    await runAction(page, 'Reassign direct reports…');
+
+    expect(dialog(page).text()).toContain('isn’t in the cache, so it can’t be reassigned here');
+    expect(dialog(page).text()).toContain('Run a directory sync');
   });
 
   it('is offered from the reporting structure too', async () => {
