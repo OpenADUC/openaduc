@@ -26,6 +26,7 @@ import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedGroupsById } from '../services/groupCache.js';
 import { BulkJobRequestError, refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { importJobView } from '../services/importResults.js';
+import { licenseWarnings } from '../services/importLicenses/check.js';
 import {
   checkImport,
   importPlan,
@@ -165,6 +166,17 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     return classTapProblems(body.classTap, body.rows, policy).map((p) => problem(p.message, p.row));
   }
 
+  /** What the licenses the import's groups grant warn of; none while licenses are off. */
+  async function licenseCheck(
+    directoryId: number,
+    body: CheckedImportRequest,
+  ): Promise<ImportCheckIssue[]> {
+    if (!(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'licenses'))) return [];
+    const graph = await app.services.graphClient.build(directoryId);
+    if (!graph) return [];
+    return licenseWarnings({ db: app.db, providerId: directoryId, graph }, body.rows);
+  }
+
   /** The final check, as the operator may run it: what the run takes, against the directory now. */
   async function finalCheck(req: FastifyRequest, body: CheckedImportRequest) {
     if (body.rows.some((r) => r.groups?.length)) {
@@ -190,6 +202,7 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       body,
     );
     result.problems.push(...(await classProblems(directory.id, body)));
+    result.warnings.push(...(await licenseCheck(directory.id, body)));
     return { result, directory };
   }
 

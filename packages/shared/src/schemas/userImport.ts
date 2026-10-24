@@ -315,7 +315,9 @@ export type ImportCheckIssueKind =
   | 'manager_missing'
   | 'password'
   | 'phone'
-  | 'class';
+  | 'class'
+  | 'license_seats'
+  | 'license_nested';
 
 export interface ImportCheckIssue {
   /** The index of the row in the request, or null for what isn't one row's. */
