@@ -222,12 +222,12 @@ function close(): void {
 @media (max-width: 767.98px) {
   .rp-input :deep(.p-button),
   .rp-tools :deep(.p-button) {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--tap-target);
+    min-height: var(--tap-target);
   }
 
   .rp-check {
-    min-height: 44px;
+    min-height: var(--tap-target);
     margin-bottom: 0;
   }
 

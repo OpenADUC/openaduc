@@ -33,6 +33,8 @@
   --sb-w: 232px;
   --sb-w-collapsed: 56px;
   --topbar-h: 52px;
+  /* The smallest a control on a phone should be, either way. */
+  --tap-target: 44px;
 
   /* Breakpoints (documentation only — CSS @media queries hardcode the
      numeric values because @media doesn't accept var() expressions) */

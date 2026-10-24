@@ -2029,7 +2029,7 @@ watch(user, (u) => {
 /* The Account tab's Unlock and Reset password, thumb-sized on a phone. */
 @media (max-width: 767.98px) {
   .card-actions :deep(.p-button) {
-    min-height: 44px;
+    min-height: var(--tap-target);
   }
 }
 

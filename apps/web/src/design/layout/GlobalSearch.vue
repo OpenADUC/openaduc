@@ -855,7 +855,7 @@ const announcement = computed(() => {
    name, and the keyboard hints go. */
 @media (max-width: 767.98px) {
   .gs-trigger {
-    min-height: 44px;
+    min-height: var(--tap-target);
     padding: 6px 12px;
   }
 
@@ -882,12 +882,12 @@ const announcement = computed(() => {
   /* Safari zooms the page into any input set smaller. */
   .gs-input {
     font-size: 16px;
-    min-height: 44px;
+    min-height: var(--tap-target);
   }
 
   .gs-close {
-    width: 44px;
-    height: 44px;
+    width: var(--tap-target);
+    height: var(--tap-target);
   }
 
   .gs-row {
@@ -903,7 +903,7 @@ const announcement = computed(() => {
   }
 
   .gs-action {
-    min-height: 44px;
+    min-height: var(--tap-target);
     padding: 0 12px;
     font-size: 13px;
   }

@@ -643,14 +643,19 @@ const freshnessText = computed(() => {
   }
 }
 
-/* Sticks to the bottom of the screen while the page scrolls under it. */
+/* While there's a bar, toasts (theme.css) rise above it. */
+:global(:root:has(.detail-primary-bar)) {
+  --primary-bar-height: 72px;
+}
+
 .detail-primary-bar {
   position: sticky;
   bottom: 0;
   z-index: 6;
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 10px 0 12px;
+  height: var(--primary-bar-height);
   border-top: 1px solid var(--border);
   background: var(--bg);
 }
@@ -817,8 +822,8 @@ const freshnessText = computed(() => {
   .object-tab,
   .object-tabs-refresh,
   .object-tabs-actions :deep(.p-button) {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--tap-target);
+    min-height: var(--tap-target);
     justify-content: center;
   }
 }
