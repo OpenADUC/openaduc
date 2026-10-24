@@ -1188,7 +1188,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         recycleBin = await provider.getRecycleBinStatus(ctx(actor, req));
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired('the directory rejected your step-up password — step up again');
+          throw StepUpRequired('password_rejected');
         }
         req.log.warn({ err }, 'recycle bin status unavailable for delete preflight');
       }
@@ -1203,7 +1203,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         );
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired('the directory rejected your step-up password — step up again');
+          throw StepUpRequired('password_rejected');
         }
         req.log.warn({ err }, 'child object count unavailable for delete preflight');
       }

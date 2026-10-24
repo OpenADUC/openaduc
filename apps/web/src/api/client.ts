@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Typed fetch client. Filled out alongside Phase 7 API endpoints.
-import { BACKGROUND_REQUEST_HEADER, ELEVATED_IDLE_END_HEADER } from '@openaduc/shared';
+import {
+  BACKGROUND_REQUEST_HEADER,
+  ELEVATED_IDLE_END_HEADER,
+  STEP_UP_REQUIRED_REASONS,
+  type StepUpRequiredReason,
+} from '@openaduc/shared';
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
@@ -27,9 +32,15 @@ export class ApiError extends Error {
  * its action-specific toast — but the dialog opens in parallel so the
  * operator just has to type their password and click Restore again.
  */
-let onStepUpRequired: ((message: string) => void) | null = null;
-export function setStepUpRequiredHandler(fn: (message: string) => void): void {
+let onStepUpRequired: ((reason: StepUpRequiredReason) => void) | null = null;
+export function setStepUpRequiredHandler(fn: (reason: StepUpRequiredReason) => void): void {
   onStepUpRequired = fn;
+}
+
+// A reason this client doesn't know reads as the plain case.
+function stepUpRequiredReason(details: unknown): StepUpRequiredReason {
+  const reason = (details as { reason?: unknown } | undefined)?.reason;
+  return STEP_UP_REQUIRED_REASONS.find((r) => r === reason) ?? 'not_elevated';
 }
 
 /**
@@ -89,7 +100,7 @@ export async function apiFetch<T>(
     const code = body.error?.code ?? 'unknown_error';
     const message = body.error?.message ?? res.statusText;
     if (res.status === 403 && code === 'step_up_required') {
-      onStepUpRequired?.(message);
+      onStepUpRequired?.(stepUpRequiredReason(body.error?.details));
     }
     if (res.status === 401 && code === 'session_required') {
       onUnauthorized?.();

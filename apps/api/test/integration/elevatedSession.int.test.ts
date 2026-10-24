@@ -88,7 +88,9 @@ describe('elevated sessions end when idle', () => {
 
     const refused = await write(admin);
     expect(refused.statusCode).toBe(403);
-    expect(refused.json()).toMatchObject({ error: { code: 'step_up_required' } });
+    expect(refused.json()).toMatchObject({
+      error: { code: 'step_up_required', details: { reason: 'not_elevated' } },
+    });
     expect((await elevation(admin)).active).toBe(false);
   });
 

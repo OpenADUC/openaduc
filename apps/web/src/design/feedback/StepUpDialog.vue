@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import Password from 'primevue/password';
@@ -11,8 +11,8 @@ import { ELEVATED_SESSION_LIMITS } from '@openaduc/shared';
 
 const props = defineProps<{
   visible: boolean;
-  // Optional context shown above the password field — populated when
-  // the server refused a write because the elevated session was gone.
+  /** Why the prompt is here, when the operator couldn't know: the server
+   *  refused a write, or the write says what it needs. */
   reason?: string | null;
 }>();
 const emit = defineEmits<{
@@ -27,14 +27,6 @@ const lifetimeMinutes = ELEVATED_SESSION_LIMITS.absoluteLifetime.default;
 const defaultLifetime =
   lifetimeMinutes % 60 === 0 ? `${lifetimeMinutes / 60} hours` : `${lifetimeMinutes} minutes`;
 const password = ref('');
-// The server's generic refusal only says what the explainer below says; a
-// reason of its own is lowercase, as server messages are.
-const reasonText = computed(() => {
-  const reason = props.reason?.trim();
-  if (!reason || /^step-up required\b/i.test(reason)) return null;
-  const sentence = reason[0]!.toUpperCase() + reason.slice(1);
-  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
-});
 const submitting = ref(false);
 const error = ref<string | null>(null);
 
@@ -91,7 +83,7 @@ function onCancel(): void {
   >
     <!-- Not a Message: its enter animation grows it from zero height, which
          left the text clipped in the opening dialog. -->
-    <p v-if="reasonText" class="dialog-reason" role="alert">{{ reasonText }}</p>
+    <p v-if="reason" class="dialog-reason" role="alert">{{ reason }}</p>
     <p class="dialog-prose">
       Re-enter your AD password to unlock writes. The server uses it to bind as you when applying
       changes. Writes stay unlocked until you've been idle a while or reach a time limit (by default
