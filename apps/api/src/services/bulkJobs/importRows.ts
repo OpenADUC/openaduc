@@ -3,16 +3,20 @@
 // IMPORT_STEPS' order, a row whose manager the import creates after that
 // manager's row. What a row has done is kept in its after_json, so a
 // retry runs only the steps still missing and never creates the account
-// twice. Passwords are held in import_passwords, never in the rows.
+// twice: a run that stopped before recording the row is found from its
+// audit row, or, failing that, by the account it left in the directory.
+// Passwords are held in import_passwords (heldPasswords.ts), never in the
+// rows.
 import {
   IMPORT_JOB_ACTION,
+  IMPORT_STEPS,
   NEW_USER_ORGANISATION_FIELDS,
   PASSWORD_MODES,
   childDn,
-  generatePassword,
   importPasswordSchema,
   remainingSteps,
   type ImportStep,
+  type PasswordMode,
   type UserCreateStep,
 } from '@openaduc/shared';
 import { sql } from 'kysely';
@@ -25,8 +29,13 @@ import {
 } from '../../providers/types.js';
 import { withAudit } from '../auditContext.js';
 import { findCachedGroupsById } from '../groupCache.js';
-import { membershipRequirement } from '../groupMembershipWrite.js';
-import { heldPassword, holdPassword, passwordsHoldable } from '../importPasswords.js';
+import { membershipRequirements } from '../groupMembershipWrite.js';
+import {
+  handedOutPassword,
+  heldPassword,
+  holdPassword,
+  passwordsHoldable,
+} from '../heldPasswords.js';
 import { randomPassword, readBack } from '../userCreate.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../userAttributeWrite.js';
 import { BulkJobRequestError } from './errors.js';
@@ -76,14 +85,23 @@ export const importPlanSchema = z.object({
 });
 export type ImportPlan = z.infer<typeof importPlanSchema>;
 
+const optionsSchema = z.object({
+  passwordMode: z.enum(PASSWORD_MODES),
+  mustChange: z.boolean(),
+  enabled: z.boolean(),
+});
+
+/** How the import sets every account up: kept on its subject and on each row. */
+const optionsOf = (plan: ImportPlan): z.infer<typeof optionsSchema> => ({
+  passwordMode: plan.password.mode,
+  mustChange: plan.password.mode !== 'random' && plan.password.mustChange,
+  enabled: plan.enabled,
+});
+
 const rowInputSchema = importPlanRowSchema.omit({ managerRow: true }).extend({
   /** The row creating the manager, by its ordinal in the job. */
   managerOrdinal: z.number().int().nullable(),
-  options: z.object({
-    passwordMode: z.enum(PASSWORD_MODES),
-    mustChange: z.boolean(),
-    enabled: z.boolean(),
-  }),
+  options: optionsSchema,
 });
 type RowInput = z.infer<typeof rowInputSchema>;
 
@@ -97,6 +115,13 @@ export interface ImportRowProgress {
   /** The groups added, as a membership row keeps them. */
   groups: { id: string; name: string; isMember: boolean }[];
   failed: { step: ImportStep; message: string }[];
+  /**
+   * Its password was set after the job's passwords were downloaded or
+   * purged, so it's random and nobody knows it: the account needs a reset.
+   */
+  passwordFallback?: 'random';
+  /** A retry found the account a run had created without recording it, and took it on. */
+  adopted?: true;
 }
 
 export function progressOf(after: Record<string, unknown> | null): ImportRowProgress | null {
@@ -121,13 +146,53 @@ export function managersFirst(rows: readonly { managerRow: number | null }[]): n
   return order;
 }
 
+/** AD's GeneralizedTime (whenCreated), e.g. `20261025061234.0Z`. */
+export function generalizedTime(value: string | null): Date | null {
+  const m = value && /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(value);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m.map(Number) as [number, ...number[]];
+  return new Date(Date.UTC(y!, mo! - 1, d!, h!, mi!, s!));
+}
+
+/**
+ * Whether an account a retry finds holding a row's names is the one an
+ * earlier run of the row created without recording it: exactly the
+ * names planned, still disabled as a create leaves it, and created since
+ * the job started. Anyone else's account fails the row as a name taken.
+ */
+export function adoptable(
+  account: { samAccountName: string | null; userPrincipalName: string | null; enabled: boolean },
+  whenCreated: string | null,
+  planned: { samAccountName: string; userPrincipalName: string },
+  jobStartedAt: Date,
+): boolean {
+  const same = (a: string | null, b: string) => a?.toLowerCase() === b.toLowerCase();
+  const created = generalizedTime(whenCreated);
+  return (
+    same(account.samAccountName, planned.samAccountName) &&
+    same(account.userPrincipalName, planned.userPrincipalName) &&
+    !account.enabled &&
+    created !== null &&
+    created.getTime() >= Math.floor(jobStartedAt.getTime() / 1000) * 1000
+  );
+}
+
 /** The account steps the provider runs, in AD's order, of the import's steps. */
 const accountSteps = (enabled: boolean): UserCreateStep[] =>
   enabled ? ['create', 'password', 'enable'] : ['create', 'password'];
 
-const STEP_FAILED: Record<'password' | 'enable', string> = {
+const isAccountStep = (s: ImportStep): s is UserCreateStep =>
+  s === 'create' || s === 'password' || s === 'enable';
+
+/** Steps done, in IMPORT_STEPS' order whatever order they were done in. */
+const mergeSteps = (done: readonly ImportStep[], more: readonly ImportStep[]): ImportStep[] =>
+  IMPORT_STEPS.filter((s) => done.includes(s) || more.includes(s));
+
+const NOT_DONE: Record<Exclude<ImportStep, 'create'>, string> = {
   password: 'Password not set',
   enable: 'Not enabled',
+  groups: 'Not added to its groups',
+  manager: 'Manager not set',
 };
 
 export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | null> {
@@ -138,11 +203,7 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
     rows(plan) {
       const order = managersFirst(plan.rows);
       const ordinal = new Map(order.map((i, at) => [i, at]));
-      const options = {
-        passwordMode: plan.password.mode,
-        mustChange: plan.password.mode !== 'random' && plan.password.mustChange,
-        enabled: plan.enabled,
-      };
+      const options = optionsOf(plan);
       return order.map((i) => {
         const { managerRow, ...row } = plan.rows[i]!;
         const managerOrdinal = managerRow === null ? null : ordinal.get(managerRow)!;
@@ -167,14 +228,7 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
           distinguishedName: group.distinguishedName,
         };
       });
-      return {
-        ...(groups.length > 0 ? { groups } : {}),
-        import: {
-          passwordMode: plan.password.mode,
-          mustChange: plan.password.mode !== 'random' && plan.password.mustChange,
-          enabled: plan.enabled,
-        },
-      };
+      return { ...(groups.length > 0 ? { groups } : {}), import: optionsOf(plan) };
     },
     requires(subject, roleGroups) {
       const groups = subject?.groups ?? [];
@@ -185,7 +239,7 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
           reason:
             'Adding the new accounts to their groups takes the write:group.membership capability.',
         },
-        ...[membershipRequirement('add', groups, roleGroups)].filter((r) => r !== null),
+        ...membershipRequirements('add', groups, roleGroups),
       ];
     },
     input: rowInputSchema,
@@ -194,32 +248,38 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
 }
 
 type Failure = { step: ImportStep; message: string; code: string };
+type Row = {
+  id: string;
+  attempts: number;
+  input: RowInput;
+  after: Record<string, unknown> | null;
+};
+type JobFacts = { id: string; created_at: Date; results_downloaded_at: Date | null };
 
-async function runImportRow(
-  row: {
-    id: string;
-    targetId: string | null;
-    input: RowInput;
-    after: Record<string, unknown> | null;
-  },
-  ctx: BulkRowContext,
-): Promise<BulkRowOutcome> {
+async function runImportRow(row: Row, ctx: BulkRowContext): Promise<BulkRowOutcome> {
   const { input } = row;
   const { provider } = ctx;
-  const earlier = progressOf(row.after) ?? (await createdBefore(input, ctx));
+  const job = await ctx.db
+    .selectFrom('bulk_jobs')
+    .select(['id', 'created_at', 'results_downloaded_at'])
+    .where('id', '=', ctx.jobId)
+    .executeTakeFirstOrThrow();
   const failures: Failure[] = [];
   const planned = accountSteps(input.options.enabled);
 
-  let progress: ImportRowProgress;
+  let progress =
+    progressOf(row.after) ??
+    (await createdBefore(input, ctx)) ??
+    (row.attempts > 1 ? await adopt(input, job, ctx) : null);
   let user: DirectoryUser | null;
-  if (!earlier) {
-    const created = await createAccount(row, input, planned, ctx);
+  if (!progress) {
+    const created = await createAccount(row, input, planned, job, ctx);
     if (!created.ok) return created.outcome;
     ({ progress, user } = created);
     if (created.failure) failures.push(created.failure);
   } else {
-    progress = { ...earlier, failed: [] };
-    user = await findCreated(provider, progress);
+    progress = { ...progress, failed: [] };
+    user = await findCreated(provider, progress, input);
     if (!user) {
       return {
         ok: false,
@@ -233,40 +293,59 @@ async function runImportRow(
     progress.distinguishedName = user.distinguishedName;
     const left = remainingSteps(planned, progress.completed.filter(isAccountStep));
     if (left.length > 0) {
-      const finished = await finishAccount(row, input, user, left, planned, progress, ctx);
+      const finished = await finishAccount(row, input, user, left, planned, progress, job, ctx);
       progress.completed = mergeSteps(progress.completed, finished.completed);
+      if (finished.fallback) progress.passwordFallback = 'random';
       if (finished.failure) failures.push(finished.failure);
     }
   }
 
+  // Steps with nothing to do are done, account or not.
+  if (input.groupIds.length === 0) progress.completed = mergeSteps(progress.completed, ['groups']);
+  if (!input.managerId && input.managerOrdinal === null) {
+    progress.completed = mergeSteps(progress.completed, ['manager']);
+  }
+
   // The cache shows the account at once, read with the service account.
+  user ??= await findCreated(provider, progress, input);
   const live = user ? await ctx.services.userLiveRefresh.refresh(provider, user.objectGuid) : null;
   if (live) user = live.user;
+  if (user) {
+    progress.id = user.objectGuid;
+    progress.distinguishedName = user.distinguishedName;
+  }
+
+  if (!user) {
+    // Made, but neither read back nor found since: what's left waits for a retry.
+    for (const step of IMPORT_STEPS) {
+      if (step === 'create' || progress.completed.includes(step)) continue;
+      if (failures.some((f) => f.step === step)) continue;
+      failures.push({
+        step,
+        code: 'not_found',
+        message: `${NOT_DONE[step]}: the new account couldn’t be read back. Retry once the directory answers.`,
+      });
+    }
+  }
 
   if (user && !progress.completed.includes('groups')) {
-    if (input.groupIds.length === 0)
-      progress.completed = mergeSteps(progress.completed, ['groups']);
+    const done = new Set(progress.groups.filter((g) => g.isMember).map((g) => g.id.toLowerCase()));
+    const added = await membershipRow(
+      'add',
+      { targetId: user.objectGuid, after: { groups: progress.groups } },
+      input.groupIds.filter((id) => !done.has(id)),
+      user,
+      ctx,
+    );
+    const groups = added.after?.['groups'];
+    if (Array.isArray(groups)) progress.groups = groups as ImportRowProgress['groups'];
+    if (added.ok) progress.completed = mergeSteps(progress.completed, ['groups']);
     else {
-      const done = new Set(
-        progress.groups.filter((g) => g.isMember).map((g) => g.id.toLowerCase()),
-      );
-      const added = await membershipRow(
-        'add',
-        { targetId: user.objectGuid, after: { groups: progress.groups } },
-        input.groupIds.filter((id) => !done.has(id)),
-        user,
-        ctx,
-      );
-      const groups = added.after?.['groups'];
-      if (Array.isArray(groups)) progress.groups = groups as ImportRowProgress['groups'];
-      if (added.ok) progress.completed = mergeSteps(progress.completed, ['groups']);
-      else {
-        failures.push({
-          step: 'groups',
-          code: added.errorCode,
-          message: added.message ?? 'Not added to its groups.',
-        });
-      }
+      failures.push({
+        step: 'groups',
+        code: added.errorCode,
+        message: added.message ?? `${NOT_DONE.groups}.`,
+      });
     }
   }
 
@@ -287,7 +366,7 @@ async function runImportRow(
   return {
     ok: false,
     errorCode: failures[0]!.code,
-    message: failures.map((f) => f.message).join(' '),
+    message: [...new Set(failures.map((f) => f.message))].join(' '),
     partial: true,
     audited: true,
     ...fields,
@@ -325,55 +404,93 @@ async function createdBefore(
   };
 }
 
-const isAccountStep = (s: ImportStep): s is UserCreateStep =>
-  s === 'create' || s === 'password' || s === 'enable';
-
-/** Steps done, in IMPORT_STEPS' order whatever order they were done in. */
-function mergeSteps(done: readonly ImportStep[], more: readonly ImportStep[]): ImportStep[] {
-  const all = new Set([...done, ...more]);
-  return (['create', 'password', 'enable', 'groups', 'manager'] as const).filter((s) => all.has(s));
-}
-
-/** The account a row created, by id, or by DN if it couldn't be read back then. */
-async function findCreated(
-  provider: DirectoryProvider,
-  progress: ImportRowProgress,
-): Promise<DirectoryUser | null> {
-  return progress.id
-    ? provider.getUser({ kind: 'objectGuid', value: progress.id })
-    : provider.getUser({ kind: 'distinguishedName', value: progress.distinguishedName });
+/**
+ * A retried row with no record of its create, whose account a run made
+ * anyway (the create landed, then the process died before its audit row):
+ * found by its planned names and taken on, its password and enabling run
+ * again. Null when there's no such account, or it isn't the row's.
+ */
+async function adopt(
+  input: RowInput,
+  job: JobFacts,
+  ctx: BulkRowContext,
+): Promise<ImportRowProgress | null> {
+  const found = await ctx.provider.getUser({
+    kind: 'samAccountName',
+    value: input.samAccountName,
+  });
+  if (!found) return null;
+  const account = await ctx.provider.getAccountFingerprint({
+    kind: 'objectGuid',
+    value: found.objectGuid,
+  });
+  if (!adoptable(found, account?.whenCreated ?? null, input, new Date(job.created_at))) return null;
+  return {
+    id: found.objectGuid,
+    distinguishedName: found.distinguishedName,
+    createCorrelationId: null,
+    completed: ['create'],
+    groups: [],
+    failed: [],
+    adopted: true,
+  };
 }
 
 /**
- * The row's password: in random mode one nobody sees; in set mode the one
- * held for every row; in generate mode the row's own, made and held before
- * it's set so the results CSV can hand it over. Once the job's passwords
- * have been downloaded or have expired, nothing more is held, and a row
- * still to get one gets a random one: its account needs a reset.
+ * The account a row created: by id, else by DN, else by the logon name
+ * and UPN just written (it may have been moved or renamed since, or not
+ * read back at the time). Null when none answers.
+ */
+async function findCreated(
+  provider: DirectoryProvider,
+  progress: ImportRowProgress,
+  input: RowInput,
+): Promise<DirectoryUser | null> {
+  if (progress.id) {
+    const byId = await provider.getUser({ kind: 'objectGuid', value: progress.id });
+    if (byId) return byId;
+  }
+  const byDn = await provider.getUser({
+    kind: 'distinguishedName',
+    value: progress.distinguishedName,
+  });
+  if (byDn) return byDn;
+  const byName = await provider.getUser({ kind: 'samAccountName', value: input.samAccountName });
+  return byName?.userPrincipalName?.toLowerCase() === input.userPrincipalName.toLowerCase()
+    ? byName
+    : null;
+}
+
+/**
+ * The row's password, and whether it fell back to a random one: in random
+ * mode one nobody sees; in set mode the one held for every row; in
+ * generate mode the row's own, made and held before it's set so the
+ * results CSV can hand it over. Once the job's passwords have been
+ * downloaded, or the shared one has expired, a row still to get one gets
+ * a random one instead, and its account needs a reset.
  */
 async function passwordFor(
   row: { id: string },
   input: RowInput,
+  job: JobFacts,
   ctx: BulkRowContext,
-): Promise<string> {
+): Promise<{ password: string; mode: PasswordMode; mustChange: boolean; fallback: boolean }> {
   const account = { samAccountName: input.samAccountName, displayName: input.displayName };
-  const mode = input.options.passwordMode;
-  if (mode === 'random') return randomPassword(ctx.provider, account);
+  const { passwordMode: mode, mustChange } = input.options;
+  const random = async (fallback: boolean) => ({
+    password: await randomPassword(ctx.provider, account),
+    mode: 'random' as const,
+    mustChange: false,
+    fallback,
+  });
+  if (mode === 'random') return random(false);
+  if (!passwordsHoldable(job)) return random(true);
   const held = await heldPassword(ctx.db, ctx.jobId, row.id);
-  if (held) return held;
-  const job = await ctx.db
-    .selectFrom('bulk_jobs')
-    .select(['id', 'created_at', 'results_downloaded_at'])
-    .where('id', '=', ctx.jobId)
-    .executeTakeFirstOrThrow();
-  if (mode === 'set' || !passwordsHoldable(job)) return randomPassword(ctx.provider, account);
-  const policy = await ctx.provider.getDomainPolicy().catch(() => null);
-  let password: string;
-  // The results CSV would quote one starting like a formula, changing it.
-  do password = generatePassword(policy, account);
-  while (/^[=+\-@]/.test(password));
-  await holdPassword(ctx.db, job, row.id, password);
-  return password;
+  if (held) return { password: held, mode, mustChange, fallback: false };
+  if (mode === 'set') return random(true);
+  const password = await handedOutPassword(ctx.provider, account);
+  await holdPassword(ctx.db, ctx.jobId, row.id, password);
+  return { password, mode, mustChange, fallback: false };
 }
 
 function createInput(input: RowInput, dn: string) {
@@ -425,8 +542,15 @@ function stepFailure(r: UserCreateResult): Failure | null {
   const step = r.failedStep;
   if (step !== 'password' && step !== 'enable') return null;
   const reason = r.errorMessage ? `: ${r.errorMessage}` : '.';
-  return { step, code: r.reason ?? 'directory_error', message: `${STEP_FAILED[step]}${reason}` };
+  return { step, code: r.reason ?? 'directory_error', message: `${NOT_DONE[step]}${reason}` };
 }
+
+/** How the password step is audited: the mode used, which a fallback makes random. */
+const passwordAudit = (used: Awaited<ReturnType<typeof passwordFor>>) => ({
+  passwordMode: used.mode,
+  mustChange: used.mustChange,
+  ...(used.fallback ? { passwordFallback: true } : {}),
+});
 
 /**
  * Create the account disabled, set its password and enable it if asked,
@@ -436,6 +560,7 @@ async function createAccount(
   row: { id: string },
   input: RowInput,
   planned: UserCreateStep[],
+  job: JobFacts,
   ctx: BulkRowContext,
 ): Promise<
   | { ok: true; progress: ImportRowProgress; user: DirectoryUser | null; failure: Failure | null }
@@ -443,7 +568,7 @@ async function createAccount(
 > {
   const { provider } = ctx;
   const dn = childDn('CN', input.cn, input.ouDn);
-  const password = await passwordFor(row, input, ctx);
+  const used = await passwordFor(row, input, job, ctx);
   const written = {
     distinguishedName: dn,
     mail: input.mail,
@@ -462,8 +587,7 @@ async function createAccount(
         ouDn: input.ouDn,
         samAccountName: input.samAccountName,
         userPrincipalName: input.userPrincipalName,
-        passwordMode: input.options.passwordMode,
-        mustChange: input.options.mustChange,
+        ...passwordAudit(used),
         enabled: input.options.enabled,
         importLine: input.line,
       },
@@ -472,7 +596,7 @@ async function createAccount(
       const r = await provider.createUser(
         createInput(input, dn),
         planned,
-        { password, mustChange: input.options.mustChange, groups: [] },
+        { password: used.password, mustChange: used.mustChange, groups: [] },
         ctx.writeCtx,
       );
       return stepsAudit(await readBack(provider, r, dn), planned, written);
@@ -490,11 +614,10 @@ async function createAccount(
       },
     };
   }
-  const failure = stepFailure(r);
   return {
     ok: true,
     user: r.user ?? null,
-    failure,
+    failure: stepFailure(r),
     progress: {
       id: r.user?.objectGuid ?? r.fingerprint?.objectGuid ?? null,
       distinguishedName: r.user?.distinguishedName ?? dn,
@@ -502,6 +625,9 @@ async function createAccount(
       completed: r.completed,
       groups: [],
       failed: [],
+      ...(used.fallback && r.completed.includes('password')
+        ? { passwordFallback: 'random' as const }
+        : {}),
     },
   };
 }
@@ -528,10 +654,11 @@ async function finishAccount(
   steps: UserCreateStep[],
   planned: UserCreateStep[],
   progress: ImportRowProgress,
+  job: JobFacts,
   ctx: BulkRowContext,
-): Promise<{ completed: UserCreateStep[]; failure: Failure | null }> {
+): Promise<{ completed: UserCreateStep[]; failure: Failure | null; fallback: boolean }> {
   const { provider } = ctx;
-  const password = steps.includes('password') ? await passwordFor(row, input, ctx) : '';
+  const used = steps.includes('password') ? await passwordFor(row, input, job, ctx) : null;
   const done = progress.completed.filter(isAccountStep);
   const result = await withAudit(
     ctx.services.audit,
@@ -546,16 +673,15 @@ async function finishAccount(
       metadata: {
         createCorrelationId: progress.createCorrelationId,
         steps,
-        ...(steps.includes('password')
-          ? { passwordMode: input.options.passwordMode, mustChange: input.options.mustChange }
-          : {}),
+        ...(used ? passwordAudit(used) : {}),
+        ...(progress.adopted ? { adopted: true } : {}),
       },
     },
     async () => {
       const r = await provider.finishUserCreate(
         { kind: 'objectGuid', value: user.objectGuid },
         steps,
-        { password, mustChange: input.options.mustChange, groups: [] },
+        { password: used?.password ?? '', mustChange: used?.mustChange ?? false, groups: [] },
         ctx.writeCtx,
       );
       const all = { ...r, completed: [...done, ...r.completed] };
@@ -564,7 +690,12 @@ async function finishAccount(
       });
     },
   );
-  return { completed: result.created.completed, failure: stepFailure(result.created) };
+  const r = result.created;
+  return {
+    completed: r.completed,
+    failure: stepFailure(r),
+    fallback: !!used?.fallback && r.completed.includes('password'),
+  };
 }
 
 /**
@@ -580,7 +711,7 @@ async function setManager(
   const failed = (code: string, why: string): Failure => ({
     step: 'manager',
     code,
-    message: `Manager not set: ${why}`,
+    message: `${NOT_DONE.manager}: ${why}`,
   });
   let managerId = input.managerId;
   if (input.managerOrdinal !== null) {

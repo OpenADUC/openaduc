@@ -25,9 +25,15 @@ export class Crypter {
     this.keyBuf = raw;
   }
 
-  encrypt(plaintext: string): string {
+  /**
+   * `aad`, associated data, binds the ciphertext to where it's stored (say
+   * a row's id): decrypting takes the same, so a ciphertext copied
+   * elsewhere doesn't decrypt.
+   */
+  encrypt(plaintext: string, aad?: string): string {
     const iv = randomBytes(12); // GCM standard
     const cipher = createCipheriv('aes-256-gcm', this.keyBuf, iv);
+    if (aad !== undefined) cipher.setAAD(Buffer.from(aad, 'utf8'));
     const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
     return [
@@ -38,7 +44,7 @@ export class Crypter {
     ].join('.');
   }
 
-  decrypt(envelope: string): string {
+  decrypt(envelope: string, aad?: string): string {
     const parts = envelope.split('.');
     if (parts.length !== 4 || parts[0] !== 'v1') {
       throw new Error('unrecognized encryption envelope');
@@ -50,6 +56,7 @@ export class Crypter {
     if (tag.length !== 16) throw new Error('invalid GCM tag length');
     const decipher = createDecipheriv('aes-256-gcm', this.keyBuf, iv);
     decipher.setAuthTag(tag);
+    if (aad !== undefined) decipher.setAAD(Buffer.from(aad, 'utf8'));
     const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
     return pt.toString('utf8');
   }
@@ -67,12 +74,12 @@ function defaultCrypter(): Crypter {
   return cached;
 }
 
-export function encryptSecret(plaintext: string): string {
-  return defaultCrypter().encrypt(plaintext);
+export function encryptSecret(plaintext: string, aad?: string): string {
+  return defaultCrypter().encrypt(plaintext, aad);
 }
 
-export function decryptSecret(envelope: string): string {
-  return defaultCrypter().decrypt(envelope);
+export function decryptSecret(envelope: string, aad?: string): string {
+  return defaultCrypter().decrypt(envelope, aad);
 }
 
 /** Test-only helper to reset the cached default Crypter when env changes between tests. */

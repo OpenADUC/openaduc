@@ -32,7 +32,7 @@ import {
 import type { AuditEventInput, AuditService } from '../audit.js';
 import { wasAudited } from '../auditContext.js';
 import type { CredentialCacheService } from '../credentialCache.js';
-import { holdPassword, purgeExpiredPasswords } from '../importPasswords.js';
+import { holdFromNow, holdPassword, purgeExpiredPasswords } from '../heldPasswords.js';
 import type { SessionsService } from '../sessions.js';
 import type { MembershipCacheDeps } from '../groupMembershipWrite.js';
 import { BulkJobRequestError } from './errors.js';
@@ -225,11 +225,17 @@ export class BulkJobService {
   ): Promise<string> {
     const handler = this.handlers[action];
     const request = handler.request.parse(body);
-    const rows = handler.rows(request);
-    const subject =
-      (await handler.prepare?.(request, { db: this.db, directoryId: actor.directoryId })) ?? null;
+    const lookup = { db: this.db, directoryId: actor.directoryId };
+    const rows = await handler.rows(request, { ...lookup, actorUserId: actor.actorUserId });
+    const subject = (await handler.prepare?.(request, lookup)) ?? null;
     await authorize?.(subject);
-    return this.insert(actor, action, subject, rows, undefined, handler.secret?.(request) ?? null);
+    return this.insert({
+      actor,
+      action,
+      subject,
+      rows,
+      secret: handler.secret?.(request) ?? null,
+    });
   }
 
   /**
@@ -279,23 +285,29 @@ export class BulkJobService {
       targetId: row.targetId,
       input: revertInput(String(job.id), row, force),
     }));
-    return this.insert(actor, BULK_REVERT_ACTIONS[revertable(job)], job.subject_json, rows, {
-      revertsJobId: String(job.id),
-      metadata: {
-        leftAsChanged: plan.modified.length - forced.length,
-        notRevertible: plan.notRevertible.length,
-      },
-      guard: async (trx) => {
-        const locked = await lockJob(trx, job.id);
-        const refusal = await this.refusal(trx, locked);
-        if (refusal) throw new BulkJobRequestError(refusal.code, refusal.message);
-        const at = (d: Date | string | null) => (d === null ? null : new Date(d).getTime());
-        if (at(locked.finished_at) !== at(job.finished_at)) {
-          throw new BulkJobRequestError(
-            'preview_mismatch',
-            'The job has run again since the preview. Preview the revert again.',
-          );
-        }
+    return this.insert({
+      actor,
+      action: BULK_REVERT_ACTIONS[revertable(job)],
+      subject: job.subject_json,
+      rows,
+      revert: {
+        revertsJobId: String(job.id),
+        metadata: {
+          leftAsChanged: plan.modified.length - forced.length,
+          notRevertible: plan.notRevertible.length,
+        },
+        guard: async (trx) => {
+          const locked = await lockJob(trx, job.id);
+          const refusal = await this.refusal(trx, locked);
+          if (refusal) throw new BulkJobRequestError(refusal.code, refusal.message);
+          const at = (d: Date | string | null) => (d === null ? null : new Date(d).getTime());
+          if (at(locked.finished_at) !== at(job.finished_at)) {
+            throw new BulkJobRequestError(
+              'preview_mismatch',
+              'The job has run again since the preview. Preview the revert again.',
+            );
+          }
+        },
       },
     }).catch(revertRunning);
   }
@@ -324,20 +336,27 @@ export class BulkJobService {
       : revertRunner(revertedAction(job.action));
   }
 
-  private async insert(
-    actor: JobActor,
-    action: BulkJobKind,
-    subject: BulkJobSubject | null,
-    rows: BulkJobRowInput<unknown>[],
+  private async insert({
+    actor,
+    action,
+    subject,
+    rows,
+    revert,
+    secret = null,
+  }: {
+    actor: JobActor;
+    action: BulkJobKind;
+    subject: BulkJobSubject | null;
+    rows: BulkJobRowInput<unknown>[];
     revert?: {
       revertsJobId: string;
       metadata: Record<string, unknown>;
       /** Run in the transaction that stores the job, first; throws to refuse it. */
       guard: (trx: Transaction<DB>) => Promise<void>;
-    },
+    };
     /** The one secret every row uses, held encrypted for the job. */
-    secret: string | null = null,
-  ): Promise<string> {
+    secret?: string | null;
+  }): Promise<string> {
     const targets = rows.flatMap((r) => (r.targetId === null ? [] : [r.targetId]));
     const cached =
       targets.length === 0
@@ -385,7 +404,7 @@ export class BulkJobService {
           )
           .execute();
       }
-      if (secret !== null) await holdPassword(trx, job, null, secret);
+      if (secret !== null) await holdPassword(trx, String(job.id), null, secret);
       return job.id;
     });
 
@@ -574,6 +593,7 @@ export class BulkJobService {
       return Number(rows.numUpdatedRows);
     });
     if (skipped === null) return false;
+    await holdFromNow(this.db, job.id);
     await this.record(actor, job, 'bulk.cancel', { skipped });
     return true;
   }
@@ -600,7 +620,7 @@ export class BulkJobService {
     }
   }
 
-  /** Delete import passwords held past their time; the sweep runs it. */
+  /** Delete held passwords past their time; the sweep runs it. */
   async purgeExpiredPasswords(): Promise<void> {
     try {
       await purgeExpiredPasswords(this.db);
@@ -707,13 +727,14 @@ export class BulkJobService {
       await this.recordPause(job, pause);
       return;
     }
-    await this.db
+    const finished = await this.db
       .updateTable('bulk_jobs')
       .set({ status: 'finished', run_token: null, finished_at: sql`now()` })
       .where('id', '=', job.id)
       .where('run_token', '=', token)
       .where('status', '=', 'running')
-      .execute();
+      .executeTakeFirst();
+    if (Number(finished.numUpdatedRows) > 0) await holdFromNow(this.db, job.id);
   }
 
   /** The operator's write credentials, while their elevated session lives. */
@@ -792,6 +813,7 @@ export class BulkJobService {
       outcome = await handler.run(
         {
           id: String(row.id),
+          attempts: row.attempts,
           targetId: row.target_id,
           targetDn: row.target_dn,
           input: handler.input.parse(row.input_json),

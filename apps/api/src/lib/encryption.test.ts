@@ -62,6 +62,15 @@ describe('encrypt/decrypt round-trip', () => {
   });
 });
 
+describe('associated data', () => {
+  it('decrypts only with the associated data it was encrypted with', () => {
+    const env = encryptSecret('row secret', 'import_passwords:7:41');
+    expect(decryptSecret(env, 'import_passwords:7:41')).toBe('row secret');
+    expect(() => decryptSecret(env, 'import_passwords:7:42')).toThrow();
+    expect(() => decryptSecret(env)).toThrow();
+  });
+});
+
 describe('Crypter directly', () => {
   it('rejects keys that are not 32 bytes when constructed', () => {
     expect(() => new Crypter(Buffer.from('too short').toString('base64'))).toThrow(/32 bytes/);

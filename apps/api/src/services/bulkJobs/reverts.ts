@@ -30,7 +30,7 @@ import {
   type AttributeValues,
 } from '../bulkAttributes.js';
 import { findCachedGroupsById } from '../groupCache.js';
-import { membershipRequirement } from '../groupMembershipWrite.js';
+import { membershipRequirements } from '../groupMembershipWrite.js';
 import { findCachedOu, userMoveRefusal, type CachedOu } from '../ouCache.js';
 import { previewList } from '../previewList.js';
 import { previewToken } from '../previewToken.js';
@@ -572,9 +572,7 @@ export function revertRunner(action: BulkRevertableAction): BulkRevertRunner {
     ...(action === 'user.group.remove'
       ? {
           requires: (subject, roleGroups) =>
-            [membershipRequirement('add', subject?.groups ?? [], roleGroups)].filter(
-              (r) => r !== null,
-            ),
+            membershipRequirements('add', subject?.groups ?? [], roleGroups),
         }
       : {}),
     input: revertInputSchema,
