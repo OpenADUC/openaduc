@@ -7,7 +7,6 @@ import type { NamingDeviation, NamingSuggestion } from './naming.js';
 import { normalizePhone, type NormalizedPhone } from './phone.js';
 import { checkPassword, type PasswordCheck, type PasswordPolicy } from './password.js';
 import {
-  NEW_USER_ORGANISATION_FIELDS,
   PHONE_FIELDS,
   type NewUserOrganisation,
   type PasswordMode,
@@ -150,7 +149,14 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
       ? { mode: form.passwordMode as 'generate' | 'set', password: form.password, mustChange }
       : null;
 
-  const organisation = organisationToWrite(form.organisation);
+  if (form.copiedFrom && !form.ouDn) {
+    blockers.push({
+      field: 'ouDn',
+      message: 'The user being copied isn’t in an OU, so the copy needs an OU to go in.',
+    });
+  }
+  const organisation =
+    form.organisation && Object.keys(form.organisation).length > 0 ? form.organisation : null;
   const groups = ctx.canAddGroups ? (form.groups ?? []) : [];
   if (!ctx.canAddGroups && form.groups?.length) {
     warnings.push({
@@ -199,18 +205,6 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
     password,
     groups,
   };
-}
-
-/** The organisation attributes that have a value, or null when none does. */
-function organisationToWrite(o: NewUserOrganisation | undefined): NewUserOrganisation | null {
-  if (!o) return null;
-  const out: NewUserOrganisation = {};
-  for (const field of NEW_USER_ORGANISATION_FIELDS) {
-    const value = o[field]?.trim();
-    if (value) out[field] = value;
-  }
-  if (o.managerId) out.managerId = o.managerId;
-  return Object.keys(out).length > 0 ? out : null;
 }
 
 /**
