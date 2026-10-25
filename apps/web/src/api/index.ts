@@ -14,7 +14,13 @@ import type {
   DeletedUserSearchResponse,
   DirectoryOu,
   ElevatedSessionState,
+  GroupCreateRequest,
+  GroupCreateResponse,
+  GroupDeletePreflightResponse,
+  GroupDeleteRequest,
   GroupDetail,
+  GroupNameCheckQuery,
+  GroupNameCheckResponse,
   GroupPolicyDetail,
   GroupPolicyListResponse,
   GroupSearchQuery,
@@ -527,6 +533,23 @@ export const api = {
     },
     removeGroup(id: string, body: { groupId: string }): Promise<{ ok: boolean }> {
       return apiFetch(`/groups/${encodeURIComponent(id)}/groups`, {
+        method: 'DELETE',
+        body: JSON.stringify(body),
+      });
+    },
+    nameCheck(query: GroupNameCheckQuery): Promise<GroupNameCheckResponse> {
+      const params = new URLSearchParams();
+      for (const [k, v] of Object.entries(query)) if (v) params.set(k, v);
+      return apiFetch(`/groups/name-check?${params.toString()}`);
+    },
+    create(body: GroupCreateRequest): Promise<GroupCreateResponse> {
+      return apiFetch('/groups', { method: 'POST', body: JSON.stringify(body) });
+    },
+    deletePreflight(id: string): Promise<GroupDeletePreflightResponse> {
+      return apiFetch(`/groups/${encodeURIComponent(id)}/delete-preflight`);
+    },
+    remove(id: string, body: GroupDeleteRequest): Promise<{ ok: boolean }> {
+      return apiFetch(`/groups/${encodeURIComponent(id)}`, {
         method: 'DELETE',
         body: JSON.stringify(body),
       });

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
+import type { GroupScope, GroupType } from '@openaduc/shared';
+import type { GroupDeleteFacts, RoleGroup } from '../lib/groupDeletion.js';
+
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
 // Directory implementation, but routes/services depend on this interface so
 // future providers (generic LDAP, Entra ID/Graph) can drop in without rewrites.
@@ -96,6 +99,8 @@ export interface DirectoryGroup {
   groupScope: string | null;
   // Direct member DNs.
   memberDns: string[];
+  // The groups it is directly a member of.
+  memberOfDns: string[];
   rawAttributes: Record<string, unknown>;
 }
 
@@ -479,6 +484,30 @@ export interface DirectoryProvider {
   ): Promise<MutationResult & { treeDelete?: boolean }>;
   /** How many objects sit anywhere under each DN (null where unreadable). */
   countChildObjects(dns: string[], ctx: WriteContext): Promise<Map<string, number | null>>;
+  // Who already holds a new object's names: `cn` among the direct children
+  // of `parentDn`, `samAccountName` anywhere in the domain. Reads with the
+  // service account.
+  findNameHolders(input: NewObjectNames): Promise<NameHolders>;
+  // Create a group at `input.dn`. Checks both names are free on the
+  // operator's bind first and returns `conflict` naming the holder
+  // otherwise. Returns the new group so the cache can show it at once,
+  // unless it couldn't be read back after the add.
+  createGroup(
+    input: GroupCreateInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { group?: DirectoryGroup }>;
+  // What decides whether a group may be deleted besides its own entry:
+  // its parent groups and how many accounts have it as primary group.
+  // Reads with the service account.
+  getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts>;
+  // Delete a group. Re-checks against the live entry, on the operator's
+  // bind, that nothing blocks it (see groupDeleteBlock) and returns
+  // `policy_violation` with the reason if something does.
+  deleteGroup(
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+    roleGroups: readonly RoleGroup[],
+  ): Promise<MutationResult>;
   // Create a new OU as a direct child of `parentDn`. Returns the resulting
   // DirectoryOu so the route can update its cache row in place rather than
   // waiting for the next sync.
@@ -549,6 +578,29 @@ export interface UserRenameInput {
   userPrincipalName?: string | undefined;
   email?: string | null | undefined;
   keepOldEmailAsAlias: boolean;
+}
+
+export interface NewObjectNames {
+  parentDn: string;
+  cn?: string | undefined;
+  samAccountName?: string | undefined;
+}
+
+// Who holds a name: null when nobody does. `dn` is null for a holder
+// outside the configured base DN, which isn't disclosed.
+export interface NameHolders {
+  cn: { dn: string | null } | null;
+  samAccountName: { dn: string | null } | null;
+}
+
+export interface GroupCreateInput {
+  /** The new group's DN, built with childDn. */
+  dn: string;
+  cn: string;
+  samAccountName: string;
+  description: string | null;
+  scope: GroupScope;
+  type: GroupType;
 }
 
 export interface OuAttributePatch {

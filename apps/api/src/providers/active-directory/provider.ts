@@ -33,7 +33,10 @@ import type {
   DirectoryGroupSearchQuery,
   DirectoryUser,
   DirectoryUserSearchQuery,
+  GroupCreateInput,
   MutationResult,
+  NameHolders,
+  NewObjectNames,
   OuAttributePatch,
   RecycleBinStatus,
   ResetPasswordInput,
@@ -57,6 +60,13 @@ import { withAllMembers } from './memberRange.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
 import {
+  describeGroupDeleteBlock,
+  groupDeleteBlock,
+  type GroupDeleteFacts,
+  type RoleGroup,
+} from '../../lib/groupDeletion.js';
+import { ridOf } from '../../lib/sid.js';
+import {
   BINARY_ATTRS,
   COMPUTER_ATTRS,
   COMPUTER_ATTRS_FULL,
@@ -70,6 +80,8 @@ import {
   USER_ATTRS_FULL,
   asString,
   asStringArray,
+  escapeRdnValueRfc,
+  groupTypeValue,
   leafRdn,
   normalizeComputer,
   normalizeDeletedComputer,
@@ -1238,6 +1250,188 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     return null;
   }
 
+  async findNameHolders(input: NewObjectNames): Promise<NameHolders> {
+    return this.withServiceBind((client) => this.nameHolders(client, input));
+  }
+
+  private async nameHolders(client: Client, input: NewObjectNames): Promise<NameHolders> {
+    const baseLower = this.config.baseDn.toLowerCase();
+    // A holder outside the base DN is reported without its DN: the
+    // operator has no business seeing what lives there.
+    const holder = async (base: string, scope: 'one' | 'sub', filter: string) => {
+      const { searchEntries } = await client.search(base, {
+        scope,
+        filter,
+        attributes: ['distinguishedName'],
+        sizeLimit: 1,
+      });
+      const dn = searchEntries[0]?.dn;
+      if (!dn) return null;
+      const lower = dn.toLowerCase();
+      return { dn: lower === baseLower || lower.endsWith(`,${baseLower}`) ? dn : null };
+    };
+    const cn = input.cn?.trim();
+    const sam = input.samAccountName?.trim();
+    // sAMAccountName is unique across the domain, not just the base DN.
+    const domainRoot = sam
+      ? ((await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn)
+      : null;
+    return {
+      cn: cn ? await holder(input.parentDn, 'one', `(cn=${escapeLdapFilter(cn)})`) : null,
+      samAccountName:
+        sam && domainRoot
+          ? await holder(domainRoot, 'sub', `(sAMAccountName=${escapeLdapFilter(sam)})`)
+          : null,
+    };
+  }
+
+  /**
+   * Create a group at `input.dn`, bound as the operator. The names are
+   * checked again on this bind: the preflight the dialog ran may be stale.
+   * Once AD has added the group the create has happened, so a failed
+   * read-back still reports success, without the group.
+   */
+  async createGroup(
+    input: GroupCreateInput,
+    ctx: WriteContext,
+  ): Promise<MutationResult & { group?: DirectoryGroup }> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const holders = await this.nameHolders(client, {
+          parentDn: parentDn(input.dn) ?? '',
+          cn: input.cn,
+          samAccountName: input.samAccountName,
+        });
+        const usedBy = (h: { dn: string | null }, where: string) =>
+          h.dn ? `already used by ${h.dn}` : `already used ${where}`;
+        if (holders.cn) {
+          return {
+            ok: false,
+            reason: 'conflict',
+            errorMessage: `the name "${input.cn}" is ${usedBy(holders.cn, 'in this OU')}`,
+          };
+        }
+        if (holders.samAccountName) {
+          return {
+            ok: false,
+            reason: 'conflict',
+            errorMessage: `the pre-Windows 2000 name "${input.samAccountName}" is ${usedBy(holders.samAccountName, 'elsewhere in the domain')}`,
+          };
+        }
+
+        const attrs: Record<string, string | string[]> = {
+          objectClass: ['top', 'group'],
+          cn: input.cn,
+          sAMAccountName: input.samAccountName,
+          groupType: String(groupTypeValue(input.scope, input.type)),
+        };
+        if (input.description) attrs.description = input.description;
+        await client.add(input.dn, attrs);
+
+        const entry = await this.findGroupEntry(client, {
+          kind: 'distinguishedName',
+          value: input.dn,
+        }).catch(() => null);
+        if (!entry) {
+          const { dn, cn, samAccountName, description, scope, type } = input;
+          return {
+            ok: true,
+            after: { distinguishedName: dn, cn, samAccountName, description, scope, type },
+          };
+        }
+        const group = normalizeGroup(entry);
+        return { ok: true, after: groupSnapshot(group), group };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
+  async getGroupDeleteFacts(group: DirectoryGroup): Promise<GroupDeleteFacts> {
+    return this.withServiceBind((client) => this.groupDeleteFacts(client, group));
+  }
+
+  private async groupDeleteFacts(client: Client, group: DirectoryGroup): Promise<GroupDeleteFacts> {
+    const parents: DirectoryGroup[] = [];
+    for (const dn of group.memberOfDns) {
+      // A parent this bind can't read can't be judged; it's left out.
+      const parent = await client
+        .search(dn, {
+          scope: 'base',
+          filter: GROUP_FILTER_BASE,
+          attributes: ['objectGUID', 'objectSid', 'distinguishedName', 'adminCount'],
+          explicitBufferAttributes: BINARY_ATTRS,
+        })
+        .then((r) => r.searchEntries[0])
+        .catch(() => undefined);
+      if (parent) parents.push(normalizeGroup(parent));
+    }
+    return { parents, primaryGroupMembers: await this.countPrimaryGroupMembers(client, group) };
+  }
+
+  /** Accounts whose primaryGroupID is this group's RID; null if AD wouldn't say. */
+  private async countPrimaryGroupMembers(
+    client: Client,
+    group: DirectoryGroup,
+  ): Promise<number | null> {
+    const rid = ridOf(group.sid);
+    // Only a group of the account's own domain can be its primary group.
+    if (rid === null || !group.sid?.startsWith('S-1-5-21-')) return 0;
+    try {
+      const domainRoot = (await this.resolveDefaultNamingContext(client)) ?? this.config.baseDn;
+      const { searchEntries } = await client.search(domainRoot, {
+        scope: 'sub',
+        filter: `(primaryGroupID=${rid})`,
+        attributes: ['distinguishedName'],
+        paged: { pageSize: 500 },
+      });
+      return searchEntries.length;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Delete a group. The guard runs against the entry, its parents and its
+   * primary-group count read on the operator's own bind, immediately
+   * before the delete.
+   */
+  async deleteGroup(
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+    roleGroups: readonly RoleGroup[],
+  ): Promise<MutationResult> {
+    return this.asOperator(ctx, async (client) => {
+      try {
+        const entry = await this.findGroupEntry(client, groupId);
+        if (!entry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
+        const group = normalizeGroup(entry);
+        const before = groupSnapshot(group);
+        const block = groupDeleteBlock(
+          group,
+          await this.groupDeleteFacts(client, group),
+          roleGroups,
+        );
+        if (block) {
+          return {
+            ok: false,
+            reason: 'policy_violation',
+            errorMessage: describeGroupDeleteBlock(block),
+            before,
+          };
+        }
+        await client.del(group.distinguishedName);
+        return { ok: true, before, after: { deleted: true } };
+      } catch (err) {
+        return classifyWriteError(err);
+      } finally {
+        await client.unbind().catch(() => undefined);
+      }
+    });
+  }
+
   private async resolveDefaultNamingContext(client: Client): Promise<string | null> {
     const { searchEntries } = await client.search('', {
       scope: 'base',
@@ -2153,39 +2347,6 @@ function escapeRdnValue(value: string): string {
 }
 
 /**
- * Strict RFC 4514 §2.4 RDN value escaping. Used for tombstone
- * reanimation, where AD's modify primitive validates the new DN
- * strictly: comma/equals/etc. inside a CN must be escaped, but spaces
- * in the middle of the value must NOT be escaped. The general-purpose
- * `escapeRdnValue` above is over-aggressive for that case.
- */
-function escapeRdnValueRfc(value: string): string {
-  if (!value) return value;
-  let out = '';
-  for (let i = 0; i < value.length; i++) {
-    const ch = value[i]!;
-    if (
-      ch === ',' ||
-      ch === '+' ||
-      ch === '"' ||
-      ch === '\\' ||
-      ch === '<' ||
-      ch === '>' ||
-      ch === ';' ||
-      ch === '=' ||
-      ch === '\x00'
-    ) {
-      out += '\\' + ch;
-    } else {
-      out += ch;
-    }
-  }
-  if (out.startsWith('#') || out.startsWith(' ')) out = '\\' + out;
-  if (out.length > 1 && out.endsWith(' ')) out = out.slice(0, -1) + '\\ ';
-  return out;
-}
-
-/**
  * Build the search filter for a target identifier.
  *
  * For `objectGuid` we return an EqualityFilter with the value as a Buffer.
@@ -2420,6 +2581,24 @@ function deletionSnapshot(user: DirectoryUser): Record<string, unknown> {
     sid: user.sid,
     enabled: user.enabled,
     memberOf: user.memberOfDns,
+  };
+}
+
+/**
+ * A group as the audit trail keeps it. Its members and parent groups are
+ * here because a deleted group's tombstone doesn't keep them.
+ */
+function groupSnapshot(group: DirectoryGroup): Record<string, unknown> {
+  return {
+    distinguishedName: group.distinguishedName,
+    name: group.name,
+    samAccountName: group.samAccountName,
+    sid: group.sid,
+    description: group.description,
+    groupScope: group.groupScope,
+    groupType: group.groupType,
+    members: group.memberDns,
+    memberOf: group.memberOfDns,
   };
 }
 

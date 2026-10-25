@@ -54,6 +54,25 @@ const api = {
     })),
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
+    deletePreflight: vi.fn(async (id: string) => ({
+      id,
+      name: 'Engineering',
+      samAccountName: 'engineering',
+      distinguishedName: 'CN=Engineering,DC=corp,DC=example',
+      memberCount: 2,
+      memberOf: [
+        {
+          id: 'g7',
+          name: 'All Staff',
+          distinguishedName: 'CN=All Staff,DC=corp',
+          protected: false,
+        },
+      ],
+      primaryGroupMembers: 0,
+      blockedReason: null,
+      role: null,
+    })),
+    remove: vi.fn(async () => ({ ok: true })),
   },
   users: {
     search: vi.fn(async () => ({
@@ -71,11 +90,15 @@ const { useAuthStore } = await import('../stores/auth.js');
 
 enableAutoUnmount(afterEach);
 
-async function openMembers(id = 'g1') {
+async function openMembers(
+  id = 'g1',
+  capabilities = ['read:group', 'write:group.membership'],
+  tab = 'members',
+) {
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().actor = {
-    capabilities: ['read:group', 'write:group.membership'],
+    capabilities,
     elevated: {
       active: true,
       idleExpiresAt: '2999-01-01T00:15:00.000Z',
@@ -87,9 +110,10 @@ async function openMembers(id = 'g1') {
     routes: [
       { path: '/groups/:id', name: 'group-detail', component: GroupDetailView, props: true },
       { path: '/users/:id', name: 'user-detail', component: { render: () => null } },
+      { path: '/groups', name: 'group-search', component: { render: () => null } },
     ],
   });
-  await router.push(`/groups/${id}?tab=members`);
+  await router.push(`/groups/${id}?tab=${tab}`);
   const page = mount(RouterView, {
     global: {
       plugins: [pinia, router, PrimeVue, ToastService],
@@ -209,5 +233,50 @@ describe('changing a group’s members', () => {
     await flushPromises();
     expect(page.text()).toContain('Sales');
     expect(page.find('.inline-failure').exists()).toBe(false);
+  });
+});
+
+describe('deleting a group', () => {
+  async function actionLabels(page: Page) {
+    await click(page, 'Actions');
+    return page.findAll('[role="menuitem"]').map((i) => i.text());
+  }
+
+  it('is offered only to operators who may delete groups', async () => {
+    const { page: operator } = await openMembers();
+    expect(await actionLabels(operator)).not.toContain('Delete…');
+
+    const { page: admin } = await openMembers('g1', [
+      'read:group',
+      'write:group.membership',
+      'write:group.delete',
+    ]);
+    expect(await actionLabels(admin)).toContain('Delete…');
+  });
+
+  it('asks first, with the member count and parent groups, then goes to the group list', async () => {
+    const { page, router } = await openMembers(
+      'g1',
+      ['read:group', 'write:group.delete'],
+      'overview',
+    );
+    await click(page, 'Actions');
+    const item = page.findAll('[role="menuitem"]').find((i) => i.text() === 'Delete…')!;
+    await item.find('a').trigger('click');
+    await flushPromises();
+
+    const dialog = page.get('[role="dialog"]');
+    expect(dialog.text()).toContain('2 members');
+    expect(dialog.text()).toContain('All Staff');
+    const confirm = () => dialog.findAll('button').find((b) => b.text() === 'Delete group')!;
+    expect(confirm().attributes('disabled')).toBeDefined();
+    expect(api.groups.remove).not.toHaveBeenCalled();
+
+    await dialog.get('#dg-confirm-input').setValue('engineering');
+    await confirm().trigger('click');
+    await flushPromises();
+
+    expect(api.groups.remove).toHaveBeenCalledWith('g1', { confirmSamAccountName: 'engineering' });
+    expect(router.currentRoute.value.name).toBe('group-search');
   });
 });

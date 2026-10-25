@@ -31,23 +31,36 @@ const api = {
       inheritedGroupPolicies: [],
     })),
   },
+  groups: {
+    nameCheck: vi.fn(async () => ({
+      nameTaken: false,
+      samAccountNameTaken: false,
+      nameTakenBy: null,
+      samAccountNameTakenBy: null,
+    })),
+    create: vi.fn(async () => ({
+      ok: true,
+      distinguishedName: `CN=Closers,${SALES}`,
+      group: { id: 'g1', name: 'Closers', samAccountName: 'Closers' },
+    })),
+  },
 };
 vi.mock('../api/index.js', () => ({ api }));
 
 const { default: OuBrowserView } = await import('./OuBrowserView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
 
-async function openBrowser(path: string) {
+async function openBrowser(path: string, capabilities = ['read:user']) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useAuthStore().actor = { capabilities: ['read:user'] } as never; // only capabilities matter
+  useAuthStore().actor = { capabilities, elevated: { active: true } } as never;
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/browse', name: 'ou-browser', component: OuBrowserView }],
   });
   await router.push(path);
   const page = mount(OuBrowserView, {
-    global: { plugins: [pinia, router, PrimeVue, ToastService] },
+    global: { plugins: [pinia, router, PrimeVue, ToastService], stubs: { teleport: true } },
   });
   await flushPromises();
   return { page, router };
@@ -71,5 +84,42 @@ describe('the OU browser opened at an OU', () => {
     const { router } = await openBrowser('/browse?ou=OU%3DGone%2CDC%3Dcorp%2CDC%3Dexample');
     expect(api.ous.contents).not.toHaveBeenCalled();
     expect(router.currentRoute.value.query.ou).toBeUndefined();
+  });
+});
+
+describe('creating a group from an OU', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('isn’t offered without write:group.create', async () => {
+    const { page } = await openBrowser(`/browse?ou=${encodeURIComponent(SALES)}`);
+    expect(page.findAll('button').map((b) => b.text())).not.toContain('New group');
+  });
+
+  it('creates the group in the OU on screen, and shows it there', async () => {
+    const { page } = await openBrowser(`/browse?ou=${encodeURIComponent(SALES)}`, [
+      'read:user',
+      'write:group.create',
+    ]);
+    await page
+      .findAll('button')
+      .find((b) => b.text() === 'New group')!
+      .trigger('click');
+    await flushPromises();
+
+    await page.get('#ng-name').setValue('Closers');
+    const create = () =>
+      page
+        .get('[role="dialog"]')
+        .findAll('button')
+        .find((b) => b.text() === 'Create group')!;
+    await vi.waitFor(() => expect(create().attributes('disabled')).toBeUndefined());
+    await create().trigger('click');
+    await flushPromises();
+
+    expect(api.groups.create).toHaveBeenCalledWith(
+      expect.objectContaining({ parentDn: SALES, name: 'Closers', samAccountName: 'Closers' }),
+    );
+    expect(api.ous.contents).toHaveBeenLastCalledWith(SALES);
+    expect(api.ous.contents).toHaveBeenCalledTimes(2);
   });
 });
