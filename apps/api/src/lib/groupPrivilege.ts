@@ -25,6 +25,41 @@ export interface RoleGroup {
 const PROTECTED_BUILTIN_RIDS = new Set([544, 548, 549, 550, 551, 552]);
 const PROTECTED_DOMAIN_RIDS = new Set([512, 516, 518, 519, 521, 526, 527]);
 
+// What a token-groups SID alone says, with no lookup: the groups that
+// administer a domain or the forest, by well-known RID in any domain.
+// Enterprise and Schema Admins live in the forest root, so a child
+// domain's user carries the root's SIDs. Group Policy Creator Owners and
+// the RODC groups aren't AdminSDHolder-protected but can take over the
+// domain all the same.
+const PRIVILEGED_DOMAIN_GROUPS: Record<number, string> = {
+  498: 'Enterprise Read-only Domain Controllers',
+  512: 'Domain Admins',
+  516: 'Domain Controllers',
+  518: 'Schema Admins',
+  519: 'Enterprise Admins',
+  520: 'Group Policy Creator Owners',
+  521: 'Read-only Domain Controllers',
+  526: 'Key Admins',
+  527: 'Enterprise Key Admins',
+};
+const PRIVILEGED_BUILTIN_GROUPS: Record<number, string> = {
+  544: 'Administrators',
+  548: 'Account Operators',
+  549: 'Server Operators',
+  550: 'Print Operators',
+  551: 'Backup Operators',
+  552: 'Replicator',
+};
+
+/** The well-known name of a privileged group's SID, or null for any other SID. */
+export function privilegedSidName(sid: string): string | null {
+  const rid = ridOf(sid);
+  if (rid === null) return null;
+  if (sid.startsWith('S-1-5-32-')) return PRIVILEGED_BUILTIN_GROUPS[rid] ?? null;
+  if (sid.startsWith('S-1-5-21-')) return PRIVILEGED_DOMAIN_GROUPS[rid] ?? null;
+  return null;
+}
+
 /** True for a group AdminSDHolder protects, or has flagged with adminCount=1. */
 export function isProtectedGroup(group: GroupLike): boolean {
   if (rawScalarValue(group.rawAttributes['adminCount']) === '1') return true;

@@ -52,6 +52,7 @@ const api = {
     activity: vi.fn(async () => ({ rows: [] })),
     update: vi.fn(async () => ({ user })),
     resetPassword: vi.fn(async () => ({})),
+    tapPreflight: vi.fn(async () => ({ status: 'unsynced', lastSyncAt: null })),
     unlock: vi.fn(async () => ({})),
     disable: vi.fn(async () => ({})),
     enable: vi.fn(async () => ({})),
@@ -666,6 +667,31 @@ describe('shortcuts on a user’s page', () => {
     const move = await openTab('overview', ACTIONS, true);
     await press('m');
     expect(move.page.text()).toContain('Move to OU');
+  });
+
+  it('opens Issue TAP on t when the directory’s Entra integration offers it', async () => {
+    const tapUser = aUserDetail({
+      entra: {
+        lastSignInAt: null,
+        lastNonInteractiveSignInAt: null,
+        lastStatus: null,
+        mfa: null,
+        temporaryAccessPass: true,
+      },
+    });
+    api.users.get.mockResolvedValue({ user: tapUser });
+    const { page } = await openTab('overview', [...ACTIONS, 'write:user.issueTap'], true);
+    expect(listed()).toContain('t Issue Temporary Access Pass…');
+    await press('t');
+    expect(api.users.tapPreflight).toHaveBeenCalledWith('u1');
+    expect(page.text()).toContain('isn’t in Microsoft Entra yet');
+    page.unmount();
+
+    api.users.get.mockResolvedValue({
+      user: { ...tapUser, entra: { ...tapUser.entra!, temporaryAccessPass: false } },
+    });
+    await openTab('overview', [...ACTIONS, 'write:user.issueTap'], true);
+    expect(listed()).not.toContain('t Issue Temporary Access Pass…');
   });
 
   it('offers only the actions the operator has the capability for', async () => {

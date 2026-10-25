@@ -2,13 +2,15 @@
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { NotFound } from '../plugins/errorHandler.js';
-import { auditContextFromRequest } from '../services/auditContext.js';
 import {
   ENTRA_FEATURE_KEYS,
+  entraTestResponseSchema,
   type EntraFeatureKey,
-  type EntraIntegrationInput,
-} from '../services/entraIntegration.js';
+  type EntraTestResponse,
+} from '@openaduc/shared';
+import { NotFound } from '../plugins/errorHandler.js';
+import { auditContextFromRequest } from '../services/auditContext.js';
+import { missingPermissions, type EntraIntegrationInput } from '../services/entraIntegration.js';
 import { GraphClient } from '../services/graphClient.js';
 import { ENTRA_TASK_KEYS } from '../services/syncTasks/registry.js';
 
@@ -191,7 +193,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
       rateLimit: { max: 10, timeWindow: '1 minute' },
       policy: { capability: 'configure:directory', stepUp: true, directory: 'param' },
     },
-    handler: async (req) => {
+    handler: async (req): Promise<EntraTestResponse> => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
       if (!directory) throw NotFound('directory not found');
@@ -211,7 +213,19 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
         throw app.httpErrors.badRequest('entra creds unavailable');
       }
       const client = new GraphClient(creds, req.log);
-      const result = await client.testConnection();
+      const connection = await client.testConnection();
+      // A connection that works but lacks a turned-on feature's permission
+      // fails the test, so the settings page doesn't show it as fine.
+      const missing = connection.ok
+        ? missingPermissions(integration.features, await client.grantedPermissions())
+        : [];
+      const result = missing.length
+        ? {
+            ok: false,
+            tenantDisplayName: connection.tenantDisplayName,
+            error: `connected, but the app registration lacks ${missing.join(', ')} (Application, with admin consent)`,
+          }
+        : connection;
       await app.services.entraIntegration.recordTestResult(id, {
         ok: result.ok,
         ...(result.error !== undefined ? { error: result.error } : {}),
@@ -229,16 +243,18 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           targetType: 'config',
           targetId: String(id),
           ...(result.ok ? {} : { errorCode: 'graph_test_failed' }),
+          ...(missing.length ? { metadata: { missingPermissions: missing } } : {}),
         })
         .catch(() => undefined);
 
-      return {
+      return entraTestResponseSchema.parse({
         ok: result.ok,
         message: result.ok
           ? `connected${result.tenantDisplayName ? ` to ${result.tenantDisplayName}` : ''}`
           : (result.error ?? 'unknown error'),
         tenantDisplayName: result.tenantDisplayName ?? null,
-      };
+        missingPermissions: missing,
+      });
     },
   });
 

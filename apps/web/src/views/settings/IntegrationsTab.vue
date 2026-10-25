@@ -11,10 +11,10 @@ import { useToast } from 'primevue/usetoast';
 import {
   api,
   type DirectorySummary,
-  type EntraFeatureKey,
   type EntraIntegrationPut,
   type EntraIntegrationSummary,
 } from '../../api/index.js';
+import { TAP_PERMISSIONS, type EntraFeatureKey } from '@openaduc/shared';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
@@ -88,6 +88,8 @@ interface FeatureRow {
   description: string;
   /** Permission needed in Entra, surfaced in the help block when toggled on. */
   permissionNote?: string;
+  /** What turning it on puts at stake, stated where it's turned on. */
+  risk?: string;
 }
 
 const FEATURES: FeatureRow[] = [
@@ -131,6 +133,16 @@ const FEATURES: FeatureRow[] = [
     description:
       'Daily scan for accounts whose password expires in 3, 7, or 14 days. Sends an Adaptive Card to the admin Teams channel.',
   },
+  {
+    key: 'temporaryAccessPass',
+    label: 'Temporary Access Pass',
+    description:
+      'Adds Issue Temporary Access Pass to user pages, for operators with the Issue TAP capability, within the tenant’s Temporary Access Pass policy. The pass is shown once and never stored.',
+    permissionNote: `${Object.values(TAP_PERMISSIONS)
+      .map((p) => p.name)
+      .join(', ')} (Application)`,
+    risk: 'Whoever can issue a Temporary Access Pass can sign in as that user. OpenADUC refuses members of privileged AD groups, of groups mapped to its Admin role, and anyone holding or eligible for a Microsoft Entra role.',
+  },
 ];
 
 const editForm = reactive({
@@ -146,6 +158,7 @@ const editForm = reactive({
     mfaRegistration: false,
     teamsAdminWebhook: false,
     passwordExpiryNotifications: false,
+    temporaryAccessPass: false,
   } as Record<EntraFeatureKey, boolean>,
   // Empty = no change. Use the explicit "Clear" button to remove an existing one.
   teamsWebhookUrl: '',
@@ -180,6 +193,7 @@ function openEdit(row: DirectoryEntra): void {
     mfaRegistration: ex?.features.mfaRegistration ?? false,
     teamsAdminWebhook: ex?.features.teamsAdminWebhook ?? false,
     passwordExpiryNotifications: ex?.features.passwordExpiryNotifications ?? false,
+    temporaryAccessPass: ex?.features.temporaryAccessPass ?? false,
   };
   editForm.teamsWebhookUrl = '';
   editForm.teamsWebhookUrlClear = false;
@@ -440,6 +454,19 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
             <li>
               <code>Directory.Read.All</code> &mdash; tenant identity (used by the test connection)
             </li>
+            <li>
+              <code>{{ TAP_PERMISSIONS.issue.name }}</code> &mdash; Temporary Access Pass only.
+              Narrower than <code>{{ TAP_PERMISSIONS.issue.alsoMetBy[0] }}</code
+              >, which also manages every other sign-in method.
+            </li>
+            <li>
+              <code>{{ TAP_PERMISSIONS.policy.name }}</code> &mdash; the tenant’s Temporary Access
+              Pass policy
+            </li>
+            <li>
+              <code>{{ TAP_PERMISSIONS.roles.name }}</code> &mdash; Entra roles a user holds or is
+              eligible for, so Temporary Access Pass refuses them
+            </li>
           </ul>
           <p class="entra-help">
             <a v-if="editConsentUrl" :href="editConsentUrl" target="_blank" rel="noopener">
@@ -459,6 +486,9 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
                 <span v-if="f.permissionNote" class="entra-feature-perm"
                   >requires {{ f.permissionNote }}</span
                 >
+                <span v-if="f.risk" class="entra-feature-risk">
+                  <i class="pi pi-exclamation-triangle" aria-hidden="true" /> {{ f.risk }}
+                </span>
               </label>
             </li>
           </ul>
@@ -521,8 +551,8 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
               {{ editTestResult.message }}
             </Message>
             <span v-else class="entra-help">
-              Acquires a token and reads <code>/organization</code>. Saved creds only — save first
-              if you've changed the secret.
+              Acquires a token, reads <code>/organization</code> and checks the permissions the
+              turned-on features need. Saved creds only — save first if you've changed the secret.
             </span>
           </div>
         </section>
@@ -794,6 +824,12 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
   font-size: 11px;
   color: var(--text-3);
   font-style: italic;
+}
+
+.entra-feature-risk {
+  font-size: 12px;
+  color: #b56b00;
+  line-height: 1.5;
 }
 
 .entra-test-row {

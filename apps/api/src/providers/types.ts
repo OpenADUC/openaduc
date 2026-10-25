@@ -106,6 +106,11 @@ export interface DirectoryUser {
   rawAttributes: Record<string, unknown>;
 }
 
+export interface UserTokenGroups {
+  sids: string[];
+  groups: DirectoryGroup[];
+}
+
 export interface DirectoryOu {
   // OUs aren't keyed by objectGUID in the cache (we don't need cross-rename
   // tracking the way we do for users/groups). The DN is the natural key.
@@ -429,6 +434,14 @@ export interface DirectoryProvider {
   getGroup(identifier: DirectoryObjectIdentifier): Promise<DirectoryGroup | null>;
   searchGroups(query: DirectoryGroupSearchQuery): Promise<DirectoryGroup[]>;
   getUserGroups(userId: DirectoryObjectIdentifier): Promise<DirectoryGroup[]>;
+  /**
+   * Every security group the user is in, nested and primary included (AD's
+   * tokenGroups): their SIDs, and the groups found for them from the
+   * domain's root, read without their members. A SID from another domain
+   * has no group here. Null when the user isn't found or AD returns no
+   * tokenGroups (it always has the primary group).
+   */
+  getUserTokenGroups(userId: DirectoryObjectIdentifier): Promise<UserTokenGroups | null>;
   getGroupMembers(groupId: DirectoryObjectIdentifier): Promise<DirectoryUser[]>;
   getComputer(identifier: DirectoryObjectIdentifier): Promise<DirectoryComputer | null>;
   searchComputers(query: DirectoryComputerSearchQuery): Promise<DirectoryComputer[]>;

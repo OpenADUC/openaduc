@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger } from 'fastify';
+import { TAP_PERMISSIONS } from '@openaduc/shared';
 import type { EntraIntegrationCreds, EntraIntegrationService } from './entraIntegration.js';
 
 // Microsoft Graph client built around the OAuth 2.0 client-credentials
@@ -46,6 +47,8 @@ export class GraphPermissionError extends Error {
     public readonly statusCode: number,
     public readonly graphCode: string | null,
     public readonly hint: string | null,
+    /** Graph's own explanation, without the status and path. */
+    public readonly graphMessage: string | null = null,
   ) {
     super(message);
     this.name = 'GraphPermissionError';
@@ -72,9 +75,38 @@ export class GraphClient {
    * with a hint about the most likely missing permission so the operator
    * sees something more useful than "Forbidden".
    */
-  async getJson<T = unknown>(path: string): Promise<GraphResponse<T>> {
-    const res = await this.request(path, { method: 'GET' });
+  async getJson<T = unknown>(
+    path: string,
+    opts: { headers?: Record<string, string> } = {},
+  ): Promise<GraphResponse<T>> {
+    const res = await this.request(path, { method: 'GET', ...opts });
     return await readJson<T>(res, path);
+  }
+
+  /** Issue a JSON POST against Graph. Errors as `getJson`. */
+  async postJson<T = unknown>(path: string, body: unknown): Promise<GraphResponse<T>> {
+    const res = await this.request(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await readJson<T>(res, path);
+  }
+
+  /**
+   * The application permissions admin consent has granted, from the access
+   * token's `roles` claim, so a missing one can be named without calling
+   * the API it guards (some of which write).
+   */
+  async grantedPermissions(): Promise<string[]> {
+    const token = await this.getToken();
+    try {
+      const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString());
+      const roles: unknown = payload?.roles;
+      return Array.isArray(roles) ? roles.filter((r): r is string => typeof r === 'string') : [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -269,15 +301,19 @@ async function readJson<T>(res: Response, path: string): Promise<GraphResponse<T
 async function raiseFromError(res: Response, path: string): Promise<never> {
   let message = `Graph ${res.status} on ${path}`;
   let code: string | null = null;
+  let graphMessage: string | null = null;
   try {
     const body = (await res.json()) as { error?: { code?: string; message?: string } };
-    if (body?.error?.message) message = `${message}: ${body.error.message}`;
+    if (body?.error?.message) {
+      graphMessage = body.error.message;
+      message = `${message}: ${graphMessage}`;
+    }
     if (body?.error?.code) code = body.error.code;
   } catch {
     /* fallthrough */
   }
   const hint = permissionHintForPath(res.status, path, code);
-  throw new GraphPermissionError(message, res.status, code, hint);
+  throw new GraphPermissionError(message, res.status, code, hint, graphMessage);
 }
 
 function permissionHintForPath(status: number, path: string, code: string | null): string | null {
@@ -288,6 +324,18 @@ function permissionHintForPath(status: number, path: string, code: string | null
     }
     if (path.includes('/photo')) {
       return 'User.Read.All (Application) is required to read user photos';
+    }
+    if (path.includes('/temporaryAccessPassMethods')) {
+      return `${TAP_PERMISSIONS.issue.name} (Application) is required to issue Temporary Access Passes`;
+    }
+    if (path.includes('/authenticationMethodsPolicy')) {
+      return `${TAP_PERMISSIONS.policy.name} (Application) is required to read the Temporary Access Pass policy`;
+    }
+    if (path.includes('/roleManagement/')) {
+      return `${TAP_PERMISSIONS.roles.name} (Application) is required to read Entra role assignments and eligibilities`;
+    }
+    if (path.startsWith('/users')) {
+      return `${TAP_PERMISSIONS.users.name} (Application) is required to find users and their groups`;
     }
     if (path.includes('/organization')) {
       return 'Directory.Read.All (Application) is required for the /organization probe';

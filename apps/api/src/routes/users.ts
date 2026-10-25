@@ -839,6 +839,8 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
                         status: parseEnrichmentStatus(entraEnrichment.mfa_last_status),
                       }
                     : null,
+                temporaryAccessPass:
+                  integration.hasClientSecret && integration.features.temporaryAccessPass === true,
               }
             : null,
         rawAttributes: rawAttributesFor(
