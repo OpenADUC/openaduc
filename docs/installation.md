@@ -64,7 +64,7 @@ On first visit to the web UI you are taken through the setup wizard:
 4. **Initial sync** — reads the domain policy, OUs, users, groups, computers and group memberships.
 5. **Done** — background sync tasks are scheduled and you land in the app.
 
-There is no local break-glass account: every sign-in is an AD bind.
+There is no local break-glass account: every sign-in is an AD bind. If your admin group is ever lost, see [recovering admin access](security.md#recovering-admin-access).
 
 ## Upgrading
 
