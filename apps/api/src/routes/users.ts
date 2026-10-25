@@ -1550,7 +1550,7 @@ async function resolveDirectReports(
   app: import('fastify').FastifyInstance,
   providerId: number,
   dns: string[],
-): Promise<{ id: string | null; distinguishedName: string; displayName: string | null }[]> {
+): Promise<UserDetail['directReports']> {
   if (dns.length === 0) return [];
   const dnsLower = dns.map((d) => d.toLowerCase());
   const rows = await app.db
@@ -1558,13 +1558,14 @@ async function resolveDirectReports(
     .where('provider_id', '=', providerId)
     .where('deleted_at', 'is', null)
     .where(sql<string>`lower(distinguished_name)`, 'in', dnsLower)
-    .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name'])
+    .select(['object_guid', 'distinguished_name', 'display_name', 'sam_account_name', 'enabled'])
     .execute();
-  const byDn = new Map<string, { id: string; displayName: string | null }>();
+  const byDn = new Map<string, { id: string; displayName: string | null; enabled: boolean }>();
   for (const r of rows) {
     byDn.set(r.distinguished_name.toLowerCase(), {
       id: r.object_guid,
       displayName: r.display_name ?? r.sam_account_name ?? null,
+      enabled: r.enabled,
     });
   }
   return dns.map((dn) => {
@@ -1573,6 +1574,7 @@ async function resolveDirectReports(
       id: hit?.id ?? null,
       distinguishedName: dn,
       displayName: hit?.displayName ?? null,
+      enabled: hit?.enabled ?? null,
     };
   });
 }

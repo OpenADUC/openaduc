@@ -139,12 +139,14 @@ export const userDetailSchema = userSummarySchema.extend({
   // prefix stripped for display.
   emailAliases: z.array(z.string()),
   // directReports DNs resolved against user_cache_records. Entries with a
-  // null id are users not currently in the cache — render the DN, no link.
+  // null id (and null enabled) are users not currently in the cache —
+  // render the DN, no link.
   directReports: z.array(
     z.object({
       id: z.string().nullable(),
       distinguishedName: z.string(),
       displayName: z.string().nullable(),
+      enabled: z.boolean().nullable(),
     }),
   ),
   groupMemberships: z.array(

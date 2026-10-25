@@ -35,3 +35,12 @@ export function dnPath(rdnList: readonly string[], separator = '/'): string {
     .reverse();
   return [domain, ...containers].filter(Boolean).join(separator);
 }
+
+/**
+ * What a DN's object is called: its first RDN's value, unescaped.
+ * "CN=Doe\, Jane,OU=Staff,DC=corp" → "Doe, Jane".
+ */
+export function dnName(dn: string): string {
+  const first = rdns(dn)[0]!;
+  return first.slice(first.indexOf('=') + 1);
+}

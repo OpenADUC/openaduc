@@ -99,6 +99,8 @@ export function useBulkActions(opts: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let delay: number = POLL.firstMs;
   let disposed = false;
+  // Bumped by detach, so an answer to a request made before isn't shown.
+  let attachment = 0;
   // A poll that came due while the page was hidden, made once it's shown.
   let dueWhileHidden: string | null = null;
   const hidden = () => typeof document !== 'undefined' && document.hidden;
@@ -188,19 +190,29 @@ export function useBulkActions(opts: {
     await opts.reload();
   }
 
-  /** Make a write to the job, prompting step-up first and retrying after one. */
-  function write(call: () => Promise<{ job: BulkJob }>, stepUp: boolean): void {
+  /**
+   * Make a write to the job, prompting step-up first and retrying after one.
+   * `started` hears of the job even if the page has detached meanwhile.
+   */
+  function write(
+    call: () => Promise<{ job: BulkJob }>,
+    stepUp: boolean,
+    started?: (job: BulkJob) => void,
+  ): void {
     const attempt = async (): Promise<void> => {
+      const attached = attachment;
       jobFailure.value = null;
       busy.value = true;
       try {
         const { job: next } = await call();
-        await show(next);
+        started?.(next);
+        if (attached === attachment) await show(next);
       } catch (err) {
+        if (attached !== attachment) return;
         if (auth.retryAfterStepUp(err, attempt)) return;
         jobFailure.value = message(err);
       } finally {
-        busy.value = false;
+        if (attached === attachment) busy.value = false;
       }
     };
     if (stepUp) auth.requireStepUp(attempt);
@@ -232,10 +244,13 @@ export function useBulkActions(opts: {
   }
 
   /** Edit the users' attributes as the operator previewed it. */
-  function startAttributeEdit(edit: BulkUserAttributesRequest): void {
+  function startAttributeEdit(
+    edit: BulkUserAttributesRequest,
+    started?: (job: BulkJob) => void,
+  ): void {
     if (edit.ids.length === 0) return;
     bulkErrors.value = new Map();
-    write(() => api.bulkJobs.startAttributeEdit(edit), true);
+    write(() => api.bulkJobs.startAttributeEdit(edit), true, started);
   }
 
   /** Move the users or change their account settings as the operator previewed it. */
@@ -270,16 +285,34 @@ export function useBulkActions(opts: {
     bulkErrors.value = new Map();
   }
 
-  /** Coming back to the list: show the operator's latest job, unless it's old news. */
-  async function restore(): Promise<void> {
+  /**
+   * Stop following the job without dismissing it, as when the page moves
+   * on to another object: the job carries on, and the list can still show it.
+   */
+  function detach(): void {
+    attachment++;
+    clearTimeout(timer);
+    job.value = null;
+    jobFailure.value = null;
+    busy.value = false;
+    bulkErrors.value = new Map();
+  }
+
+  /**
+   * Coming back: show the operator's latest job, or the job `id`, unless
+   * it's old news.
+   */
+  async function restore(id?: string): Promise<void> {
+    const attached = attachment;
     try {
-      const [latest] = (await api.bulkJobs.list(1)).jobs;
+      const latest = id ? (await api.bulkJobs.get(id)).job : (await api.bulkJobs.list(1)).jobs[0];
+      if (attached !== attachment) return;
       if (!latest || latest.id === stored(DISMISSED_KEY)) return;
       const stoppedAt = latest.finishedAt ? new Date(latest.finishedAt).getTime() : null;
       if (stoppedAt !== null && Date.now() - stoppedAt > RESULT_SHOWN_FOR_MS) return;
       await show(latest, false);
     } catch {
-      // The list works without it.
+      // The page works without it.
     }
   }
 
@@ -302,6 +335,7 @@ export function useBulkActions(opts: {
     retryFailed,
     stopJob,
     dismissJob,
+    detach,
     restore,
   };
 }

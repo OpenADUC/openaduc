@@ -31,6 +31,8 @@ import NewUserDialog from '../design/feedback/NewUserDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
+import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import ReassignReportsDialog from '../design/feedback/ReassignReportsDialog.vue';
 import { expiryMoment } from '../design/lib/accountExpiry.js';
 import SignInStatus from '../design/primitives/SignInStatus.vue';
 import { lockoutEnd, signInBlockers, signInNotes, type SignInFix } from '../design/lib/signIn.js';
@@ -49,6 +51,7 @@ import { useMoveDialog } from './_detail/useMoveDialog';
 import { useExpiryDialog } from './_detail/useExpiryDialog';
 import { useConfirm } from '../design/composables/useConfirm.js';
 import { useAccountActions, type AccountAction } from '../design/composables/useAccountActions.js';
+import { useReassignReports } from '../design/composables/useReassignReports.js';
 import {
   USER_ACTIONS,
   USER_ACTION_ORDER,
@@ -547,6 +550,22 @@ function showExpiryFor(u: UserDetail): void {
   showExpiryDialog({ id: u.id, name: nameOf(u), accountExpiresAt: u.accountExpiresAt });
 }
 
+// ---- Reassign direct reports ----------------------------------------------
+
+const reassign = useReassignReports({
+  managerId: () => props.id,
+  manager: () => user.value,
+  toast,
+  reload: load,
+});
+const {
+  hasReports,
+  job: reassignJob,
+  jobBusy: reassignJobBusy,
+  jobRunning: reassignRunning,
+  jobFailure: reassignJobFailure,
+} = reassign;
+
 // ---- Sign-in status --------------------------------------------------------
 
 const blockers = computed(() => (user.value ? signInBlockers(user.value) : []));
@@ -820,6 +839,14 @@ const actions = computed<ObjectAction[]>(() => {
         copyDialogOpen.value = true;
       },
     },
+    {
+      label: 'Reassign direct reports…',
+      icon: 'pi-sitemap',
+      capability: 'write:user.attributes',
+      unavailable: u && !hasReports.value ? 'has no direct reports' : null,
+      disabled: reassignRunning.value,
+      run: reassign.open,
+    },
     // Delete is offered only once the account is disabled, which is also
     // what the server enforces.
     {
@@ -1004,6 +1031,16 @@ watch(user, (u) => {
       </template>
 
       <template v-if="user" #default="{ tab: activeTab, select: selectTab }">
+        <BulkJobPanel
+          v-if="reassignJob"
+          :job="reassignJob"
+          :failure="reassignJobFailure"
+          :busy="reassignJobBusy"
+          @stop="reassign.stopJob"
+          @continue="reassign.continueJob"
+          @retry="reassign.retryFailed"
+          @dismiss="reassign.dismissJob"
+        />
         <!-- Overview — at-a-glance summary that aggregates the most-asked-about
            pieces from each detail tab so the operator does not have to hunt. -->
         <div v-if="activeTab === 'overview'" class="detail-grid">
@@ -1280,7 +1317,19 @@ watch(user, (u) => {
             :manager="user.manager"
             :direct-reports="user.directReports"
             :self-name="displayName"
-          />
+          >
+            <template v-if="canEdit && hasReports" #actions>
+              <Button
+                label="Reassign…"
+                icon="pi pi-sitemap"
+                size="small"
+                severity="secondary"
+                text
+                :disabled="reassignRunning"
+                @click="reassign.open"
+              />
+            </template>
+          </ReportingStructureCard>
 
           <section v-if="extraAttrRows.length > 0" class="ident-section">
             <h3 class="ident-section-title">
@@ -1785,6 +1834,7 @@ watch(user, (u) => {
       :failure="moveDialogFailure"
       @close="closeMoveDialog"
     />
+    <ReassignReportsDialog :workflow="reassign" :manager-name="displayName" />
     <AccountExpiryDialog
       :visible="expiryDialogOpen"
       :expiry="expiry"
