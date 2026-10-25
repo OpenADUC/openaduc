@@ -4,14 +4,14 @@ import { computed } from 'vue';
 import {
   userStatus,
   userStatusLabel,
+  type SignInInput,
   type UserStatusKind,
-  type UserStatusInput,
-} from '../lib/format.js';
+} from '../lib/signIn.js';
 
 const props = withDefaults(
   defineProps<{
     /** Pass either a user-shaped object … */
-    user?: UserStatusInput | null;
+    user?: SignInInput | null;
     /** … or an explicit kind. */
     kind?: UserStatusKind;
     /** Custom label; defaults to the kind label. */

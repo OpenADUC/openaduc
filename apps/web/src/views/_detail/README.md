@@ -6,9 +6,10 @@ launchers and DN copy chip, primary actions), the tab bar with refresh and
 the Actions menu, the page body for the active tab, and the freshness line.
 Pages mount it once their record has loaded and pass:
 
-- header data as props, badges in the `badges` slot, and primary actions in
-  the `primary` slot (it gets `compact` so a button can shrink with the
-  header);
+- header data as props, badges in the `badges` slot, the object's state
+  in the `status` slot (under the name, folded away in the compact header),
+  and primary actions in the `primary` slot (it gets `compact` so a button
+  can shrink with the header);
 - `tabs` (`ObjectPageTab`: label, icon, count, visibility, icon-only) and a
   `fallbackTab`;
 - `actions` (`ObjectAction`): each names the capability it needs, and may be
@@ -50,8 +51,10 @@ fallback, and a `ready` flag for when visibility is final (tabs that
 depend on the loaded record); unknown or hidden tabs fall back and are
 dropped from the URL.
 
-`useMoveDialog` is the Move to OU action for the user and computer pages:
-it owns the move workflow and the dialog's open state, toasts a move with
-Undo, and places a failed move in the dialog that made it or, for an
-Undo, as `pageFailure` for `actionFailure`. Render it with
-`MoveToOuDialog`.
+`useUndoableDialog` is a dialog that makes one undoable write: it owns
+the workflow and the dialog's open state, toasts the write with Undo,
+and places a failed write in the dialog that made it or, for an Undo, as
+`pageFailure` for `actionFailure`. `useMoveDialog` (Move to OU on the
+user and computer pages, rendered with `MoveToOuDialog`) and
+`useExpiryDialog` (a user's account expiry, rendered with
+`AccountExpiryDialog`) are built on it.

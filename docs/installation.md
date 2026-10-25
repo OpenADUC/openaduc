@@ -59,7 +59,7 @@ The web UI listens on `:8080` inside the `web` container. Map it to a host port 
 On first visit to the web UI you are taken through the setup wizard:
 
 1. **Domain** — domain name, base DN, domain controllers and connection security (LDAPS, or StartTLS on the LDAP port), then an AD administrator's username and password. The wizard binds as that account to check the connection and signs you in. Members of Domain Admins get the OpenADUC `admin` role.
-2. **Service account** — a read-only AD account for background sync. The wizard binds as it to check the password, then stores it encrypted.
+2. **Service account** — a read-only AD account for background sync. The wizard binds as it to check the password, then stores it encrypted. If you use fine-grained password policies, give it Read on them (in `CN=Password Settings Container,CN=System`) so a locked user's page can say when their lockout ends; by default only Domain Admins can read them, and the page says the end is unknown.
 3. **Policy** — how many days ahead to warn about expiring passwords, and how long without a logon makes an account stale.
 4. **Initial sync** — reads the domain policy, OUs, users, groups, computers and group memberships.
 5. **Done** — background sync tasks are scheduled and you land in the app.
