@@ -314,6 +314,7 @@ export interface UserAttributePatch {
   ipPhone?: string | null | undefined;
   homePhone?: string | null | undefined;
   homePostalAddress?: string | null | undefined;
+  streetAddress?: string | null | undefined;
   description?: string | null | undefined;
   company?: string | null | undefined;
   c?: string | null | undefined;

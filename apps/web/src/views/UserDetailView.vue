@@ -3,7 +3,7 @@
 import { latestRequest } from '../design/lib/latestRequest.js';
 import { useDetailRecord } from '../design/composables/useDetailRecord.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 import Button from 'primevue/button';
 import Dialog from 'primevue/dialog';
@@ -34,12 +34,17 @@ import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, fmtRelative } from '../design/lib/format.js';
-import type { GroupSummary, UserDetail, UserUpdateRequest } from '@openaduc/shared';
+import type { GroupSummary, UserDetail } from '@openaduc/shared';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useCompactTabs } from './_detail/useCompactTabs';
 import { useRouteTab } from './_detail/useRouteTab';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useConfirm } from '../design/composables/useConfirm.js';
+import {
+  useUserAttributeEdit,
+  type MultiValuedAttribute,
+  type ScalarAttribute,
+} from '../design/composables/useUserAttributeEdit.js';
 
 // 'location' / 'security' tabs map to 'organization' / 'contact' / 'account'.
 // 'overview' is new; 'raw' is admin-gated. 'signins' shows Microsoft Entra
@@ -97,6 +102,7 @@ const HANDLED_ATTRS = new Set<string>([
   'ipPhone',
   'homePhone',
   'homePostalAddress',
+  'streetAddress',
   'description',
   'company',
   'c',
@@ -128,30 +134,6 @@ function valuesOf(v: unknown): string[] {
   return [String(v)];
 }
 
-type ScalarKey =
-  | 'displayName'
-  | 'givenName'
-  | 'surname'
-  | 'email'
-  | 'phone'
-  | 'mobile'
-  | 'title'
-  | 'department'
-  | 'employeeID'
-  | 'employeeNumber'
-  | 'ipPhone'
-  | 'homePhone'
-  | 'homePostalAddress'
-  | 'description'
-  | 'company'
-  | 'c'
-  | 'co'
-  | 'l'
-  | 'st'
-  | 'postalCode';
-
-type ArrayKey = 'otherMailbox' | 'otherHomePhone' | 'otherMobile';
-type EditableKey = ScalarKey | ArrayKey;
 type FieldView = 'organization' | 'contact';
 
 // Sub-sections within Organization and Contact tabs. Each section is a
@@ -175,7 +157,7 @@ const SECTION_LABEL: Record<SectionKey, string> = {
 };
 
 interface ScalarField {
-  key: ScalarKey;
+  key: ScalarAttribute;
   label: string;
   view: FieldView;
   section: SectionKey;
@@ -188,7 +170,7 @@ interface ScalarField {
 }
 
 interface ArrayField {
-  key: ArrayKey;
+  key: MultiValuedAttribute;
   label: string;
   placeholder: string;
   section: SectionKey;
@@ -255,6 +237,13 @@ const SCALAR_FIELDS: ScalarField[] = [
     section: 'phones',
   },
   // Contact → Address -------------------------------------------------
+  {
+    key: 'streetAddress',
+    label: 'Street',
+    multiline: true,
+    view: 'contact',
+    section: 'address',
+  },
   { key: 'l', label: 'City', view: 'contact', section: 'address' },
   { key: 'st', label: 'State / Province', view: 'contact', section: 'address' },
   { key: 'postalCode', label: 'Postal code', view: 'contact', section: 'address' },
@@ -303,6 +292,30 @@ const auth = useAuthStore();
 const toast = useToast();
 
 const {
+  draft,
+  reset: resetDraft,
+  changes,
+  changed,
+  dirty,
+  problems,
+  valid,
+  saving,
+  save: saveAttributes,
+} = useUserAttributeEdit({
+  onSaved: async (n) => {
+    toast.add({
+      severity: 'success',
+      summary: 'Attributes saved',
+      detail: `${n} field${n === 1 ? '' : 's'} updated`,
+      life: 3000,
+    });
+    await load();
+  },
+  onFailed: (message) =>
+    toast.add({ severity: 'error', summary: 'Save failed', detail: message, life: 6000 }),
+});
+
+const {
   record: user,
   loading,
   error,
@@ -317,19 +330,21 @@ const {
   // The Overview activity card belongs to the previous user: clear it, and
   // abandon a request for it still in flight.
   beforeLoad: () => {
+    // Moving to another user drops the record; drop its edits with it, so
+    // the leave prompts never count them while the next one loads or fails.
+    if (!user.value) resetDraft(null);
     activityRequests.begin();
     activityLoading.value = false;
     activityLoaded.value = false;
     activityEvents.value = [];
   },
-  onLoaded: () => resetForm(),
+  onLoaded: resetDraft,
 });
 useRecordCrumb(
   () => props.id,
   () => user.value?.displayName ?? user.value?.samAccountName,
 );
 
-const saving = ref(false);
 const rawFilter = ref('');
 
 // Drives the compact-on-scroll hero. `setHero` is bound to the hero
@@ -383,89 +398,6 @@ async function loadActivity(): Promise<void> {
   }
 }
 
-// Attribute-edit form state. Scalar fields are stored verbatim. Multi-valued
-// fields (otherMailbox etc.) are stored as a single newline-delimited string
-// that the textarea v-models against, then split on save.
-const form = reactive<Record<EditableKey, string>>({
-  displayName: '',
-  givenName: '',
-  surname: '',
-  email: '',
-  phone: '',
-  mobile: '',
-  title: '',
-  department: '',
-  employeeID: '',
-  employeeNumber: '',
-  ipPhone: '',
-  homePhone: '',
-  homePostalAddress: '',
-  description: '',
-  company: '',
-  c: '',
-  co: '',
-  l: '',
-  st: '',
-  postalCode: '',
-  otherMailbox: '',
-  otherHomePhone: '',
-  otherMobile: '',
-});
-
-function parseLines(s: string): string[] {
-  return s
-    .split('\n')
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-}
-
-function arraysEqual(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-function resetForm(): void {
-  if (!user.value) return;
-  for (const f of SCALAR_FIELDS) {
-    form[f.key] = user.value[f.key] ?? '';
-  }
-  for (const f of ARRAY_FIELDS) {
-    form[f.key] = (user.value[f.key] ?? []).join('\n');
-  }
-}
-
-// Each dirty entry carries the field key plus the canonical patch value the
-// API expects: a string|null for scalars, a string[]|null for arrays.
-type DirtyEntry =
-  | { key: ScalarKey; kind: 'scalar'; from: string | null; to: string | null }
-  | { key: ArrayKey; kind: 'array'; from: string[]; to: string[] };
-
-const dirtyFields = computed<DirtyEntry[]>(() => {
-  if (!user.value) return [];
-  const changed: DirtyEntry[] = [];
-  for (const f of SCALAR_FIELDS) {
-    const original = user.value[f.key] ?? null;
-    const draft = form[f.key].trim();
-    const next = draft === '' ? null : draft;
-    if (next !== original) changed.push({ key: f.key, kind: 'scalar', from: original, to: next });
-  }
-  for (const f of ARRAY_FIELDS) {
-    const original = user.value[f.key] ?? [];
-    const next = parseLines(form[f.key]);
-    if (!arraysEqual(original, next)) {
-      changed.push({ key: f.key, kind: 'array', from: original, to: next });
-    }
-  }
-  return changed;
-});
-
-const isDirty = computed(() => dirtyFields.value.length > 0);
-
-// Quick membership lookup so per-field templates can highlight modified
-// values without iterating dirtyFields each time.
-const dirtyFieldKeys = computed(() => new Set(dirtyFields.value.map((d) => d.key as string)));
-
 const displayName = computed(() => user.value?.displayName ?? user.value?.samAccountName ?? '—');
 const subtitle = computed(() => {
   const u = user.value;
@@ -514,8 +446,8 @@ onMounted(load);
 const { ask: askToLeave, dialog: leaveDialog } = useConfirm();
 
 function confirmDiscard(): boolean | Promise<boolean> {
-  if (!isDirty.value) return true;
-  const n = dirtyFields.value.length;
+  if (!dirty.value) return true;
+  const n = changes.value.length;
   return askToLeave({
     title: 'Discard unsaved changes?',
     message: `You have ${n} unsaved change${n === 1 ? '' : 's'} on this user.`,
@@ -530,7 +462,7 @@ onBeforeRouteLeave(confirmDiscard);
 onBeforeRouteUpdate((to, from) => to.params.id === from.params.id || confirmDiscard());
 
 function onBeforeUnload(ev: BeforeUnloadEvent): void {
-  if (!isDirty.value) return;
+  if (!dirty.value) return;
   ev.preventDefault();
   // Modern browsers ignore the message string but require returnValue set.
   ev.returnValue = '';
@@ -538,56 +470,6 @@ function onBeforeUnload(ev: BeforeUnloadEvent): void {
 
 onMounted(() => window.addEventListener('beforeunload', onBeforeUnload));
 onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload));
-
-// ---- Attribute save / discard --------------------------------------------
-
-async function saveAttributes(): Promise<void> {
-  if (!user.value || !isDirty.value) return;
-  saving.value = true;
-  try {
-    const patch: NonNullable<UserUpdateRequest['patch']> = {};
-    for (const d of dirtyFields.value) {
-      // The patch type is a discriminated union per field. A loose record
-      // cast here keeps the dispatch readable; the server validates each
-      // value's shape via the zod schema.
-      const bag = patch as Record<string, string | null | string[]>;
-      if (d.kind === 'scalar') {
-        bag[d.key] = d.to;
-      } else {
-        // Send null for empty arrays so the server deletes the attribute
-        // outright rather than receiving a no-op replace.
-        bag[d.key] = d.to.length === 0 ? null : d.to;
-      }
-    }
-    await api.users.update(user.value.id, { patch });
-    toast.add({
-      severity: 'success',
-      summary: 'Attributes saved',
-      detail: `${dirtyFields.value.length} field${dirtyFields.value.length === 1 ? '' : 's'} updated`,
-      life: 3000,
-    });
-    await load();
-  } catch (err) {
-    // Step-up required: the API client's global handler already opened
-    // the StepUpDialog. Queue this very save as the retry so a successful
-    // re-auth submits the same patch — the operator should not have to
-    // re-enter edits or click Save a second time. No toast: the dialog
-    // is the operator-visible affordance.
-    if (auth.retryAfterStepUp(err, saveAttributes)) return;
-    toast.add({
-      severity: 'error',
-      summary: 'Save failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    saving.value = false;
-  }
-}
-
-function discardAttributes(): void {
-  resetForm();
-}
 
 // ---- Hero actions (unlock / enable / disable) ----------------------------
 
@@ -1547,19 +1429,16 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               v-for="f in scalarFieldsForSection(sec)"
               :key="f.key"
               class="fld"
-              :class="{ 'fld-multiline': f.multiline, 'fld-modified': dirtyFieldKeys.has(f.key) }"
+              :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
             >
               <div class="fld-label">
                 {{ f.label }}
-                <span
-                  v-if="dirtyFieldKeys.has(f.key)"
-                  class="fld-modified-dot"
-                  title="Unsaved change"
-                ></span>
+                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
               </div>
               <Textarea
                 v-if="canEdit && f.multiline"
-                v-model="form[f.key]"
+                v-model="draft[f.key]"
+                :invalid="!!problems[f.key]"
                 :placeholder="f.label"
                 :disabled="saving"
                 auto-resize
@@ -1568,7 +1447,8 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               />
               <InputText
                 v-else-if="canEdit"
-                v-model="form[f.key]"
+                v-model="draft[f.key]"
+                :invalid="!!problems[f.key]"
                 :type="f.type ?? 'text'"
                 :class="['attr-input', { mono: f.mono }]"
                 :placeholder="f.label"
@@ -1583,6 +1463,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               >
                 <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
               </div>
+              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                problems[f.key]
+              }}</small>
             </div>
 
             <template v-if="sec === 'ids'">
@@ -1635,19 +1518,16 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               v-for="f in scalarFieldsForSection(sec)"
               :key="f.key"
               class="fld"
-              :class="{ 'fld-multiline': f.multiline, 'fld-modified': dirtyFieldKeys.has(f.key) }"
+              :class="{ 'fld-multiline': f.multiline, 'fld-modified': changed(f.key) }"
             >
               <div class="fld-label">
                 {{ f.label }}
-                <span
-                  v-if="dirtyFieldKeys.has(f.key)"
-                  class="fld-modified-dot"
-                  title="Unsaved change"
-                ></span>
+                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
               </div>
               <Textarea
                 v-if="canEdit && f.multiline"
-                v-model="form[f.key]"
+                v-model="draft[f.key]"
+                :invalid="!!problems[f.key]"
                 :placeholder="f.label"
                 :disabled="saving"
                 auto-resize
@@ -1656,7 +1536,8 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               />
               <InputText
                 v-else-if="canEdit"
-                v-model="form[f.key]"
+                v-model="draft[f.key]"
+                :invalid="!!problems[f.key]"
                 :type="f.type ?? 'text'"
                 :class="['attr-input', { mono: f.mono }]"
                 :placeholder="f.label"
@@ -1671,6 +1552,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               >
                 <span :class="{ mono: f.mono }">{{ user[f.key] ?? '—' }}</span>
               </div>
+              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                problems[f.key]
+              }}</small>
             </div>
           </div>
 
@@ -1679,22 +1563,19 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               v-for="f in arrayFieldsForSection(sec)"
               :key="f.key"
               class="fld attr-multi"
-              :class="{ 'fld-modified': dirtyFieldKeys.has(f.key) }"
+              :class="{ 'fld-modified': changed(f.key) }"
             >
               <div class="fld-label">
                 {{ f.label }}
                 <span v-if="(user[f.key]?.length ?? 0) > 0" class="ds-tab-count mono">
                   {{ user[f.key]!.length }}
                 </span>
-                <span
-                  v-if="dirtyFieldKeys.has(f.key)"
-                  class="fld-modified-dot"
-                  title="Unsaved change"
-                ></span>
+                <span v-if="changed(f.key)" class="fld-modified-dot" title="Unsaved change"></span>
               </div>
               <Textarea
                 v-if="canEdit"
-                v-model="form[f.key]"
+                v-model="draft[f.key]"
+                :invalid="!!problems[f.key]"
                 :placeholder="f.placeholder"
                 :disabled="saving"
                 auto-resize
@@ -1715,6 +1596,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                   >{{ val }}</span
                 >
               </div>
+              <small v-if="canEdit && problems[f.key]" class="fld-problem">{{
+                problems[f.key]
+              }}</small>
             </div>
           </div>
 
@@ -2036,14 +1920,14 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
            the viewport while scrolling so it's always reachable on tall
            attribute lists. -->
       <transition name="save-bar">
-        <div v-if="canEdit && isDirty" class="save-bar save-bar-floating">
+        <div v-if="canEdit && dirty" class="save-bar save-bar-floating">
           <span class="save-bar-summary">
             <i class="pi pi-pencil" />
-            <strong>{{ dirtyFields.length }}</strong>
-            unsaved change{{ dirtyFields.length === 1 ? '' : 's' }}
+            <strong>{{ changes.length }}</strong>
+            unsaved change{{ changes.length === 1 ? '' : 's' }}
           </span>
           <span class="save-bar-fields">
-            <span v-for="d in dirtyFields" :key="d.key" class="dirty-chip">
+            <span v-for="d in changes" :key="d.key" class="dirty-chip">
               {{ d.key }}
             </span>
           </span>
@@ -2054,14 +1938,15 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
               severity="secondary"
               size="small"
               :disabled="saving"
-              @click="discardAttributes"
+              @click="resetDraft(user)"
             />
             <Button
               label="Save changes"
               icon="pi pi-check"
               size="small"
               :loading="saving"
-              @click="auth.requireStepUp(saveAttributes)"
+              :disabled="!valid"
+              @click="saveAttributes()"
             />
           </span>
         </div>
@@ -2665,6 +2550,11 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
   background: var(--accent);
   margin-left: 6px;
   vertical-align: middle;
+}
+
+.fld-problem {
+  color: var(--red);
+  font-size: 12px;
 }
 
 .readonly-val {

@@ -59,7 +59,7 @@ async function openTab(tab: string, capabilities: string[], elevated: boolean) {
     },
   });
   await flushPromises();
-  return { page, auth };
+  return { page, auth, router };
 }
 
 const openOrganizationTab = (capabilities: string[], elevated: boolean) =>
@@ -92,6 +92,48 @@ describe('editing a user without an elevated session', () => {
     await auth.stepUp('pw');
     await flushPromises();
     expect(api.users.update).toHaveBeenCalledWith('u1', { patch: { title: 'Engineer' } });
+  });
+
+  it('is clean again once the save lands', async () => {
+    const { page } = await openOrganizationTab(['read:user', 'write:user.attributes'], true);
+
+    await titleField(page).setValue('Engineer');
+    api.users.get.mockResolvedValueOnce({ user: aUserDetail({ title: 'Engineer' }) });
+    await clickSave(page);
+    await flushPromises();
+    expect(api.users.update).toHaveBeenCalledOnce();
+    expect(page.text()).not.toContain('unsaved change');
+    expect(page.findAll('button').some((b) => b.text() === 'Save changes')).toBe(false);
+    expect((titleField(page).element as HTMLInputElement).value).toBe('Engineer');
+  });
+
+  it('forgets the edits of a user left behind, even when the next one fails to load', async () => {
+    const { page, router } = await openOrganizationTab(
+      ['read:user', 'write:user.attributes'],
+      true,
+    );
+    await titleField(page).setValue('Engineer');
+
+    api.users.get.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+    const leaving = router.push('/users/u2?tab=organization');
+    await flushPromises();
+    await click(page, 'Leave without saving');
+    await leaving;
+    await flushPromises();
+    expect(page.text()).toContain('DC unreachable');
+
+    void router.push('/users/u3?tab=organization');
+    await flushPromises();
+    expect(router.currentRoute.value.params['id']).toBe('u3');
+  });
+
+  it('says why a value can’t be saved, and won’t save it', async () => {
+    const { page } = await openTab('contact', ['read:user', 'write:user.attributes'], false);
+
+    await page.get('input[placeholder="Primary email"]').setValue('not an address');
+    expect(page.text()).toContain('Not an email address');
+    const save = page.findAll('button').find((b) => b.text() === 'Save changes')!;
+    expect(save.attributes('disabled')).toBeDefined();
   });
 
   it('shows a read-only operator no editable fields', async () => {
