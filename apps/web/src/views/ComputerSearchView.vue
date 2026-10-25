@@ -18,6 +18,8 @@ import { api } from '../api/index.js';
 import type { ComputerSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import ListSkeleton from '../design/primitives/ListSkeleton.vue';
+import { useListLoading } from '../design/composables/useListLoading.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
@@ -39,6 +41,19 @@ const rows = ref<CmpRow[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const {
+  skeleton,
+  table: listTable,
+  title: pageTitle,
+  status: listStatus,
+} = useListLoading({
+  rows,
+  loading,
+  error,
+  total: () => total.value,
+  title: 'Computers',
+  noun: ['computer', 'computers'],
+});
 const drawerOpen = ref(false);
 
 const filters = ref<{
@@ -156,7 +171,8 @@ onMounted(load);
 
 <template>
   <div class="page-inner page-fill computers-page">
-    <PageHeader :title="`Computers (${total.toLocaleString()})`">
+    <span class="sr-only" role="status">{{ listStatus }}</span>
+    <PageHeader :title="pageTitle">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
@@ -203,19 +219,20 @@ onMounted(load);
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading"
       data-key="id"
       removable-sort
       sort-field="name"
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
       @row-click="(ev) => openDetail(ev.data as ComputerSummary)"
+      v-bind="listTable"
       class="computers-table"
     >
       <template #empty>
+        <ListSkeleton v-if="skeleton" :columns="['avatar-rounded', 'text', 'badge', 'text']" />
         <EmptyState
+          v-else
           icon="pi pi-desktop"
           :title="activeCount > 0 ? 'No computers match these filters' : 'No computers yet'"
           :message="

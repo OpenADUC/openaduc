@@ -18,6 +18,8 @@ import { api } from '../api/index.js';
 import type { GroupCreateResponse, GroupSummary } from '@openaduc/shared';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import ListSkeleton from '../design/primitives/ListSkeleton.vue';
+import { useListLoading } from '../design/composables/useListLoading.js';
 import Avatar from '../design/primitives/Avatar.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import NewGroupDialog from '../design/feedback/NewGroupDialog.vue';
@@ -55,6 +57,19 @@ const rows = ref<GroupSummary[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const {
+  skeleton,
+  table: listTable,
+  title: pageTitle,
+  status: listStatus,
+} = useListLoading({
+  rows,
+  loading,
+  error,
+  total: () => total.value,
+  title: 'Groups',
+  noun: ['group', 'groups'],
+});
 const drawerOpen = ref(false);
 
 const filters = ref<{
@@ -185,7 +200,8 @@ onMounted(load);
 <template>
   <AppToast />
   <div class="page-inner page-fill groups-page">
-    <PageHeader :title="`Groups (${total.toLocaleString()})`">
+    <span class="sr-only" role="status">{{ listStatus }}</span>
+    <PageHeader :title="pageTitle">
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button v-if="canCreate" label="New group" icon="pi pi-plus" @click="newGroupOpen = true" />
@@ -226,19 +242,20 @@ onMounted(load);
     <DataTable
       v-model:filters="filters"
       :value="rows"
-      :loading="loading"
       data-key="id"
       removable-sort
       sort-field="name"
       :sort-order="1"
       scrollable
       scroll-height="flex"
-      :virtual-scroller-options="{ itemSize: 56 }"
       @row-click="(ev) => openDetail(ev.data as GroupSummary)"
+      v-bind="listTable"
       class="groups-table"
     >
       <template #empty>
+        <ListSkeleton v-if="skeleton" :columns="['avatar-rounded', 'badge', 'badge', 'text']" />
         <EmptyState
+          v-else
           icon="pi pi-users"
           :title="activeCount > 0 ? 'No groups match these filters' : 'No groups yet'"
           :message="

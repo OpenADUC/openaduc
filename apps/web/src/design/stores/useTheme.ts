@@ -8,6 +8,11 @@ export type AccentName = 'cyan' | 'violet' | 'emerald' | 'amber' | 'rose' | 'blu
 
 const STORAGE_KEY = 'openaduc:theme';
 
+// A directory list's row height. Its virtual scroller needs the height as a
+// number, so it's set here and handed to CSS as --list-row-h. Every row is
+// tall enough for an avatar beside a name and a second line.
+export const LIST_ROW_HEIGHT: Record<Density, number> = { compact: 40, balanced: 48, comfy: 56 };
+
 interface AccentTokens {
   color: string;
   soft: string;
@@ -128,6 +133,7 @@ export const useThemeStore = defineStore('theme', () => {
   const accentTokens = computed<AccentTokens>(() =>
     mode.value === 'light' ? ACCENTS_LIGHT[accent.value] : ACCENTS[accent.value],
   );
+  const listRowHeight = computed(() => LIST_ROW_HEIGHT[density.value]);
 
   // Apply theme/density classes and accent vars to <html> and <body> whenever
   // any of these change. Persist to localStorage in the same effect.
@@ -143,6 +149,7 @@ export const useThemeStore = defineStore('theme', () => {
 
     body.classList.remove('density-compact', 'density-balanced', 'density-comfy');
     body.classList.add(`density-${density.value}`);
+    html.style.setProperty('--list-row-h', `${listRowHeight.value}px`);
 
     // Old School flag — exposed as a class on <html> so the MMC stylesheet
     // can scope itself and the surrounding shell can dim its chrome.
@@ -196,6 +203,7 @@ export const useThemeStore = defineStore('theme', () => {
     sidebarCollapsed,
     oldSchool,
     accentTokens,
+    listRowHeight,
     setMode,
     toggleMode,
     setDensity,
