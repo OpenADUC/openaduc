@@ -14,9 +14,14 @@ and pass:
 - `tabs` (`ObjectPageTab`: label, icon, count, visibility, icon-only) and a
   `fallbackTab`;
 - `actions` (`ObjectAction`): each names the capability it needs, and may be
-  unavailable for this object (Unlock on an account that isn't locked) or
-  disabled while something runs. The layout drops what the operator can't
-  do and hides the Actions button when nothing is left;
+  `unavailable` for this object, saying why (Unlock on an account that
+  isn't locked: "account isn't locked"), or disabled while something runs. The
+  layout drops what the operator can't do and hides the Actions button
+  when nothing is left. An action with a `shortcut` key runs on that key
+  (see `design/composables/useShortcuts.ts`) whenever its menu item could
+  be clicked; Enable and Disable share `e`, the one that fits the object
+  answering it. The layout also gives the first nine visible tabs the
+  keys 1 to 9;
 - `actionFailure` (`ActionFailure`, from `design/lib/actionFailure.ts`)
   when an action failed: the layout shows it under the Actions menu, with
   Retry and dismiss, until the page clears it;

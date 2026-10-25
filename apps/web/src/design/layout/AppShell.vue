@@ -6,6 +6,7 @@ import Sidebar from './Sidebar.vue';
 import Topbar from './Topbar.vue';
 import StepUpDialog from '../feedback/StepUpDialog.vue';
 import OldSchoolMmc from '../../oldschool/OldSchoolMmc.vue';
+import ShortcutSheet from './ShortcutSheet.vue';
 import { useAuthStore } from '../../stores/auth.js';
 import { useResponsive } from '../composables/useResponsive.js';
 import { useThemeStore } from '../stores/useTheme.js';
@@ -85,6 +86,8 @@ function onDialogVisibility(open: boolean): void {
          page. Mounted at the shell level so it lives on top of every
          non-bare route. -->
     <OldSchoolMmc v-if="oldSchoolActive" />
+    <!-- The Old School view has ADUC's own keys instead. -->
+    <ShortcutSheet v-if="!oldSchoolActive" />
   </div>
 
   <!-- In both layouts: the setup wizard's later steps need step-up too. -->

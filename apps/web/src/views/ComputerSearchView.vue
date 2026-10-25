@@ -41,20 +41,25 @@ const rows = ref<CmpRow[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const drawerOpen = ref(false);
 const {
   skeleton,
   table: listTable,
   title: pageTitle,
   status: listStatus,
-} = useListLoading({
+  searchField,
+} = useListLoading<ComputerSummary>({
   rows,
   loading,
   error,
   total: () => total.value,
   title: 'Computers',
   noun: ['computer', 'computers'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
 });
-const drawerOpen = ref(false);
 
 const filters = ref<{
   name: FilterEntry<string>;
@@ -317,6 +322,7 @@ onMounted(load);
         <div class="filter-field">
           <label class="filter-label">Name</label>
           <InputText
+            ref="searchField"
             v-model="filters.name.value"
             placeholder="Hostname, sAM, or FQDN…"
             class="filter-input"

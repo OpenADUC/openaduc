@@ -945,6 +945,19 @@
   scrollbar-gutter: stable;
 }
 
+/* The row j and k highlight (useListShortcuts). Focus follows it, so the
+   focus ring would only repeat it; the margin keeps a row scrolled into
+   view clear of the sticky header. */
+.ds-list-table .p-datatable-tbody > tr.is-highlighted {
+  background: var(--accent-soft) !important;
+  box-shadow: inset 3px 0 0 var(--accent);
+  outline: none;
+}
+
+.ds-list-table .p-datatable-tbody > tr {
+  scroll-margin-top: 44px;
+}
+
 .p-datatable .p-datatable-tbody > tr > td:has(> .list-skeleton) {
   padding: 0 !important;
   height: auto;

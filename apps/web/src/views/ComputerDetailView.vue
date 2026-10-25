@@ -22,6 +22,7 @@ import type { ObjectAction, ObjectPageTab } from './_detail/objectPage';
 import type { ActionFailure } from '../design/lib/actionFailure.js';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import { useMoveDialog } from './_detail/useMoveDialog';
+import { SHORTCUT_KEYS } from '../design/lib/shortcutKeys.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -153,16 +154,17 @@ const busy = computed(
 const actions = computed<ObjectAction[]>(() => {
   const c = computer.value;
   // Disabling, resetting or moving a domain controller can take the domain
-  // down; the server refuses them too. While the record loads nothing is
-  // available, but the list lets the layout hold the Actions button's place.
-  const writable = c?.writeBlock === null;
+  // down; the server refuses them too. While the record loads the list lets
+  // the layout hold the Actions button's place.
+  const unavailable = c?.writeBlock ? WRITE_BLOCK[c.writeBlock].unavailable : null;
   return [
     c?.enabled !== false
       ? {
           label: accountActionRunning.value === 'disable' ? 'Disabling…' : 'Disable account',
           icon: 'pi-ban',
           capability: 'write:computer.enableDisable',
-          available: writable,
+          shortcut: SHORTCUT_KEYS.computer.enableDisable,
+          unavailable,
           danger: true,
           disabled: busy.value,
           run: () => c && runAccountAction('disable', c),
@@ -171,6 +173,7 @@ const actions = computed<ObjectAction[]>(() => {
           label: accountActionRunning.value === 'enable' ? 'Enabling…' : 'Enable account',
           icon: 'pi-check',
           capability: 'write:computer.enableDisable',
+          shortcut: SHORTCUT_KEYS.computer.enableDisable,
           disabled: busy.value,
           run: () => runAccountAction('enable', c),
         },
@@ -178,7 +181,8 @@ const actions = computed<ObjectAction[]>(() => {
       label: c && resetRunningOn(c.id) ? 'Resetting…' : 'Reset account…',
       icon: 'pi-refresh',
       capability: 'write:computer.resetAccount',
-      available: writable,
+      shortcut: SHORTCUT_KEYS.computer.resetAccount,
+      unavailable,
       danger: true,
       disabled: busy.value,
       run: () => c && askReset(c),
@@ -187,24 +191,32 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:computer.move',
-      available: writable,
+      shortcut: SHORTCUT_KEYS.computer.move,
+      unavailable,
       disabled: busy.value,
       run: openMoveDialog,
     },
   ];
 });
 
-const WRITE_BLOCK: Record<ComputerWriteBlock, { label: string; title: string }> = {
+// `unavailable` is what the shortcut cheat sheet says of a blocked action.
+const WRITE_BLOCK: Record<
+  ComputerWriteBlock,
+  { label: string; title: string; unavailable: string }
+> = {
   domain_controller: {
     label: 'domain controller',
+    unavailable: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   read_only_domain_controller: {
     label: 'read-only domain controller',
+    unavailable: 'it’s a domain controller',
     title: 'OpenADUC won’t disable, reset or move a domain controller.',
   },
   critical_system_object: {
     label: 'critical',
+    unavailable: 'AD marks it critical',
     title:
       'AD marks this computer as a critical system object, so OpenADUC won’t disable, reset or move it.',
   },

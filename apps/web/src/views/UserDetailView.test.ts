@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 // SPDX-License-Identifier: BUSL-1.1
-import { flushPromises, mount } from '@vue/test-utils';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { aUserDetail } from '../test/userDetail.js';
 import { ApiError } from '../api/client.js';
 
@@ -27,6 +27,7 @@ const api = {
     addGroup: vi.fn(async () => ({ ok: true })),
     removeGroup: vi.fn(async () => ({ ok: true })),
   },
+  ous: { list: vi.fn(async () => ({ ous: [] })) },
   auth: {
     stepUp: vi.fn(async () => ({
       elevated: {
@@ -41,6 +42,10 @@ vi.mock('../api/index.js', () => ({ api }));
 
 const { default: UserDetailView } = await import('./UserDetailView.vue');
 const { useAuthStore } = await import('../stores/auth.js');
+const { onShortcutKey, shortcuts } = await import('../design/composables/useShortcuts.js');
+
+// Each page offers its shortcuts until it goes.
+enableAutoUnmount(afterEach);
 
 async function openTab(tab: string, capabilities: string[], elevated: boolean) {
   const pinia = createPinia();
@@ -61,6 +66,7 @@ async function openTab(tab: string, capabilities: string[], elevated: boolean) {
   });
   await router.push(`/users/u1?tab=${tab}`);
   const page = mount(RouterView, {
+    attachTo: document.body,
     global: {
       plugins: [pinia, router, PrimeVue, ToastService],
       directives: { tooltip: Tooltip },
@@ -528,5 +534,103 @@ describe('why the user can’t sign in', () => {
     const { page } = await openTab('account', ['read:user'], false);
 
     expect(page.text()).toContain(`At the end of ${new Date(2031, 2, 1).toLocaleDateString()}`);
+  });
+});
+
+describe('shortcuts on a user’s page', () => {
+  const ACTIONS = [
+    'read:user',
+    'write:user.unlock',
+    'write:user.resetPassword',
+    'write:user.enableDisable',
+    'write:user.move',
+  ];
+
+  beforeAll(() => window.addEventListener('keydown', onShortcutKey));
+  afterAll(() => window.removeEventListener('keydown', onShortcutKey));
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.users.get.mockResolvedValue({ user });
+  });
+
+  async function press(key: string, target: EventTarget = document.body) {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    await flushPromises();
+  }
+  const listed = () =>
+    shortcuts.value
+      .filter((s) => s.section === 'Actions')
+      .map((s) =>
+        s.unavailable ? `${s.key} ${s.label} (${s.unavailable})` : `${s.key} ${s.label}`,
+      );
+
+  it('unlocks a locked account on u, after the step-up it prompts', async () => {
+    api.users.get.mockResolvedValue({ user: aUserDetail({ locked: true }) });
+    const { auth } = await openTab('overview', ACTIONS, false);
+
+    await press('u');
+    expect(auth.stepUpRequested).toBe(true);
+    expect(api.users.unlock).not.toHaveBeenCalled();
+
+    await auth.stepUp('pw');
+    await flushPromises();
+    expect(api.users.unlock).toHaveBeenCalledWith('u1');
+  });
+
+  it('won’t unlock an account that isn’t locked, and says so', async () => {
+    const { auth } = await openTab('overview', ACTIONS, true);
+    await press('u');
+    expect(auth.stepUpRequested).toBe(false);
+    expect(api.users.unlock).not.toHaveBeenCalled();
+    expect(listed()).toEqual([
+      'u Unlock account (account isn’t locked)',
+      'r Reset password…',
+      'e Disable account',
+      'm Move to OU…',
+    ]);
+  });
+
+  it('disables an enabled account on e, and enables a disabled one', async () => {
+    const enabled = await openTab('overview', ACTIONS, true);
+    await press('e');
+    expect(api.users.disable).toHaveBeenCalledWith('u1');
+    enabled.page.unmount();
+
+    api.users.get.mockResolvedValue({ user: aUserDetail({ enabled: false }) });
+    await openTab('overview', ACTIONS, true);
+    await press('e');
+    expect(api.users.enable).toHaveBeenCalledWith('u1');
+  });
+
+  it('opens the reset password dialog on r and Move to OU on m', async () => {
+    const reset = await openTab('overview', ACTIONS, true);
+    await press('r');
+    expect(reset.page.find('#reset-new-password').exists()).toBe(true);
+    reset.page.unmount();
+
+    const move = await openTab('overview', ACTIONS, true);
+    await press('m');
+    expect(move.page.text()).toContain('Move to OU');
+  });
+
+  it('offers only the actions the operator has the capability for', async () => {
+    await openTab('overview', ['read:user', 'write:user.resetPassword'], true);
+    expect(listed()).toEqual(['r Reset password…']);
+    await press('e');
+    expect(api.users.disable).not.toHaveBeenCalled();
+  });
+
+  it('ignores keys typed into a field', async () => {
+    const { page } = await openTab('organization', [...ACTIONS, 'write:user.attributes'], true);
+    await press('e', titleField(page).element);
+    expect(api.users.disable).not.toHaveBeenCalled();
+  });
+
+  it('ignores keys while a dialog is open', async () => {
+    const { page } = await openTab('overview', ACTIONS, true);
+    await press('r');
+    expect(page.find('#reset-new-password').exists()).toBe(true);
+    await press('e');
+    expect(api.users.disable).not.toHaveBeenCalled();
   });
 });

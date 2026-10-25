@@ -47,11 +47,12 @@ import { useAccountActions, type AccountAction } from '../design/composables/use
 import {
   USER_ACTIONS,
   USER_ACTION_ORDER,
-  fitsUser,
+  userActionUnavailable,
   userActionLabel,
   type UserAction,
 } from '../design/lib/userActions.js';
 import { useSignInFixes } from '../design/composables/useSignInFixes.js';
+import { SHORTCUT_KEYS } from '../design/lib/shortcutKeys.js';
 import {
   membershipChangeText,
   membershipDoneText,
@@ -769,7 +770,8 @@ const actions = computed<ObjectAction[]>(() => {
       label: userActionLabel(action, accountActionRunning.value),
       icon: info.icon,
       capability: info.capability,
-      available: !!u && fitsUser(action, u),
+      shortcut: info.shortcut,
+      unavailable: u ? userActionUnavailable(action, u) : null,
       ...(info.danger ? { danger: true } : {}),
       // Reset password runs in its dialog.
       ...(info.running ? { disabled: busy } : {}),
@@ -791,6 +793,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: moveSubmitting.value ? 'Moving…' : 'Move to OU…',
       icon: 'pi-folder-open',
       capability: 'write:user.move',
+      shortcut: SHORTCUT_KEYS.user.move,
       disabled: busy,
       run: openMoveDialog,
     },
@@ -809,7 +812,7 @@ const actions = computed<ObjectAction[]>(() => {
       label: 'Delete…',
       icon: 'pi-trash',
       capability: 'write:user.delete',
-      available: u?.enabled === false,
+      unavailable: u?.enabled === false ? null : 'only a disabled account can be deleted',
       danger: true,
       disabled: busy,
       run: () => {

@@ -19,8 +19,13 @@ export interface ObjectAction {
   icon: string;
   /** Operators without it don't see the action. */
   capability: Capability;
-  /** False hides the action, e.g. Unlock on an account that isn't locked. */
-  available?: boolean;
+  /**
+   * Why it doesn't apply to this object, e.g. Unlock on an account that
+   * isn't locked: the menu leaves it out, and the cheat sheet says why.
+   */
+  unavailable?: string | null;
+  /** The key that runs it on the page, e.g. 'u'; actions may share one. */
+  shortcut?: string;
   disabled?: boolean;
   danger?: boolean;
   run: () => void;

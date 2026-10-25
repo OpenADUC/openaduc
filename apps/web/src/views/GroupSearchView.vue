@@ -57,20 +57,25 @@ const rows = ref<GroupSummary[]>([]);
 const freshness = ref<ListFreshness | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+const drawerOpen = ref(false);
 const {
   skeleton,
   table: listTable,
   title: pageTitle,
   status: listStatus,
-} = useListLoading({
+  searchField,
+} = useListLoading<GroupSummary>({
   rows,
   loading,
   error,
   total: () => total.value,
   title: 'Groups',
   noun: ['group', 'groups'],
+  open: openDetail,
+  showSearch: () => {
+    drawerOpen.value = true;
+  },
 });
-const drawerOpen = ref(false);
 
 const filters = ref<{
   name: FilterEntry<string>;
@@ -356,7 +361,12 @@ onMounted(load);
       <div class="filter-form">
         <div class="filter-field">
           <label class="filter-label">Name</label>
-          <InputText v-model="filters.name.value" placeholder="Contains…" class="filter-input" />
+          <InputText
+            ref="searchField"
+            v-model="filters.name.value"
+            placeholder="Contains…"
+            class="filter-input"
+          />
         </div>
 
         <div v-if="showTypeFilter" class="filter-field">
