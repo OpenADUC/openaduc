@@ -12,6 +12,7 @@ import {
 } from '../plugins/errorHandler.js';
 import { SESSION_COOKIE_NAME } from '../plugins/auth.js';
 import { composeBindUpn } from '../lib/usernameParser.js';
+import { elevatedState } from '../services/sessions.js';
 
 // Capability subset that step-up should grant. Step-up is "you proved you
 // can bind as yourself recently" — it doesn't elevate to capabilities you
@@ -359,7 +360,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       // Old elevated sessions died with the old admin session — wipe their
       // cached passwords. Cache the bind password under the new id only.
       app.services.credentialCache.deleteMany(revokedElevatedIds);
-      app.services.credentialCache.set(elevated.id, body.password, elevated.expiresAt);
+      app.services.credentialCache.set(elevated.id, body.password, elevated.idleExpiresAt);
 
       await app.services.audit
         .recordEvent({
@@ -372,7 +373,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           targetId: elevated.id,
           metadata: {
             capabilities: writes,
-            expiresAt: elevated.expiresAt.toISOString(),
+            idleExpiresAt: elevated.idleExpiresAt.toISOString(),
+            absoluteExpiresAt: elevated.absoluteExpiresAt.toISOString(),
             rotatedFromSessionId: actor.session.id,
             ...(removedCapabilities.length > 0 ? { removedCapabilities } : {}),
           },
@@ -384,7 +386,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         expires: rotated.session.expiresAt,
       });
 
-      return { elevated: { active: true, expiresAt: elevated.expiresAt.toISOString() } };
+      return { elevated: elevatedState(elevated) };
     },
   });
 
@@ -436,10 +438,7 @@ function meResponse(
     capabilities: session.capabilities,
     directoryId: session.directoryId,
     directoryDomain: domainName,
-    elevated: {
-      active: !!elevated,
-      expiresAt: elevated ? elevated.expiresAt.toISOString() : null,
-    },
+    elevated: elevatedState(elevated),
   };
   return meResponseSchema.parse(payload);
 }

@@ -214,6 +214,8 @@ export interface ElevatedSessionsTable {
   auth_method: ColumnType<string, string | undefined, string>;
   capabilities_json: JSONColumnType<string[]>;
   created_at: TimestampDefault;
+  idle_expires_at: Timestamp;
+  // The absolute end.
   expires_at: Timestamp;
   revoked_at: Timestamp | null;
 }

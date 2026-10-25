@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
+import { ELEVATED_IDLE_END_HEADER } from '@openaduc/shared';
 import { loadEnv } from './config/env.js';
 import { buildLoggerOptions } from './lib/logger.js';
 import correlationId from './plugins/correlationId.js';
@@ -61,6 +62,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: env.API_CORS_ORIGIN,
     credentials: true,
+    exposedHeaders: [ELEVATED_IDLE_END_HEADER],
   });
   await app.register(cookie, { secret: env.SESSION_COOKIE_SECRET });
   await app.register(rateLimit, {

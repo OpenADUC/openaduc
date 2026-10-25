@@ -14,7 +14,13 @@ const api = {
   },
   directories: { policy: vi.fn(async () => ({ policy: null })) },
   auth: {
-    stepUp: vi.fn(async () => ({ elevated: { active: true, expiresAt: '2999-01-01T00:00:00Z' } })),
+    stepUp: vi.fn(async () => ({
+      elevated: {
+        active: true,
+        idleExpiresAt: '2999-01-01T00:00:00Z',
+        absoluteExpiresAt: '2999-01-01T00:00:00Z',
+      },
+    })),
   },
 };
 vi.mock('../../api/index.js', () => ({ api }));
@@ -30,14 +36,60 @@ async function openTab(elevated: boolean) {
     capabilities: ['configure:security'],
     directoryId: 1,
     elevated: elevated
-      ? { active: true, expiresAt: '2999-01-01T00:00:00Z' }
-      : { active: false, expiresAt: null },
+      ? {
+          active: true,
+          idleExpiresAt: '2999-01-01T00:00:00Z',
+          absoluteExpiresAt: '2999-01-01T00:00:00Z',
+        }
+      : { active: false, idleExpiresAt: null, absoluteExpiresAt: null },
   } as never; // only these fields matter
   const tab = mount(PolicyTab, { global: { plugins: [pinia, PrimeVue, ToastService] } });
   await flushPromises();
   const save = tab.findAll('button').find((b) => b.text().includes('Save changes'))!;
-  return { auth, save };
+  return { auth, save, tab };
 }
+
+describe('elevated session limits', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows the configured limits and saves them with the rest', async () => {
+    api.settings.list.mockResolvedValueOnce({
+      settings: {
+        'stepup.idle_timeout_minutes': { value: 10 },
+        'stepup.absolute_lifetime_minutes': { value: 120 },
+      },
+    } as never);
+    const { save, tab } = await openTab(true);
+    expect((tab.find('#stepup-idle').element as HTMLInputElement).value).toBe('10');
+    expect((tab.find('#stepup-lifetime').element as HTMLInputElement).value).toBe('120');
+
+    await save.trigger('click');
+    await flushPromises();
+    expect(api.settings.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        'stepup.idle_timeout_minutes': 10,
+        'stepup.absolute_lifetime_minutes': 120,
+      }),
+    );
+  });
+});
+
+describe('elevated session limits that conflict', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("won't save an idle timeout longer than the absolute lifetime", async () => {
+    api.settings.list.mockResolvedValueOnce({
+      settings: {
+        'stepup.idle_timeout_minutes': { value: 300 },
+        'stepup.absolute_lifetime_minutes': { value: 240 },
+      },
+    } as never);
+    const { save, tab } = await openTab(true);
+
+    expect(tab.text()).toContain("The idle timeout can't be longer than the absolute lifetime.");
+    expect(save.attributes('disabled')).toBeDefined();
+  });
+});
 
 // Settings changes need step-up (ADR 0001: the first write prompts, then retries).
 describe('saving settings', () => {

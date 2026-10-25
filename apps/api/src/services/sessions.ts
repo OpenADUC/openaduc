@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
+import { ELEVATED_SESSION_LIMITS, type ElevatedSessionState } from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import { generateToken, hashToken } from '../lib/crypto.js';
 import type { SettingsService } from './settings.js';
+
+const { idleTimeout, absoluteLifetime } = ELEVATED_SESSION_LIMITS;
 
 // ---- Public types -----------------------------------------------------------
 
@@ -32,7 +35,9 @@ export interface ElevatedSession {
   authMethod: string;
   capabilities: string[];
   createdAt: Date;
-  expiresAt: Date;
+  /** Ends here unless the operator is active first; never after absoluteExpiresAt. */
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
   revokedAt: Date | null;
 }
 
@@ -122,9 +127,8 @@ export class SessionsService {
     const expiresAt = new Date(row.expires_at).getTime();
     if (expiresAt <= now) return null;
 
-    const idleMinutes = await this.settings.get<number>('session.idle_timeout_minutes', 60);
     const lastSeenAt = new Date(row.last_seen_at).getTime();
-    if (now - lastSeenAt > idleMinutes * 60 * 1000) return null;
+    if (now - lastSeenAt > (await this.signInIdleMs())) return null;
 
     // Bump last_seen_at. Don't await; the resolve has succeeded — a failure to
     // record activity should not invalidate the request.
@@ -186,6 +190,7 @@ export class SessionsService {
       adminSessionId: admin.session.id,
       actorUserId: args.seed.actorUserId,
       capabilities: args.elevatedCapabilities,
+      notAfter: admin.session.expiresAt,
       ...(args.authMethod !== undefined ? { authMethod: args.authMethod } : {}),
     });
     const { revokedElevatedIds } = await this.revokeAdminSession(args.oldAdminSessionId);
@@ -199,10 +204,13 @@ export class SessionsService {
     actorUserId: string;
     capabilities: string[];
     authMethod?: string;
+    /** The admin session's expiry: an elevated session never outlives it. */
+    notAfter?: Date;
   }): Promise<ElevatedSession> {
-    const ttlMinutes = await this.settings.get<number>('stepup.ttl_minutes', 60);
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + ttlMinutes * 60 * 1000);
+    const { idleMs, absoluteMs } = await this.elevationLimits();
+    const now = Date.now();
+    const absoluteExpiresAt = Math.min(now + absoluteMs, args.notAfter?.getTime() ?? Infinity);
+    const idleExpiresAt = Math.min(now + idleMs, absoluteExpiresAt);
     const row = await this.db
       .insertInto('elevated_sessions')
       .values({
@@ -210,7 +218,8 @@ export class SessionsService {
         actor_user_id: args.actorUserId,
         capabilities_json: JSON.stringify(args.capabilities),
         auth_method: args.authMethod ?? 'ad-rebind',
-        expires_at: expiresAt.toISOString(),
+        idle_expires_at: new Date(idleExpiresAt).toISOString(),
+        expires_at: new Date(absoluteExpiresAt).toISOString(),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -219,19 +228,69 @@ export class SessionsService {
 
   /**
    * Find the active elevated session for an admin session, if any. Active =
-   * not revoked and not expired.
+   * not revoked and past neither its idle end nor its absolute end.
    */
   async findActiveElevated(adminSessionId: string): Promise<ElevatedSession | null> {
+    const now = new Date();
     const row = await this.db
       .selectFrom('elevated_sessions')
       .selectAll()
       .where('admin_session_id', '=', adminSessionId)
       .where('revoked_at', 'is', null)
-      .where('expires_at', '>', new Date())
+      .where('idle_expires_at', '>', now)
+      .where('expires_at', '>', now)
       .orderBy('created_at', 'desc')
       .limit(1)
       .executeTakeFirst();
     return row ? rowToElevated(row) : null;
+  }
+
+  /**
+   * The operator was active: push the idle end to a full idle timeout from
+   * now, capped at the absolute end. Returns the session as it now stands,
+   * or null if it ended (idle or revoked) since it was looked up.
+   *
+   * Activity that would move the idle end by less than a twentieth of the
+   * timeout isn't written, so a busy operator costs one UPDATE every 45
+   * seconds or so (at the 15-minute default) rather than one per request.
+   * The session can therefore end up to that much before a full timeout
+   * after the operator's last request.
+   */
+  async recordElevatedActivity(elevated: ElevatedSession): Promise<ElevatedSession | null> {
+    const { idleMs } = await this.elevationLimits();
+    const now = Date.now();
+    const next = Math.min(now + idleMs, elevated.absoluteExpiresAt.getTime());
+    if (Math.abs(next - elevated.idleExpiresAt.getTime()) < idleMs / 20) return elevated;
+    const row = await this.db
+      .updateTable('elevated_sessions')
+      .set({ idle_expires_at: new Date(next).toISOString() })
+      .where('id', '=', elevated.id)
+      .where('revoked_at', 'is', null)
+      .where('idle_expires_at', '>', new Date(now))
+      .returningAll()
+      .executeTakeFirst();
+    return row ? rowToElevated(row) : null;
+  }
+
+  /**
+   * The idle timeout is capped by the sign-in session's. Elevated idle ends
+   * are only set as the sign-in session is seen (at step-up, or a request),
+   * so the elevated session, and the cached password, idle out first.
+   */
+  private async elevationLimits(): Promise<{ idleMs: number; absoluteMs: number }> {
+    const [idleMinutes, absoluteMinutes, signInIdleMs] = await Promise.all([
+      this.settings.get<number>(idleTimeout.key, idleTimeout.default),
+      this.settings.get<number>(absoluteLifetime.key, absoluteLifetime.default),
+      this.signInIdleMs(),
+    ]);
+    return {
+      idleMs: Math.min(idleMinutes * 60 * 1000, signInIdleMs),
+      absoluteMs: absoluteMinutes * 60 * 1000,
+    };
+  }
+
+  private async signInIdleMs(): Promise<number> {
+    return (await this.settings.get<number>('session.idle_timeout_minutes', 60)) * 60 * 1000;
   }
 
   /**
@@ -249,6 +308,15 @@ export class SessionsService {
       .execute();
     return rows.map((r) => r.id);
   }
+}
+
+/** How the current-session and step-up responses describe an elevated session. */
+export function elevatedState(elevated: ElevatedSession | null): ElevatedSessionState {
+  return {
+    active: !!elevated,
+    idleExpiresAt: elevated?.idleExpiresAt.toISOString() ?? null,
+    absoluteExpiresAt: elevated?.absoluteExpiresAt.toISOString() ?? null,
+  };
 }
 
 // ---- Row mappers ------------------------------------------------------------
@@ -295,6 +363,7 @@ function rowToElevated(row: {
   auth_method: string;
   capabilities_json: unknown;
   created_at: Date | string;
+  idle_expires_at: Date | string;
   expires_at: Date | string;
   revoked_at: Date | string | null;
 }): ElevatedSession {
@@ -305,7 +374,8 @@ function rowToElevated(row: {
     authMethod: row.auth_method,
     capabilities: parseCapabilities(row.capabilities_json),
     createdAt: toDate(row.created_at),
-    expiresAt: toDate(row.expires_at),
+    idleExpiresAt: toDate(row.idle_expires_at),
+    absoluteExpiresAt: toDate(row.expires_at),
     revokedAt: row.revoked_at ? toDate(row.revoked_at) : null,
   };
 }

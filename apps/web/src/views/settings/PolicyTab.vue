@@ -5,12 +5,13 @@ import Button from 'primevue/button';
 import InputNumber from 'primevue/inputnumber';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
-import type { DirectoryPolicy } from '@openaduc/shared';
+import { ELEVATED_SESSION_LIMITS, type DirectoryPolicy } from '@openaduc/shared';
 import { api, type AppSettings } from '../../api/index.js';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
 
+const { idleTimeout, absoluteLifetime } = ELEVATED_SESSION_LIMITS;
 const auth = useAuthStore();
 const toast = useToast();
 
@@ -29,9 +30,14 @@ const form = ref({
   staleLogonDays: 60,
   auditAccountView: true,
   auditSearch: false,
+  stepUpIdleMinutes: idleTimeout.default,
+  stepUpLifetimeMinutes: absoluteLifetime.default,
 });
 
 const canEdit = computed(() => auth.hasCapability('configure:security'));
+const limitsConflict = computed(
+  () => form.value.stepUpIdleMinutes > form.value.stepUpLifetimeMinutes,
+);
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -43,6 +49,9 @@ async function load(): Promise<void> {
       staleLogonDays: numericValue('view.stale_logon_days', 60) ?? 60,
       auditAccountView: booleanValue('audit.account_view_enabled', true),
       auditSearch: booleanValue('audit.search_enabled', false),
+      stepUpIdleMinutes: numericValue(idleTimeout.key, idleTimeout.default) ?? idleTimeout.default,
+      stepUpLifetimeMinutes:
+        numericValue(absoluteLifetime.key, absoluteLifetime.default) ?? absoluteLifetime.default,
     };
   } catch (err) {
     toast.add({
@@ -74,6 +83,8 @@ async function save(): Promise<void> {
       'view.stale_logon_days': form.value.staleLogonDays,
       'audit.account_view_enabled': form.value.auditAccountView,
       'audit.search_enabled': form.value.auditSearch,
+      [idleTimeout.key]: form.value.stepUpIdleMinutes,
+      [absoluteLifetime.key]: form.value.stepUpLifetimeMinutes,
     });
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
     await load();
@@ -193,6 +204,38 @@ onMounted(async () => {
     </div>
   </Card>
 
+  <Card title="Elevated sessions" sub="how long write access lasts after step-up">
+    <div class="form-grid-2">
+      <div class="setting-block">
+        <label class="fld-label" for="stepup-idle">Idle timeout (minutes)</label>
+        <p class="setting-hint">Writes need step-up again after this long without activity.</p>
+        <InputNumber
+          v-model="form.stepUpIdleMinutes"
+          input-id="stepup-idle"
+          :disabled="!canEdit || loading"
+          :min="idleTimeout.min"
+          :max="idleTimeout.max"
+          class="w-full"
+        />
+      </div>
+      <div class="setting-block">
+        <label class="fld-label" for="stepup-lifetime">Absolute lifetime (minutes)</label>
+        <p class="setting-hint">Writes need step-up again this long after it, however busy.</p>
+        <InputNumber
+          v-model="form.stepUpLifetimeMinutes"
+          input-id="stepup-lifetime"
+          :disabled="!canEdit || loading"
+          :min="absoluteLifetime.min"
+          :max="absoluteLifetime.max"
+          class="w-full"
+        />
+      </div>
+    </div>
+    <p v-if="limitsConflict" class="setting-hint setting-error" role="alert">
+      The idle timeout can't be longer than the absolute lifetime.
+    </p>
+  </Card>
+
   <Card title="Audit logging" sub="what activities produce audit events">
     <label class="check-row">
       <input v-model="form.auditAccountView" type="checkbox" :disabled="!canEdit || loading" />
@@ -218,7 +261,7 @@ onMounted(async () => {
       label="Save changes"
       icon="pi pi-check"
       :loading="saving"
-      :disabled="loading"
+      :disabled="loading || limitsConflict"
       @click="auth.requireEdit(save)"
     />
     <span v-else class="hint">
@@ -238,6 +281,11 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--text-3);
   margin: 0;
+}
+
+.setting-error {
+  margin-top: 8px;
+  color: var(--danger);
 }
 
 .number-row {
