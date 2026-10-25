@@ -84,6 +84,10 @@ import type {
   ImportLookupRequest,
   ImportLookupResponse,
   ImportRequest,
+  ImportRunRequest,
+  ImportJobResponse,
+  BulkJobResultsDownload,
+  BulkPasswordResetRequest,
   PlacementRulesResponse,
   PlacementRulesSave,
   PlacementRulesSaveResponse,
@@ -461,6 +465,14 @@ export const api = {
       check(body: ImportRequest): Promise<ImportCheckResponse> {
         return apiFetch('/users/import/check', { method: 'POST', body: JSON.stringify(body) });
       },
+      /** Check the import once more and run it as a job. */
+      run(body: ImportRunRequest): Promise<{ job: BulkJob }> {
+        return apiFetch('/users/import/run', { method: 'POST', body: JSON.stringify(body) });
+      },
+      /** An import's job, row by row, and whether its results CSV still holds the passwords. */
+      job(id: string, init: Background = {}): Promise<ImportJobResponse> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}`, init);
+      },
     },
     copySource(id: string): Promise<UserCopySource> {
       return apiFetch(`/users/${encodeURIComponent(id)}/copy`);
@@ -746,6 +758,17 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       });
+    },
+    /** Reset the passwords of the accounts an import of the operator's created. */
+    startPasswordReset(importJobId: string): Promise<{ job: BulkJob }> {
+      return apiFetch(bulkJobPath('user.password.reset'), {
+        method: 'POST',
+        body: JSON.stringify({ importJobId } satisfies BulkPasswordResetRequest),
+      });
+    },
+    /** A job's results CSV; with passwords, only once. */
+    results(id: string): Promise<BulkJobResultsDownload> {
+      return apiFetch(`/bulk-jobs/${encodeURIComponent(id)}/results`, { method: 'POST' });
     },
     /** The operator's own jobs in this directory, newest first. */
     list(limit = 10): Promise<{ jobs: BulkJob[] }> {

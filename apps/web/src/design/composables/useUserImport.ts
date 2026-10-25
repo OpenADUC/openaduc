@@ -8,8 +8,9 @@
 // check the server is only read from: the naming check and the lookup of
 // who's already in the directory, both of which need it. What a row would
 // create, what needs approving and what blocks is reviewImportRow's call,
-// so the review and the final check decide alike. Running the import is
-// the next step (#153): the wizard ends with the checked request.
+// so the review and the final check decide alike. Running the import
+// checks it once more on the server and starts a job, whose results page
+// (useImportJob) the wizard hands over to; the draft is done with then.
 
 import { computed, reactive, ref, shallowRef, watch } from 'vue';
 import {
@@ -22,6 +23,7 @@ import {
   bucketKey,
   bucketsOf,
   checkPassword,
+  startsLikeFormula,
   guessMapping,
   importRowRequest,
   importTemplateCsv,
@@ -52,9 +54,11 @@ import {
   type NamingSettings,
   type NamingSuggestion,
   type NewUserSettings,
+  type PasswordCheck,
   type PasswordMode,
   type PlacementRule,
 } from '@openaduc/shared';
+import { ApiError } from '../../api/client.js';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
@@ -678,9 +682,19 @@ export function useUserImport() {
     password.value = '';
     draft.options.mustChange = true;
   }
-  const passwordChecks = computed(() =>
+  const passwordChecks = computed<PasswordCheck[]>(() =>
     draft.options.passwordMode === 'set'
-      ? checkPassword(password.value, policy.value, { samAccountName: null, displayName: null })
+      ? [
+          ...checkPassword(password.value, policy.value, {
+            samAccountName: null,
+            displayName: null,
+          }),
+          {
+            rule: 'formula',
+            met: !startsLikeFormula(password.value),
+            text: 'Doesn’t start with =, +, - or @ (the results spreadsheet would run it)',
+          },
+        ]
       : [],
   );
   const importPassword = computed<ImportPassword | null>(() => {
@@ -777,8 +791,8 @@ export function useUserImport() {
 
   /**
    * Remember where each bucket went, for the next import grouped by this
-   * column: the run (#153) calls this once it starts. Not at the final
-   * check, so an import abandoned there leaves the rules as they were.
+   * column: the run calls this once it starts. Not at the final check, so
+   * an import abandoned there leaves the rules as they were.
    */
   async function rememberPlacements(): Promise<void> {
     const id = directoryId.value;
@@ -812,13 +826,48 @@ export function useUserImport() {
   const checkProblems = computed(() => lastCheck.value?.answer.problems.map(describeIssue) ?? []);
   const checkWarnings = computed(() => lastCheck.value?.answer.warnings.map(describeIssue) ?? []);
   const protectedGroups = computed(() => result.value?.protectedGroups ?? []);
-  /** Passed, and the operator acknowledged any group AD protects: ready for the run (#153). */
+  /** Passed, and the operator acknowledged any group AD protects: ready for the run. */
   const ready = computed(
     () =>
       !!result.value &&
       result.value.problems.length === 0 &&
       (protectedGroups.value.length === 0 || acknowledgedProtected.value),
   );
+
+  // ---- Run -----------------------------------------------------------------
+
+  const running = ref(false);
+  const runError = ref<string | null>(null);
+  /** The job the run started, whose results page comes next. */
+  const startedJobId = ref<string | null>(null);
+
+  function run(): void {
+    if (!ready.value || running.value) return;
+    auth.requireStepUp(commitRun, 'Importing users requires step-up authentication.');
+  }
+
+  async function commitRun(): Promise<void> {
+    const body = importRequest.value;
+    if (!body || !ready.value || running.value) return;
+    running.value = true;
+    runError.value = null;
+    try {
+      const { job } = await api.users.import.run({
+        import: body,
+        acknowledgeProtected: acknowledgedProtected.value,
+      });
+      await rememberPlacements();
+      if (owner.value) clearDraft(owner.value);
+      startedJobId.value = job.id;
+    } catch (err) {
+      if (auth.retryAfterStepUp(err, commitRun)) return;
+      runError.value = errorMessage(err, 'Couldn’t start the import');
+      // The server's check found something this one didn't: show what.
+      if (err instanceof ApiError && err.status === 422) void commitCheck();
+    } finally {
+      running.value = false;
+    }
+  }
 
   // ---- Steps ---------------------------------------------------------------
 
@@ -930,5 +979,10 @@ export function useUserImport() {
     acknowledgedProtected,
     rulesError,
     ready,
+    // Run
+    run,
+    running,
+    runError,
+    startedJobId,
   };
 }

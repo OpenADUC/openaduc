@@ -6,6 +6,13 @@
 import { z } from 'zod';
 import { directoryCountry } from '../country.js';
 import {
+  BULK_JOB_ROW_STATUSES,
+  bulkJobSchema,
+  heldPasswordsSchema,
+  type BulkJobRowStatus,
+} from './bulkJob.js';
+import { startsLikeFormula } from '../csv.js';
+import {
   CONTROL_CHARS,
   RESET_PASSWORD_MIN_LENGTH,
   samAccountNameSchema,
@@ -130,7 +137,14 @@ export const importPasswordSchema = z.discriminatedUnion('mode', [
   z
     .object({
       mode: z.literal('set'),
-      password: z.string().min(RESET_PASSWORD_MIN_LENGTH).max(256),
+      // The results CSV holds it exactly, and a spreadsheet would run it.
+      password: z
+        .string()
+        .min(RESET_PASSWORD_MIN_LENGTH)
+        .max(256)
+        .refine((p) => !startsLikeFormula(p), {
+          message: 'can’t start with =, +, - or @: spreadsheets would read it as a formula',
+        }),
       mustChange: z.boolean(),
     })
     .strict(),
@@ -222,6 +236,68 @@ export const importRequestSchema = z
   });
 export type ImportRequest = z.input<typeof importRequestSchema>;
 export type CheckedImportRequest = z.output<typeof importRequestSchema>;
+
+// ---- The run ------------------------------------------------------------
+
+/**
+ * What an import does for each row, in this order: create the account
+ * disabled, set its password, enable it if asked, add it to its bucket's
+ * groups, set its manager. Follow-ups that need the account (a Temporary
+ * Access Pass) come after.
+ */
+export const IMPORT_STEPS = ['create', 'password', 'enable', 'groups', 'manager'] as const;
+export type ImportStep = (typeof IMPORT_STEPS)[number];
+
+/** Running an import: the request the final check passed. */
+export const importRunRequestSchema = z
+  .object({
+    import: importRequestSchema,
+    /** The operator ticked that rows going in groups AD protects gain admin rights. */
+    acknowledgeProtected: z.boolean().default(false),
+  })
+  .strict();
+export type ImportRunRequest = z.input<typeof importRunRequestSchema>;
+
+/** What a row's result says, on the results page and in its CSV. */
+export const IMPORT_ROW_STATUS_LABEL: Record<BulkJobRowStatus, string> = {
+  pending: 'Waiting',
+  running: 'Creating',
+  succeeded: 'Created',
+  partial: 'Created, partly set up',
+  failed: 'Not created',
+  skipped: 'Skipped',
+};
+
+/** One row of an import's job, as its results show it. */
+export const importJobRowSchema = z.object({
+  /** Its row in the spreadsheet. */
+  line: z.number().int(),
+  displayName: z.string(),
+  samAccountName: z.string(),
+  userPrincipalName: z.string(),
+  status: z.enum(BULK_JOB_ROW_STATUSES),
+  /** The account's objectGUID, once it's created. */
+  id: z.string().nullable(),
+  completed: z.array(z.enum(IMPORT_STEPS)),
+  /** The steps that failed, each saying why (a group step names the groups). */
+  failed: z.array(z.object({ step: z.enum(IMPORT_STEPS), message: z.string() })),
+  errorMessage: z.string().nullable(),
+  /**
+   * Nobody can know its password: it was set after the passwords were
+   * downloaded or purged, so it's random, or it was purged unseen.
+   */
+  needsPasswordReset: z.boolean(),
+});
+export type ImportJobRow = z.infer<typeof importJobRowSchema>;
+
+export const importJobResponseSchema = z.object({
+  job: bulkJobSchema,
+  rows: z.array(importJobRowSchema),
+  results: heldPasswordsSchema,
+  /** The latest password reset of the import's accounts, and its own results. */
+  passwordReset: z.object({ job: bulkJobSchema, results: heldPasswordsSchema }).nullable(),
+});
+export type ImportJobResponse = z.infer<typeof importJobResponseSchema>;
 
 export type ImportCheckIssueKind =
   | 'unusable'

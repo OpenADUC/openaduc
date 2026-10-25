@@ -30,7 +30,7 @@ import {
   type AttributeValues,
 } from '../bulkAttributes.js';
 import { findCachedGroupsById } from '../groupCache.js';
-import { membershipRequirement } from '../groupMembershipWrite.js';
+import { membershipRequirements } from '../groupMembershipWrite.js';
 import { findCachedOu, userMoveRefusal, type CachedOu } from '../ouCache.js';
 import { previewList } from '../previewList.js';
 import { previewToken } from '../previewToken.js';
@@ -554,7 +554,10 @@ const CHANGED_SINCE = {
 };
 
 /** What runs a revert's rows: each one put back as its single-object write would. */
-export type BulkRevertRunner = Pick<BulkJobHandler, 'capability' | 'requires' | 'input' | 'run'>;
+export type BulkRevertRunner = Pick<
+  BulkJobHandler<unknown, unknown, string | null>,
+  'capability' | 'requires' | 'input' | 'run'
+>;
 
 /**
  * A revert row reads the user live and judges it as the preview did,
@@ -569,7 +572,7 @@ export function revertRunner(action: BulkRevertableAction): BulkRevertRunner {
     ...(action === 'user.group.remove'
       ? {
           requires: (subject, roleGroups) =>
-            membershipRequirement('add', subject?.groups ?? [], roleGroups),
+            membershipRequirements('add', subject?.groups ?? [], roleGroups),
         }
       : {}),
     input: revertInputSchema,
@@ -662,8 +665,14 @@ export async function planRevert(
     .where('job_id', '=', job.id)
     .orderBy('ordinal')
     .execute();
-  const changed = rows.filter(
-    (r) => (r.status === 'succeeded' || r.status === 'partial') && r.before_json && r.after_json,
+  // Only a bulk action's rows, which always have a target, are reverted.
+  const changed = rows.flatMap((r) =>
+    (r.status === 'succeeded' || r.status === 'partial') &&
+    r.before_json &&
+    r.after_json &&
+    r.target_id !== null
+      ? [{ ...r, target_id: r.target_id }]
+      : [],
   );
   const ids = changed.map((r) => r.target_id.toLowerCase());
   const cached =

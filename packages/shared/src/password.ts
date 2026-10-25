@@ -14,7 +14,8 @@ export interface PasswordAccount {
   displayName: string | null;
 }
 
-export type PasswordRule = 'length' | 'categories' | 'names';
+/** `formula`: an import's shared password, which its results CSV holds exactly, can't start like a formula. */
+export type PasswordRule = 'length' | 'categories' | 'names' | 'formula';
 
 export interface PasswordCheck {
   rule: PasswordRule;

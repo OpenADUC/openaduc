@@ -400,7 +400,7 @@ describe('moving users and changing their account settings in bulk', () => {
         .rows.reverse();
 
     const failedWith = async (id: string) =>
-      (await rowsWith(id, 'failed')).map((r) => [nameOf(r.targetId), r.errorCode]);
+      (await rowsWith(id, 'failed')).map((r) => [nameOf(r.targetId!), r.errorCode]);
 
     const missing = randomUUID();
 
