@@ -72,6 +72,7 @@ const ROWS: ImportJobRow[] = [
     failed: [{ step: 'groups', message: 'Not added to Sales: the directory refused the change.' }],
     errorMessage: 'Not added to Sales: the directory refused the change.',
     needsPasswordReset: false,
+    licenses: null,
   },
 ];
 
@@ -204,6 +205,56 @@ describe('an import’s results', () => {
     expect(bulkJobs.results).toHaveBeenCalledWith('10');
     expect(save).toHaveBeenCalled();
     scope.stop();
+  });
+
+  it('reads the job again every half minute while licenses wait to settle in Entra', async () => {
+    const licensed = (status: 'waiting' | 'settled' | 'stopped'): ImportJobRow => ({
+      ...ROWS[0]!,
+      licenses: {
+        status,
+        message: status === 'waiting' ? 'Waiting for Entra to assign Microsoft 365 E3.' : null,
+        licenses: [
+          {
+            skuId: 'e3',
+            skuPartNumber: 'SPE_E3',
+            name: 'Microsoft 365 E3',
+            group: 'All Staff',
+            state: status === 'waiting' ? 'pending' : 'error',
+            error: status === 'waiting' ? null : 'CountViolation',
+          },
+        ],
+        checkedAt: null,
+      },
+    });
+    const finished = aJob('finished', { succeeded: 1 });
+    imports.job
+      .mockResolvedValueOnce({ ...answer(finished), rows: [licensed('waiting')] })
+      .mockResolvedValue({ ...answer(finished), rows: [licensed('settled')] });
+    const { imp, scope } = setup();
+    await imp.open('9');
+    expect(imp.licensesWaiting.value).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(POLL.maxMs * 2);
+    expect(imports.job).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(POLL.afterStopMs);
+    expect(imports.job).toHaveBeenCalledTimes(2);
+    expect(imports.job).toHaveBeenLastCalledWith('9', { background: true });
+    expect(imp.licensesWaiting.value).toBe(false);
+    expect(imp.rows.value[0]?.licenses?.licenses[0]?.error).toBe('CountViolation');
+
+    // Settled: no more polling.
+    await vi.advanceTimersByTimeAsync(POLL.afterStopMs * 2);
+    expect(imports.job).toHaveBeenCalledTimes(2);
+    scope.stop();
+
+    // Nor once a check has stopped.
+    imports.job.mockReset().mockResolvedValue({ ...answer(finished), rows: [licensed('stopped')] });
+    const again = setup();
+    await again.imp.open('9');
+    expect(again.imp.licensesWaiting.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(POLL.afterStopMs * 2);
+    expect(imports.job).toHaveBeenCalledTimes(1);
+    again.scope.stop();
   });
 
   it('waits for the page to be shown again before polling', async () => {

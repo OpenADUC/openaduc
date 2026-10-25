@@ -18,6 +18,7 @@ export * from './naming.js';
 export * from './dn.js';
 export * from './ldapTransport.js';
 export * from './csv.js';
+export * from './words.js';
 export * from './schemas/roles.js';
 export * from './schemas/naming.js';
 export * from './password.js';

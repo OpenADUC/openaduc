@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <!--
   An import's results: its progress while it runs, then each row's
-  result with a link to the account, the retry of what failed, the
-  results CSV, and once its passwords are gone, a reset of them. An
-  import that issues TAPs for class has its class roster as a second tab.
-  The workflow lives in useImportJob; this renders it.
+  result with a link to the account and how its licenses stand in
+  Entra, the retry of what failed, the results CSV, and once its
+  passwords are gone, a reset of them. An import that issues TAPs for
+  class has its class roster as a second tab. The workflow lives in
+  useImportJob; this renders it.
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
@@ -12,10 +13,14 @@ import { RouterLink } from 'vue-router';
 import Button from 'primevue/button';
 import Message from 'primevue/message';
 import {
+  IMPORT_LICENSE_STATE_LABEL,
   IMPORT_ROW_STATUS_LABEL,
+  licenseProblem,
   type BulkJobResultsDownload,
   type ImportJobRow,
+  type ImportLicenseState,
 } from '@openaduc/shared';
+import LicenseName from '../design/primitives/LicenseName.vue';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
 import ClassAlerts from './importJob/ClassAlerts.vue';
 import ImportJobTabs from './importJob/ImportJobTabs.vue';
@@ -85,6 +90,15 @@ const problemsOf = (row: ImportJobRow): string[] =>
     : row.errorMessage && row.status !== 'succeeded'
       ? [row.errorMessage]
       : [];
+
+const LICENSE_TONE: Record<ImportLicenseState, string> = {
+  pending: 'muted',
+  active: 'green',
+  activeWithError: 'amber',
+  disabled: 'muted',
+  error: 'red',
+};
+const showLicenses = computed(() => rows.value.some((r) => r.licenses));
 
 const downloadLabel = computed(() =>
   results.value?.passwords === 'held' ? 'Download results with passwords' : 'Download results',
@@ -199,6 +213,12 @@ const downloadLabel = computed(() =>
 
       <section class="ij-section" aria-labelledby="ij-rows">
         <h2 id="ij-rows" class="ij-title">People</h2>
+        <p v-if="imp.licensesWaiting.value" class="ij-note">
+          OpenADUC reads each person’s licenses from Microsoft Entra once they’ve synced, then again
+          after a minute, two, four and eight, and every quarter of an hour after that, until each
+          license is assigned or Entra says why not. It stops waiting a day after the import for
+          sync, and two hours after sync for the licenses.
+        </p>
         <div class="ij-table-wrap">
           <table class="ij-table">
             <thead>
@@ -208,6 +228,7 @@ const downloadLabel = computed(() =>
                 <th scope="col">Username</th>
                 <th scope="col">UPN</th>
                 <th scope="col">Result</th>
+                <th v-if="showLicenses" scope="col">Licenses</th>
               </tr>
             </thead>
             <tbody>
@@ -231,6 +252,27 @@ const downloadLabel = computed(() =>
                   <ul v-if="problemsOf(row).length" class="ij-problems">
                     <li v-for="(p, i) in problemsOf(row)" :key="i">{{ p }}</li>
                   </ul>
+                </td>
+                <td v-if="showLicenses">
+                  <template v-if="row.licenses">
+                    <ul class="ij-licenses">
+                      <li v-for="l in row.licenses.licenses" :key="`${l.skuId}:${l.group}`">
+                        <span class="ij-license-head">
+                          <LicenseName :license="l" />
+                          <span class="badge" :class="`badge-${LICENSE_TONE[l.state]}`">
+                            <span class="badge-dot" />{{ IMPORT_LICENSE_STATE_LABEL[l.state] }}
+                          </span>
+                        </span>
+                        <span class="hint">From {{ l.group }}</span>
+                        <p v-if="licenseProblem(l)" class="ij-license-error">
+                          {{ licenseProblem(l) }}
+                        </p>
+                      </li>
+                    </ul>
+                    <p v-if="row.licenses.message" class="ij-license-note">
+                      {{ row.licenses.message }}
+                    </p>
+                  </template>
                 </td>
               </tr>
             </tbody>
@@ -319,6 +361,40 @@ const downloadLabel = computed(() =>
 .ij-table .mono {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.ij-licenses {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.ij-licenses li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ij-license-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ij-license-error {
+  margin: 0;
+  color: var(--red);
+}
+
+.ij-license-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 .ij-problems {

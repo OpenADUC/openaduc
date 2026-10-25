@@ -2,6 +2,7 @@
 import {
   IMPORT_JOB_ACTION,
   TAP_POLICY_OFF_MESSAGE,
+  USAGE_LOCATION_ATTRIBUTE,
   bulkJobResponseSchema,
   classTapProblems,
   importJobResponseSchema,
@@ -16,6 +17,7 @@ import {
   type ImportCheckResponse,
   type ImportJobResponse,
   type ImportLookupResponse,
+  type ImportUsageLocation,
   type PlacementRulesResponse,
   type PlacementRulesSaveResponse,
 } from '@openaduc/shared';
@@ -26,6 +28,7 @@ import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedGroupsById } from '../services/groupCache.js';
 import { BulkJobRequestError, refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { importJobView } from '../services/importResults.js';
+import { licenseWarnings } from '../services/importLicenses/check.js';
 import {
   checkImport,
   importPlan,
@@ -147,6 +150,20 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     },
   });
 
+  // ---- GET /api/users/import/usage-location -----------------------------
+  // Whether a mapped usage location reaches Entra: the schema has the
+  // attribute Connect Sync carries it from, or it isn't written.
+  app.get('/api/users/import/usage-location', {
+    config: { policy: { capability: 'write:user.create', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<ImportUsageLocation> => {
+      const provider = await app.services.providers.buildForRequest(req);
+      return {
+        attribute: USAGE_LOCATION_ATTRIBUTE,
+        writable: await provider.hasSchemaAttribute(USAGE_LOCATION_ATTRIBUTE),
+      };
+    },
+  });
+
   /** Why the import's people can't have class passes as asked: none when they can. */
   async function classProblems(
     directoryId: number,
@@ -163,6 +180,17 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
     const policy = await tenantTapPolicy(graph).catch(graphFailure);
     if (!policy) return [problem(TAP_POLICY_OFF_MESSAGE)];
     return classTapProblems(body.classTap, body.rows, policy).map((p) => problem(p.message, p.row));
+  }
+
+  /** What the licenses the import's groups grant warn of; none while licenses are off. */
+  async function licenseCheck(
+    directoryId: number,
+    body: CheckedImportRequest,
+  ): Promise<ImportCheckIssue[]> {
+    if (!(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'licenses'))) return [];
+    const graph = await app.services.graphClient.build(directoryId);
+    if (!graph) return [];
+    return licenseWarnings({ db: app.db, providerId: directoryId, graph }, body.rows);
   }
 
   /** The final check, as the operator may run it: what the run takes, against the directory now. */
@@ -190,6 +218,7 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
       body,
     );
     result.problems.push(...(await classProblems(directory.id, body)));
+    result.warnings.push(...(await licenseCheck(directory.id, body)));
     return { result, directory };
   }
 
@@ -224,10 +253,14 @@ export async function registerUserImportRoutes(app: FastifyInstance): Promise<vo
             `Adding users to ${guarded.name} gives them admin rights in AD. Confirm that they need them.`,
           );
         }
+        const checkLicenses = await app.services.entraIntegration.isFeatureEnabled(
+          directory.id,
+          'licenses',
+        );
         return jobs.create(
           actorFrom(req),
           IMPORT_JOB_ACTION,
-          importPlan(body.import, directory.newUsers.phoneCountry),
+          importPlan(body.import, directory.newUsers.phoneCountry, { checkLicenses }),
           (subject) => requireFor(app, req, jobs.handlers[IMPORT_JOB_ACTION], subject),
         );
       })().catch(refuseBulkRequest);

@@ -239,13 +239,19 @@ export async function checkImport(
 /**
  * The checked import as its job runs it: each row's attributes as they'll
  * be written (mail from the UPN when asked, phones in Entra's form or as
- * typed), its manager and groups by id.
+ * typed), its manager and groups by id. With `checkLicenses`, the job
+ * also checks in Entra the licenses its groups grant.
  */
-export function importPlan(body: CheckedImportRequest, phoneCountry: string | null): ImportPlan {
+export function importPlan(
+  body: CheckedImportRequest,
+  phoneCountry: string | null,
+  { checkLicenses = false }: { checkLicenses?: boolean } = {},
+): ImportPlan {
   return {
     password: body.password,
     enabled: body.enabled,
     ...(body.classTap ? { classTap: body.classTap } : {}),
+    ...(checkLicenses ? { checkLicenses } : {}),
     rows: body.rows.map((r) => {
       const phones = phonesToWrite(r, r.keepPhonesAsTyped ?? [], phoneCountry).values;
       return {

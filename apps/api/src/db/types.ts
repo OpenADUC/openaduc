@@ -12,6 +12,8 @@ import type {
   BulkJobStatus,
   ClassStart,
   ImportField,
+  ImportLicenseState,
+  LicenseAssignmentError,
 } from '@openaduc/shared';
 
 // Common alias for `timestamp(useTz: true)`. Read as Date, write as ISO string or Date.
@@ -522,6 +524,65 @@ export interface ClassPassesTable {
   updated_at: TimestampDefault;
 }
 
+export type ImportLicenseCheckState = 'waiting' | 'settled' | 'stopped';
+
+/**
+ * What a check last waited on, or why it stopped. See
+ * migrations/20261028000002_import_license_check_stops.ts.
+ */
+export type ImportLicenseCheckCode =
+  | 'unsynced'
+  | 'throttled'
+  | 'graph_refused'
+  | 'graph_unavailable'
+  | 'directory_unavailable'
+  | 'internal_error'
+  | 'licenses_off'
+  | 'not_in_groups'
+  | 'not_created'
+  | 'sync_timeout'
+  | 'settle_timeout';
+
+/** A licensed group an import row joins, as the license cache had it. */
+export interface ExpectedLicenseGroup {
+  groupId: string;
+  entraGroupId: string;
+  name: string;
+  skus: EntraGroupSku[];
+}
+
+/** One license a row's groups grant, as Entra last said. */
+export interface CheckedLicense {
+  skuId: string;
+  skuPartNumber: string | null;
+  group: string;
+  state: ImportLicenseState;
+  error: LicenseAssignmentError | null;
+}
+
+/** See migrations/20261028000001_import_license_checks.ts. */
+export interface ImportLicenseChecksTable {
+  row_id: string;
+  job_id: string;
+  expected: JSONColumnType<ExpectedLicenseGroup[]>;
+  status: ColumnType<
+    ImportLicenseCheckState,
+    ImportLicenseCheckState | undefined,
+    ImportLicenseCheckState
+  >;
+  entra_user_id: string | null;
+  licenses: JSONColumnType<CheckedLicense[] | null, string | null, string | null>;
+  error_code: ImportLicenseCheckCode | null;
+  message: string | null;
+  started_at: Timestamp | null;
+  synced_at: Timestamp | null;
+  checked_at: Timestamp | null;
+  attempts: ColumnType<number, number | undefined, number>;
+  next_attempt_at: TimestampDefault;
+  claim_token: string | null;
+  updated_at: TimestampDefault;
+}
+
 export interface DB {
   directory_providers: DirectoryProvidersTable;
   directory_entra_integrations: DirectoryEntraIntegrationsTable;
@@ -543,6 +604,7 @@ export interface DB {
   import_passwords: ImportPasswordsTable;
   import_classes: ImportClassesTable;
   class_passes: ClassPassesTable;
+  import_license_checks: ImportLicenseChecksTable;
   entra_group_licenses: EntraGroupLicensesTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;

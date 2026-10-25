@@ -99,6 +99,50 @@ async function skuPartNumbers(graph: GraphReader, now: Date): Promise<Map<string
   return parts;
 }
 
+const seatsSchema = skuSchema.extend({
+  consumedUnits: z.number().nullish(),
+  prepaidUnits: z
+    .object({ enabled: z.number().nullish(), warning: z.number().nullish() })
+    .nullish(),
+});
+
+/** How many of a product the tenant has, and how many are assigned. */
+export interface SkuSeats {
+  skuId: string;
+  skuPartNumber: string | null;
+  /** Units of active subscriptions. */
+  enabled: number;
+  /**
+   * Units of a subscription in its grace period: still assignable until it
+   * lapses (Graph's licenseUnitsDetail,
+   * https://learn.microsoft.com/graph/api/resources/licenseunitsdetail).
+   * Suspended and locked-out units aren't kept: they can't be assigned.
+   */
+  warning: number;
+  consumed: number;
+}
+
+/** The tenant's seats in each product it subscribes to, by SKU id (lower case), read live. */
+export async function subscribedSeats(graph: GraphReader): Promise<Map<string, SkuSeats>> {
+  const res = await graph.getJson(
+    '/subscribedSkus?$select=skuId,skuPartNumber,consumedUnits,prepaidUnits',
+  );
+  return new Map(
+    listOf(seatsSchema)
+      .parse(res.data)
+      .value.map((s) => [
+        s.skuId.toLowerCase(),
+        {
+          skuId: s.skuId,
+          skuPartNumber: s.skuPartNumber ?? null,
+          enabled: s.prepaidUnits?.enabled ?? 0,
+          warning: s.prepaidUnits?.warning ?? 0,
+          consumed: s.consumedUnits ?? 0,
+        },
+      ]),
+  );
+}
+
 /** The licenses of the AD user with this SID, each with where it comes from. */
 export async function userLicenses(deps: LicenseDeps, sid: string): Promise<UserLicenses> {
   const { graph } = deps;
@@ -106,16 +150,7 @@ export async function userLicenses(deps: LicenseDeps, sid: string): Promise<User
   const entraUserId = await findEntraUser(graph, sid);
   if (!entraUserId) return { status: 'unsynced', lastSyncAt: await tenantLastSync(graph) };
 
-  const user = z
-    .object({ licenseAssignmentStates: z.array(assignmentStateSchema).nullish() })
-    .parse(
-      (
-        await graph.getJson(
-          `/users/${encodeURIComponent(entraUserId)}?$select=id,licenseAssignmentStates`,
-        )
-      ).data,
-    );
-  const states = user.licenseAssignmentStates ?? [];
+  const states = await assignmentStates(graph, entraUserId);
   const [parts, groups] = await Promise.all([
     skuPartNumbers(graph, now),
     licenseGroups(
@@ -132,11 +167,10 @@ export async function userLicenses(deps: LicenseDeps, sid: string): Promise<User
       assignments: [],
     };
     bySku.set(key, entry);
-    const error = assignmentError(s.error);
     entry.assignments.push({
       group: s.assignedByGroup ? groups.get(s.assignedByGroup)! : null,
-      state: STATES[(s.state ?? '').toLowerCase()] ?? (error ? 'error' : 'active'),
-      error,
+      state: assignmentState(s),
+      error: assignmentError(s.error),
       disabledPlanCount: s.disabledPlans?.length ?? 0,
       lastUpdatedAt: s.lastUpdatedDateTime ? new Date(s.lastUpdatedDateTime).toISOString() : null,
     });
@@ -152,7 +186,31 @@ export async function userLicenses(deps: LicenseDeps, sid: string): Promise<User
   return { status: 'synced', licenses: licenses.sort(byName) };
 }
 
-function assignmentError(raw: string | null | undefined): LicenseAssignmentError | null {
+/** The user's licenseAssignmentStates, as Graph lists them. */
+export async function assignmentStates(
+  graph: GraphReader,
+  entraUserId: string,
+): Promise<z.infer<typeof assignmentStateSchema>[]> {
+  const user = z
+    .object({ licenseAssignmentStates: z.array(assignmentStateSchema).nullish() })
+    .parse(
+      (
+        await graph.getJson(
+          `/users/${encodeURIComponent(entraUserId)}?$select=id,licenseAssignmentStates`,
+        )
+      ).data,
+    );
+  return user.licenseAssignmentStates ?? [];
+}
+
+export function assignmentState(s: {
+  state?: string | null | undefined;
+  error?: string | null | undefined;
+}): LicenseAssignment['state'] {
+  return STATES[(s.state ?? '').toLowerCase()] ?? (assignmentError(s.error) ? 'error' : 'active');
+}
+
+export function assignmentError(raw: string | null | undefined): LicenseAssignmentError | null {
   if (!raw || raw === 'None') return null;
   return (LICENSE_ASSIGNMENT_ERRORS as readonly string[]).includes(raw)
     ? (raw as LicenseAssignmentError)

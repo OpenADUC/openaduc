@@ -63,6 +63,7 @@ import {
   tenantTapPolicy,
   type TapIssueCode,
 } from '../temporaryAccessPass.js';
+import { SweepTimer } from '../sweepTimer.js';
 import { classAlerts, rosterRow, WAITING_CODES, type RosterPass } from './roster.js';
 import {
   errorRetryMs,
@@ -259,9 +260,7 @@ const authoriserOf = (
 });
 
 export class ClassPassService {
-  private timer: NodeJS.Timeout | null = null;
-  private ticking: Promise<void> | null = null;
-  private stopping = false;
+  private readonly timer: SweepTimer;
   /** Directories Graph has throttled, until when. */
   private readonly throttledUntil = new Map<number, number>();
   /** Whether an authoriser may still issue passes, by directory and user, as last found. */
@@ -272,45 +271,26 @@ export class ClassPassService {
   /** Passes the roster saw Entra say are spent, for the next sweep to stop holding. */
   private readonly observedSpent = new Set<string>();
 
-  constructor(private readonly deps: ClassPassDeps) {}
+  constructor(private readonly deps: ClassPassDeps) {
+    this.timer = new SweepTimer(() => this.sweep(), {
+      tickMs: TICK_MS,
+      stopWaitMs: STOP_WAIT_MS,
+      onError: (err) => deps.logger.error({ err }, 'class passes tick failed'),
+    });
+  }
 
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.kick(), TICK_MS);
-    this.timer.unref?.();
-    this.kick();
+    this.timer.start();
   }
 
   /** Stop the timer, letting a sweep under way finish (briefly). */
-  async stop(): Promise<void> {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-    this.stopping = true;
-    let wait: NodeJS.Timeout | undefined;
-    await Promise.race([
-      this.ticking ?? Promise.resolve(),
-      new Promise((resolve) => {
-        wait = setTimeout(resolve, STOP_WAIT_MS);
-      }),
-    ]);
-    clearTimeout(wait);
-    this.stopping = false;
+  stop(): Promise<void> {
+    return this.timer.stop();
   }
 
   /** Sweep now, while the timer runs, rather than at its next tick. */
   kick(): void {
-    if (!this.timer || this.ticking) return;
-    this.ticking = this.tick().finally(() => {
-      this.ticking = null;
-    });
-  }
-
-  private async tick(): Promise<void> {
-    try {
-      await this.sweep();
-    } catch (err) {
-      this.deps.logger.error({ err }, 'class passes tick failed');
-    }
+    this.timer.kick();
   }
 
   private throttled(directoryId: number, now = Date.now()): boolean {
@@ -350,7 +330,7 @@ export class ClassPassService {
 
     const until = Date.now() + budgetMs;
     let taken = 0;
-    while (Date.now() < until && !this.stopping) {
+    while (Date.now() < until && !this.timer.stopping) {
       const claimed = await this.claimDue(on);
       if (!claimed) break;
       taken++;

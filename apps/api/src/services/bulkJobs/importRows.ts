@@ -12,6 +12,7 @@ import {
   IMPORT_STEPS,
   NEW_USER_ORGANISATION_FIELDS,
   PASSWORD_MODES,
+  USAGE_LOCATION_ATTRIBUTE,
   childDn,
   classTapRequestSchema,
   importPasswordSchema,
@@ -26,11 +27,13 @@ import {
   DirectoryUnavailableError,
   type DirectoryProvider,
   type DirectoryUser,
+  type UserCreateInput,
   type UserCreateResult,
 } from '../../providers/types.js';
 import { withAudit } from '../auditContext.js';
 import { storeClass } from '../classPasses/service.js';
 import { findCachedGroupsById } from '../groupCache.js';
+import { storeLicenseChecks } from '../importLicenses/service.js';
 import { membershipRequirements } from '../groupMembershipWrite.js';
 import {
   handedOutPassword,
@@ -74,7 +77,7 @@ export const importPlanRowSchema = z.object({
   managerRow: z.number().int().nullable(),
   /** The bucket's groups, by objectGUID. */
   groupIds: z.array(z.string()),
-  // Not written yet: kept on the row for the steps that will use them.
+  /** Written to msExchUsageLocation when the schema has it. */
   usageLocation: text,
   startDate: text,
 });
@@ -86,6 +89,8 @@ export const importPlanSchema = z.object({
   enabled: z.boolean(),
   /** Temporary Access Passes for the onboarding class, made once each account is in Entra. */
   classTap: classTapRequestSchema.optional(),
+  /** Check in Entra, once each person syncs, the licenses their groups grant. */
+  checkLicenses: z.boolean().optional(),
 });
 export type ImportPlan = z.infer<typeof importPlanSchema>;
 
@@ -222,6 +227,7 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
     secret: (plan) => (plan.password.mode === 'set' ? plan.password.password : null),
     async stored(trx, jobId, plan) {
       if (plan.classTap) await storeClass(trx, jobId, plan.classTap);
+      if (plan.checkLicenses) await storeLicenseChecks(trx, jobId);
     },
     async prepare(plan, { db, directoryId }) {
       const ids = [...new Set(plan.rows.flatMap((r) => r.groupIds.map((id) => id.toLowerCase())))];
@@ -503,7 +509,12 @@ async function passwordFor(
   return { password, mode, mustChange, fallback: false };
 }
 
-function createInput(input: RowInput, dn: string) {
+/** What the create writes: the row's attributes, its usage location only if the schema takes it. */
+export function createInput(
+  input: Omit<RowInput, 'options' | 'managerOrdinal'>,
+  dn: string,
+  usageLocationWritable: boolean,
+): UserCreateInput {
   return {
     dn,
     cn: input.cn,
@@ -522,6 +533,7 @@ function createInput(input: RowInput, dn: string) {
     initials: input.initials,
     employeeId: input.employeeId,
     description: input.description,
+    usageLocation: usageLocationWritable ? input.usageLocation : null,
   };
 }
 
@@ -579,10 +591,16 @@ async function createAccount(
   const { provider } = ctx;
   const dn = childDn('CN', input.cn, input.ouDn);
   const used = await passwordFor(row, input, job, ctx);
+  const create = createInput(
+    input,
+    dn,
+    !!input.usageLocation && (await provider.hasSchemaAttribute(USAGE_LOCATION_ATTRIBUTE)),
+  );
   const written = {
     distinguishedName: dn,
     mail: input.mail,
     ...(Object.keys(input.organisation).length > 0 ? { organisation: input.organisation } : {}),
+    ...(create.usageLocation ? { usageLocation: create.usageLocation } : {}),
   };
   const result = await withAudit(
     ctx.services.audit,
@@ -604,7 +622,7 @@ async function createAccount(
     },
     async () => {
       const r = await provider.createUser(
-        createInput(input, dn),
+        create,
         planned,
         { password: used.password, mustChange: used.mustChange, groups: [] },
         ctx.writeCtx,

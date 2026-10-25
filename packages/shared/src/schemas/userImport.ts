@@ -12,6 +12,7 @@ import {
   type BulkJobRowStatus,
 } from './bulkJob.js';
 import { classAlertsSchema, classTapRequestSchema } from './classTap.js';
+import { LICENSE_ASSIGNMENT_ERRORS, licenseSkuSchema } from './licenses.js';
 import { startsLikeFormula } from '../csv.js';
 import {
   CONTROL_CHARS,
@@ -240,6 +241,20 @@ export const importRequestSchema = z
 export type ImportRequest = z.input<typeof importRequestSchema>;
 export type CheckedImportRequest = z.output<typeof importRequestSchema>;
 
+/**
+ * The AD attribute an import writes usage location to, which Connect Sync
+ * carries to Entra's usageLocation. Exchange's schema extension adds it;
+ * without it, Entra gives new accounts the tenant's location.
+ */
+export const USAGE_LOCATION_ATTRIBUTE = 'msExchUsageLocation';
+
+/** Whether this directory's schema can take the usage location an import maps. */
+export const importUsageLocationSchema = z.object({
+  attribute: z.literal(USAGE_LOCATION_ATTRIBUTE),
+  writable: z.boolean(),
+});
+export type ImportUsageLocation = z.infer<typeof importUsageLocationSchema>;
+
 // ---- The run ------------------------------------------------------------
 
 /**
@@ -271,6 +286,48 @@ export const IMPORT_ROW_STATUS_LABEL: Record<BulkJobRowStatus, string> = {
   skipped: 'Skipped',
 };
 
+/** How one license a row's groups grant stands: `pending` until Entra lists it on the user. */
+export const IMPORT_LICENSE_STATES = [
+  'pending',
+  'active',
+  'activeWithError',
+  'disabled',
+  'error',
+] as const;
+export type ImportLicenseState = (typeof IMPORT_LICENSE_STATES)[number];
+
+/** What a row's license state says, on the import's page and in its CSV. */
+export const IMPORT_LICENSE_STATE_LABEL: Record<ImportLicenseState, string> = {
+  pending: 'Not assigned yet',
+  active: 'Assigned',
+  activeWithError: 'Assigned, with an error',
+  disabled: 'Disabled',
+  error: 'Not assigned',
+};
+
+/**
+ * How the licenses a row's groups grant stand in Entra, as the follow-up
+ * last read them once the person synced: waiting (for Connect Sync, or
+ * for group-based licensing to assign each), settled, or stopped (past
+ * its deadline, or unable to go on).
+ */
+export const importRowLicensesSchema = z.object({
+  status: z.enum(['waiting', 'settled', 'stopped']),
+  /** What it waits for, or why it stopped; null once settled. */
+  message: z.string().nullable(),
+  licenses: z.array(
+    licenseSkuSchema.extend({
+      /** The group it comes from, by its AD name. */
+      group: z.string(),
+      state: z.enum(IMPORT_LICENSE_STATES),
+      error: z.enum(LICENSE_ASSIGNMENT_ERRORS).nullable(),
+    }),
+  ),
+  /** When Entra was last read for them. */
+  checkedAt: z.string().nullable(),
+});
+export type ImportRowLicenses = z.infer<typeof importRowLicensesSchema>;
+
 /** One row of an import's job, as its results show it. */
 export const importJobRowSchema = z.object({
   /** Its row in the spreadsheet. */
@@ -290,6 +347,8 @@ export const importJobRowSchema = z.object({
    * downloaded or purged, so it's random, or it was purged unseen.
    */
   needsPasswordReset: z.boolean(),
+  /** Its groups grant licenses, and the account exists: how they stand in Entra. */
+  licenses: importRowLicensesSchema.nullable(),
 });
 export type ImportJobRow = z.infer<typeof importJobRowSchema>;
 
@@ -315,7 +374,9 @@ export type ImportCheckIssueKind =
   | 'manager_missing'
   | 'password'
   | 'phone'
-  | 'class';
+  | 'class'
+  | 'license_seats'
+  | 'license_nested';
 
 export interface ImportCheckIssue {
   /** The index of the row in the request, or null for what isn't one row's. */

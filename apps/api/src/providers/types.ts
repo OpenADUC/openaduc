@@ -596,6 +596,10 @@ export interface DirectoryProvider {
   // The forest's extra UPN suffixes (uPNSuffixes on the Partitions
   // container), not including the domain's own DNS name.
   getUpnSuffixes(): Promise<string[]>;
+  // Whether the schema defines an attribute with this lDAPDisplayName (an
+  // Exchange-extended schema's msExchUsageLocation, say). Reads with the
+  // service account.
+  hasSchemaAttribute(ldapDisplayName: string): Promise<boolean>;
   // Create a group at `input.dn`. Checks both names are free on the
   // operator's bind first and returns `conflict` naming the holder
   // otherwise. Returns the new group so the cache can show it at once,
@@ -755,6 +759,8 @@ export interface UserCreateInput {
   initials?: string | null;
   employeeId?: string | null;
   description?: string | null;
+  /** Written to msExchUsageLocation, which only a schema that has it can take. */
+  usageLocation?: string | null;
 }
 
 /** What the steps after the add need. */

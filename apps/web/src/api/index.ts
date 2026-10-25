@@ -99,6 +99,7 @@ import type {
   ImportLookupResponse,
   ImportRequest,
   ImportRunRequest,
+  ImportUsageLocation,
   ImportJobResponse,
   BulkJobResultsDownload,
   BulkPasswordResetRequest,
@@ -479,6 +480,10 @@ export const api = {
       /** An import's job, row by row, and whether its results CSV still holds the passwords. */
       job(id: string, init: Background = {}): Promise<ImportJobResponse> {
         return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}`, init);
+      },
+      /** Whether the directory's schema takes the usage location an import maps. */
+      usageLocation(): Promise<ImportUsageLocation> {
+        return apiFetch('/users/import/usage-location');
       },
       /** Whether an import can issue TAPs for class, and within what limits. */
       classTaps(): Promise<ClassTapOptions> {

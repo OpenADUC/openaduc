@@ -10,7 +10,14 @@ import { bulkJobActive } from '../lib/bulkJob.js';
  * inside the API's rate limit; a paused job changes only when someone
  * continues it, so it's checked rarely. A stopped one isn't polled.
  */
-export const POLL = { firstMs: 1000, factor: 1.5, maxMs: 5000, pausedMs: 15_000 } as const;
+export const POLL = {
+  firstMs: 1000,
+  factor: 1.5,
+  maxMs: 5000,
+  pausedMs: 15_000,
+  /** What a stopped job still waits on (an import's licenses settling in Entra) changes slowly. */
+  afterStopMs: 30_000,
+} as const;
 
 /**
  * Poll a job with `poll` while it may change, as POLL says. A poll that
@@ -71,8 +78,12 @@ export function useJobPolling(poll: (id: string) => Promise<void>) {
     },
     /** A poll failed: try again in a while; the job runs regardless. */
     retryLater(id: string): void {
+      this.after(id, POLL.maxMs);
+    },
+    /** Poll again in `ms`, for what still changes once the job has stopped. */
+    after(id: string, ms: number): void {
       clearTimeout(timer);
-      if (!disposed) timer = setTimeout(() => due(id), POLL.maxMs);
+      if (!disposed) timer = setTimeout(() => due(id), ms);
     },
     stop(): void {
       clearTimeout(timer);

@@ -56,6 +56,7 @@ import {
   type ImportRequest,
   type ImportRow,
   type ImportRowReview,
+  type ImportUsageLocation,
   type ManagerMatch,
   type NamingDeviation,
   type NamingSettings,
@@ -215,7 +216,7 @@ export function useUserImport() {
     const saved = loadDraft(owner.value);
     Object.assign(draft, saved ?? blankDraft(startOuDn, settings.value));
     if (startOuDn) draft.startOuDn = startOuDn;
-    await loadClassTapOptions();
+    await Promise.all([loadClassTapOptions(), loadUsageLocation()]);
   }
 
   watch(
@@ -302,6 +303,18 @@ export function useUserImport() {
     ...IMPORT_FIELDS.map((f) => ({ value: f, label: IMPORT_FIELD_LABEL[f] })),
   ];
   const columnProblems = computed(() => mappingProblems(draft.mapping));
+
+  /** Whether the directory's schema takes a mapped usage location; null until known. */
+  const usageLocation = shallowRef<ImportUsageLocation | null>(null);
+  async function loadUsageLocation(): Promise<void> {
+    usageLocation.value = await api.users.import.usageLocation().catch(() => null);
+  }
+  /** Said on the Map columns step when a mapped usage location can't reach Entra. */
+  const usageLocationNote = computed(() =>
+    draft.mapping.includes('usageLocation') && usageLocation.value?.writable === false
+      ? `Usage location won’t reach Entra: this directory’s schema has no ${usageLocation.value.attribute}, the attribute Connect Sync carries it from (Exchange’s schema extension adds it). Entra gives the new accounts the tenant’s location instead; change it there for anyone whose licenses need another.`
+      : null,
+  );
   const preview = computed(() => table.value?.rows.slice(0, PREVIEW_ROWS) ?? []);
 
   // ---- Rows ----------------------------------------------------------------
@@ -1022,6 +1035,7 @@ export function useUserImport() {
     fieldOptions,
     columnProblems,
     preview,
+    usageLocationNote,
     // Names
     values,
     lineOf,

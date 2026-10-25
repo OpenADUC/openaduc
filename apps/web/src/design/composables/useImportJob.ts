@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 // An import's job, as its results page shows it: its progress while it
-// runs, then each row's result, the retry of what failed, and the results
-// CSV. In generate and set modes the CSV holds the passwords and can be
-// downloaded once; after that, or once they're purged, the page says so
-// and offers to reset the new accounts' passwords, a job of its own whose
-// CSV hands the new passwords out the same way.
+// runs, then each row's result, the retry of what failed, the results
+// CSV, and how the licenses each person's groups grant stand in Entra
+// once they've synced (the job is read again every half minute, after it
+// has stopped, while any is still waiting). In generate and set modes the
+// CSV holds the passwords and can be downloaded once; after that, or once
+// they're purged, the page says so and offers to reset the new accounts'
+// passwords, a job of its own whose CSV hands the new passwords out the
+// same way.
 
 import { computed, ref, shallowRef } from 'vue';
 import {
@@ -21,7 +24,7 @@ import { useAuthStore } from '../../stores/auth.js';
 import { bulkJobActive, bulkJobProblems } from '../lib/bulkJob.js';
 import { errorMessage } from '../lib/errorMessage.js';
 import { fmtAbsolute } from '../lib/format.js';
-import { useJobPolling } from './useJobPolling.js';
+import { POLL, useJobPolling } from './useJobPolling.js';
 
 const RESET = 'needs a password reset: reset them all below, or one at a time from their page.';
 
@@ -64,6 +67,7 @@ export function useImportJob(opts: {
   /** The import issues TAPs for class: whether anyone is still unsynced close to it. */
   const classTap = computed(() => data.value?.classTap ?? null);
   const stopped = computed(() => !!job.value && bulkJobStopped(job.value));
+  const licensesWaiting = computed(() => rows.value.some((r) => r.licenses?.status === 'waiting'));
 
   /** Whichever of the import and its reset may still change, for polling. */
   const followed = (next: ImportJobResponse): BulkJob => {
@@ -80,7 +84,8 @@ export function useImportJob(opts: {
       if (current !== id || polling.disposed) return;
       data.value = next;
       loadError.value = null;
-      polling.follow(current, followed(next), wasActive);
+      const following = polling.follow(current, followed(next), wasActive);
+      if (!following && licensesWaiting.value) polling.after(current, POLL.afterStopMs);
     } catch (err) {
       if (current !== id || polling.disposed) return;
       if (background) polling.retryLater(current);
@@ -231,6 +236,7 @@ export function useImportJob(opts: {
     results,
     classTap,
     stopped,
+    licensesWaiting,
     problems,
     failure,
     busy,
