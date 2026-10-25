@@ -7,7 +7,6 @@ export const CAPABILITIES = [
   'read:computer.deleted',
   'view:audit',
   'export:user',
-  'import:user',
   'write:user.create',
   'write:user.unlock',
   'write:user.resetPassword',
