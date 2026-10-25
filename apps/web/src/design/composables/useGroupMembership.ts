@@ -3,30 +3,43 @@ import { computed } from 'vue';
 import { api } from '../../api/index.js';
 import { useUndoableWrite, type UndoOffer, type WriteFailure } from '../lib/undoableWrite.js';
 
-/** A user's membership of a group, with the names to show for each. */
+/** A user's or group's membership of a group, with the names to show for each. */
 export interface Membership {
-  userId: string;
-  userLabel: string;
+  memberKind: 'user' | 'group';
+  memberId: string;
+  memberLabel: string;
   groupId: string;
   groupLabel: string;
 }
 
 export type MembershipChange = 'add' | 'remove';
 
-export function membershipOf(
-  user: { id: string; displayName: string | null; samAccountName: string },
-  group: {
-    id: string;
-    name: string | null;
-    samAccountName?: string | null;
-    distinguishedName: string;
-  },
-): Membership {
+interface GroupNames {
+  id: string;
+  name: string | null;
+  samAccountName?: string | null;
+  distinguishedName: string;
+}
+
+/** A user or group, as far as naming it goes. A user may leave out `kind`. */
+export type MemberNames =
+  | { kind?: 'user'; id: string; displayName: string | null; samAccountName: string }
+  | ({ kind: 'group' } & GroupNames);
+
+/** The name to show for a user or group: the first one it has. */
+export function memberLabel(m: MemberNames): string {
+  return m.kind === 'group'
+    ? m.name || m.samAccountName || m.distinguishedName
+    : m.displayName || m.samAccountName;
+}
+
+export function membershipOf(member: MemberNames, group: GroupNames): Membership {
   return {
-    userId: user.id,
-    userLabel: user.displayName || user.samAccountName,
+    memberKind: member.kind ?? 'user',
+    memberId: member.id,
+    memberLabel: memberLabel(member),
     groupId: group.id,
-    groupLabel: group.name || group.samAccountName || group.distinguishedName,
+    groupLabel: memberLabel({ kind: 'group', ...group }),
   };
 }
 
@@ -38,13 +51,13 @@ const WORDS: Record<MembershipChange, { verb: string; done: string; prep: string
 /** "add Jane Doe to Sales": what a change does, for "Couldn't …" or ADUC's "Windows cannot …". */
 export function membershipChangeText(change: MembershipChange, m: Membership): string {
   const w = WORDS[change];
-  return `${w.verb} ${m.userLabel} ${w.prep} ${m.groupLabel}`;
+  return `${w.verb} ${m.memberLabel} ${w.prep} ${m.groupLabel}`;
 }
 
 /** "Added Jane Doe to Sales": what a toast says once a change lands. */
 export function membershipDoneText(change: MembershipChange, m: Membership): string {
   const w = WORDS[change];
-  return `${w.done} ${m.userLabel} ${w.prep} ${m.groupLabel}`;
+  return `${w.done} ${m.memberLabel} ${w.prep} ${m.groupLabel}`;
 }
 
 export interface MembershipEdit {
@@ -57,7 +70,9 @@ export type MembershipFailure = WriteFailure<MembershipEdit>;
 const INVERSE: Record<MembershipChange, MembershipChange> = { add: 'remove', remove: 'add' };
 
 /**
- * Add a user to a group or remove them from one, one change at a time.
+ * Add a user or group to a group or remove it from one, one change at a
+ * time. A user's change and a group's are the same API operation, made
+ * through the member: the user's groups or the group's.
  * `onChanged` gets the offer of Undo, which makes the inverse change the
  * same way. The last failure stays in `failure` until it's retried,
  * dismissed or another change starts.
@@ -71,10 +86,12 @@ export function useGroupMembership(options: {
   onFailed?: (failure: MembershipFailure) => void | Promise<void>;
 }) {
   const writes = useUndoableWrite<MembershipEdit>({
-    write: ({ change, membership: { userId, groupId } }) =>
-      change === 'add'
-        ? api.users.addGroup(userId, { groupId })
-        : api.users.removeGroup(userId, { groupId }),
+    write: ({ change, membership: { memberKind, memberId, groupId } }) => {
+      const member = memberKind === 'user' ? api.users : api.groups;
+      return change === 'add'
+        ? member.addGroup(memberId, { groupId })
+        : member.removeGroup(memberId, { groupId });
+    },
     inverse: ({ change, membership }) => ({ change: INVERSE[change], membership }),
     onDone: ({ change, membership }, offer) => options.onChanged(change, membership, offer),
     onFailed: options.onFailed,

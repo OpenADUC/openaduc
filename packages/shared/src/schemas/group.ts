@@ -39,7 +39,8 @@ export const groupSearchResponseSchema = z.object({
 });
 export type GroupSearchResponse = z.infer<typeof groupSearchResponseSchema>;
 
-export const groupMemberSchema = z.object({
+const userGroupMemberSchema = z.object({
+  kind: z.literal('user'),
   id: z.string(),
   samAccountName: z.string(),
   userPrincipalName: z.string().nullable(),
@@ -49,6 +50,23 @@ export const groupMemberSchema = z.object({
   locked: z.boolean(),
   passwordNeverExpires: z.boolean(),
 });
+
+/** A group nested in another. */
+const nestedGroupMemberSchema = z.object({
+  kind: z.literal('group'),
+  id: z.string(),
+  name: z.string().nullable(),
+  samAccountName: z.string().nullable(),
+  distinguishedName: z.string(),
+  description: z.string().nullable(),
+  groupType: z.string().nullable(),
+  groupScope: z.string().nullable(),
+});
+
+export const groupMemberSchema = z.discriminatedUnion('kind', [
+  userGroupMemberSchema,
+  nestedGroupMemberSchema,
+]);
 export type GroupMember = z.infer<typeof groupMemberSchema>;
 
 export const groupDetailSchema = groupSummarySchema.extend({

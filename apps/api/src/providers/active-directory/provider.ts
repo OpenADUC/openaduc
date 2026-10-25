@@ -53,6 +53,7 @@ import {
   withFailover,
 } from './client.js';
 import { ShowDeletedControl, TreeDeleteControl, deletedObjectControls } from './controls.js';
+import { withAllMembers } from './memberRange.js';
 import { planUserRename } from './rename.js';
 import { describeDeleteBlock, userDeleteBlockReason } from '../../lib/userDeletion.js';
 import {
@@ -406,7 +407,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         explicitBufferAttributes: BINARY_ATTRS,
         paged: { pageSize: query.pageSize ?? 200 },
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -426,7 +427,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         attributes: GROUP_ATTRS,
         explicitBufferAttributes: BINARY_ATTRS,
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -486,7 +487,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         attributes: GROUP_ATTRS,
         explicitBufferAttributes: BINARY_ATTRS,
       });
-      return searchEntries.map(normalizeGroup);
+      return normalizeGroups(client, searchEntries);
     });
   }
 
@@ -577,7 +578,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     const filter = input.modifiedSince
       ? `(&${GROUP_FILTER_BASE}(whenChanged>=${formatGeneralizedTime(input.modifiedSince)}))`
       : GROUP_FILTER_BASE;
-    yield* this.streamSearch(filter, GROUP_ATTRS, input.pageSize ?? 500, normalizeGroup);
+    yield* this.streamSearch(
+      filter,
+      GROUP_ATTRS,
+      input.pageSize ?? 500,
+      normalizeGroup,
+      withAllMembers,
+    );
   }
 
   async *syncComputers(input: SyncInput): AsyncIterable<DirectoryComputer> {
@@ -861,7 +868,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return this.modifyGroupMembership(userId, groupId, ctx, 'add');
+    return this.modifyGroupMembership({ kind: 'user', id: userId }, groupId, ctx, 'add');
   }
 
   removeUserFromGroup(
@@ -869,74 +876,81 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
   ): Promise<MutationResult> {
-    return this.modifyGroupMembership(userId, groupId, ctx, 'delete');
+    return this.modifyGroupMembership({ kind: 'user', id: userId }, groupId, ctx, 'delete');
+  }
+
+  addGroupToGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.modifyGroupMembership({ kind: 'group', id: memberGroupId }, groupId, ctx, 'add');
+  }
+
+  removeGroupFromGroup(
+    memberGroupId: DirectoryObjectIdentifier,
+    groupId: DirectoryObjectIdentifier,
+    ctx: WriteContext,
+  ): Promise<MutationResult> {
+    return this.modifyGroupMembership({ kind: 'group', id: memberGroupId }, groupId, ctx, 'delete');
   }
 
   /**
-   * Add or remove a user's DN from a group's `member` attribute. Same write-
-   * as-user pattern as the other writes; idempotent (no-op if already in the
-   * desired state).
+   * Add or remove a user's or group's DN from a group's `member` attribute.
+   * Same write-as-user pattern as the other writes; idempotent (no-op if
+   * already in the desired state).
    */
   private async modifyGroupMembership(
-    userId: DirectoryObjectIdentifier,
+    member: { kind: 'user' | 'group'; id: DirectoryObjectIdentifier },
     groupId: DirectoryObjectIdentifier,
     ctx: WriteContext,
     op: 'add' | 'delete',
   ): Promise<MutationResult> {
     return this.asOperator(ctx, async (client) => {
       try {
-        const userEntry = await this.findUserEntry(client, userId);
-        if (!userEntry) return { ok: false, reason: 'not_found', errorMessage: 'user not found' };
-        const groupEntry = await this.findGroupEntry(client, groupId);
-        if (!groupEntry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
-        const user = normalizeUser(userEntry);
-        const group = normalizeGroup(groupEntry);
-        const userDnLc = user.distinguishedName.toLowerCase();
-        const isMember = group.memberDns.some((dn) => dn.toLowerCase() === userDnLc);
-
-        if (op === 'add' && isMember) {
-          return {
-            ok: true,
-            before: { isMember: true },
-            after: { isMember: true },
-          };
+        const memberEntry =
+          member.kind === 'user'
+            ? await this.findUserEntry(client, member.id, ['objectGUID', 'distinguishedName'])
+            : await this.findGroupEntry(client, member.id, ['objectGUID', 'distinguishedName']);
+        if (!memberEntry) {
+          return { ok: false, reason: 'not_found', errorMessage: `${member.kind} not found` };
         }
-        if (op === 'delete' && !isMember) {
-          return {
-            ok: true,
-            before: { isMember: false },
-            after: { isMember: false },
-          };
+        const groupEntry = await this.findGroupEntry(client, groupId, [
+          'objectGUID',
+          'distinguishedName',
+        ]);
+        if (!groupEntry) return { ok: false, reason: 'not_found', errorMessage: 'group not found' };
+        const memberDn = asString(memberEntry.distinguishedName) ?? memberEntry.dn;
+        const groupDn = asString(groupEntry.distinguishedName) ?? groupEntry.dn;
+        // Ask AD rather than reading `member`, which a large group hands
+        // out in ranges.
+        const { searchEntries } = await client.search(groupDn, {
+          scope: 'base',
+          filter: `(member=${escapeLdapFilter(memberDn)})`,
+          attributes: ['distinguishedName'],
+        });
+        const isMember = searchEntries.length > 0;
+        const snapshot = (inGroup: boolean) => ({
+          isMember: inGroup,
+          group: groupDn,
+          member: memberDn,
+          memberKind: member.kind,
+        });
+
+        if ((op === 'add') === isMember) {
+          return { ok: true, before: snapshot(isMember), after: snapshot(isMember) };
         }
 
         await client.modify(
-          group.distinguishedName,
+          groupDn,
           new Change({
             operation: op,
-            modification: new Attribute({
-              type: 'member',
-              values: [user.distinguishedName],
-            }),
+            modification: new Attribute({ type: 'member', values: [memberDn] }),
           }),
         );
-
-        return {
-          ok: true,
-          before: { isMember, group: group.distinguishedName, user: user.distinguishedName },
-          after: {
-            isMember: op === 'add',
-            group: group.distinguishedName,
-            user: user.distinguishedName,
-          },
-        };
+        return { ok: true, before: snapshot(isMember), after: snapshot(op === 'add') };
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'modify failed';
-        const isAuthz = /no write|insuff/i.test(message);
-        return {
-          ok: false,
-          reason: isAuthz ? 'permission_denied' : 'directory_error',
-          errorMessage: message,
-        };
+        return classifyWriteError(err);
       } finally {
         await client.unbind().catch(() => undefined);
       }
@@ -1903,9 +1917,11 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
   private async findGroupEntry(
     client: Client,
     identifier: DirectoryObjectIdentifier,
+    attributes: readonly string[] = GROUP_ATTRS,
   ): Promise<Entry | null> {
     const filter = identifierToFilter(identifier, GROUP_FILTER_BASE);
-    return this.searchOne(client, this.config.baseDn, filter, GROUP_ATTRS);
+    const entry = await this.searchOne(client, this.config.baseDn, filter, [...attributes]);
+    return entry ? withAllMembers(client, entry) : null;
   }
 
   private async findComputerEntry(
@@ -1964,6 +1980,7 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
     attributes: string[],
     pageSize: number,
     map: (e: Entry) => T,
+    complete?: (client: Client, e: Entry) => Promise<Entry>,
   ): AsyncIterable<T> {
     // Yield each page as it arrives, so memory is bounded by the page size
     // rather than the directory size (users carry photos). Failover happens
@@ -1982,7 +1999,9 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
         paged: { pageSize },
       });
       for await (const page of pages) {
-        for (const entry of page.searchEntries) yield map(entry);
+        for (const entry of page.searchEntries) {
+          yield map(complete ? await complete(client, entry) : entry);
+        }
       }
     } finally {
       await client.unbind().catch(() => undefined);
@@ -1991,6 +2010,13 @@ export class ActiveDirectoryProvider implements DirectoryProvider {
 }
 
 // ---- Module-private helpers ---------------------------------------------
+
+/** Normalize groups read in one search, with every member of the large ones. */
+async function normalizeGroups(client: Client, entries: Entry[]): Promise<DirectoryGroup[]> {
+  const groups: DirectoryGroup[] = [];
+  for (const entry of entries) groups.push(normalizeGroup(await withAllMembers(client, entry)));
+  return groups;
+}
 
 function looksLikeUpn(s: string): boolean {
   return s.includes('@') && !s.includes('=');

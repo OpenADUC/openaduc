@@ -11,9 +11,8 @@ import InputText from 'primevue/inputtext';
 import Dialog from 'primevue/dialog';
 import Message from 'primevue/message';
 import { useToast } from 'primevue/usetoast';
-import { api } from '../api/index.js';
 import { useAuthStore } from '../stores/auth.js';
-import type { GroupMember, UserSummary } from '@openaduc/shared';
+import type { GroupMember } from '@openaduc/shared';
 import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -25,11 +24,16 @@ import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
 import {
+  memberLabel,
   membershipChangeText,
   membershipDoneText,
   membershipOf,
   useGroupMembership,
 } from '../design/composables/useGroupMembership.js';
+import {
+  useGroupMemberSearch,
+  type MemberCandidate,
+} from '../design/composables/useGroupMemberSearch.js';
 import { placeFailure } from '../design/lib/failurePlacement.js';
 
 const props = defineProps<{ id: string }>();
@@ -37,14 +41,10 @@ const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
 
-// Member-add dialog state — opens on "Add member", searches the user
-// directory, and applies the selected user via the group-membership endpoint.
+// Member-add dialog state — opens on "Add member", searches users and
+// groups, and adds the selected one the way its own page would.
 const addOpen = ref(false);
-const addQuery = ref('');
-const addResults = ref<UserSummary[]>([]);
-const addLoading = ref(false);
-const addSelected = ref<UserSummary | null>(null);
-let addTimer: ReturnType<typeof setTimeout> | undefined;
+const addSelected = ref<MemberCandidate | null>(null);
 
 const {
   pending,
@@ -79,7 +79,7 @@ const membersFailure = computed(() => {
 });
 const adding = computed(() => pending.value?.change === 'add');
 const removingMemberId = computed(() =>
-  pending.value?.change === 'remove' ? pending.value.membership.userId : null,
+  pending.value?.change === 'remove' ? pending.value.membership.memberId : null,
 );
 
 const canManage = computed(() => auth.hasCapability('write:group.membership'));
@@ -95,6 +95,13 @@ const {
 } = useGroupRecord({
   id: () => props.id,
 });
+const {
+  query: addQuery,
+  results: addResults,
+  searching: addLoading,
+  searchError: addSearchError,
+  reset: resetAddSearch,
+} = useGroupMemberSearch(() => group.value);
 useRecordCrumb(
   () => props.id,
   () => group.value?.name ?? group.value?.distinguishedName,
@@ -114,64 +121,44 @@ onMounted(load);
 
 function openAdd(): void {
   addOpen.value = true;
-  addQuery.value = '';
-  addResults.value = [];
+  resetAddSearch();
   addSelected.value = null;
 }
 
-function onAddSearchInput(): void {
-  if (addTimer) clearTimeout(addTimer);
-  if (!addQuery.value.trim()) {
-    addResults.value = [];
-    return;
-  }
-  addTimer = setTimeout(async () => {
-    addLoading.value = true;
-    try {
-      const r = await api.users.search({ q: addQuery.value.trim(), pageSize: 20 });
-      // Filter out users who are already members so the operator can't
-      // accidentally try to add a duplicate.
-      const memberIds = new Set((group.value?.members ?? []).map((m) => m.id));
-      addResults.value = r.rows.filter((u) => !memberIds.has(u.id));
-    } catch {
-      addResults.value = [];
-    } finally {
-      addLoading.value = false;
-    }
-  }, 250);
-}
-
-function selectAddCandidate(u: UserSummary): void {
-  addSelected.value = u;
-}
-
 function confirmAdd(): void {
-  const u = addSelected.value;
-  if (!u || !group.value) return;
-  addMembership(membershipOf(u, group.value));
+  const c = addSelected.value;
+  if (!c || !group.value) return;
+  addMembership(membershipOf(c, group.value));
 }
 
 function closeAdd(): void {
   if (addFailure.value) dismiss();
   addOpen.value = false;
   addSelected.value = null;
-  addQuery.value = '';
-  addResults.value = [];
+  resetAddSearch();
 }
 
 function startRemove(member: GroupMember): void {
   if (group.value) removeMembership(membershipOf(member, group.value));
 }
 
-function openMember(ev: DataTableRowClickEvent): void {
-  const row = ev.data as GroupMember;
-  void router.push({ name: 'user-detail', params: { id: row.id } });
+function memberRoute(m: GroupMember) {
+  return { name: m.kind === 'user' ? 'user-detail' : 'group-detail', params: { id: m.id } };
 }
 
-function memberInitials(m: GroupMember): string {
-  return ((m.displayName ?? m.samAccountName) || '?').slice(0, 1).toUpperCase();
+function openMember(ev: DataTableRowClickEvent): void {
+  void router.push(memberRoute(ev.data as GroupMember));
 }
-void memberInitials;
+
+/** The line under a member's name: a user's UPN, a group's pre-Windows 2000 name. */
+function accountOf(m: GroupMember | MemberCandidate): string {
+  return m.kind === 'user'
+    ? (m.userPrincipalName ?? m.samAccountName)
+    : (m.samAccountName ?? m.distinguishedName);
+}
+
+const avatarShape = (m: GroupMember | MemberCandidate) =>
+  m.kind === 'group' ? ('rounded' as const) : ('circle' as const);
 
 // ---- Header and tabs -------------------------------------------------------
 
@@ -297,16 +284,14 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
             />
             <ul v-else class="member-list">
               <li v-for="m in membersTop" :key="m.id">
-                <router-link
-                  :to="{ name: 'user-detail', params: { id: m.id } }"
-                  class="member-link"
-                >
+                <router-link :to="memberRoute(m)" class="member-link">
                   <Avatar
-                    :name="m.displayName ?? m.samAccountName"
-                    :seed="m.samAccountName"
+                    :name="memberLabel(m)"
+                    :seed="m.samAccountName ?? m.id"
+                    :shape="avatarShape(m)"
                     :size="22"
                   />
-                  <span>{{ m.displayName ?? m.samAccountName }}</span>
+                  <span>{{ memberLabel(m) }}</span>
                 </router-link>
               </li>
               <li v-if="memberCount > membersTop.length" class="hint">
@@ -355,34 +340,36 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <template #body="{ data }">
                 <div class="user-cell">
                   <Avatar
-                    :name="data.displayName ?? data.samAccountName"
-                    :seed="data.samAccountName"
+                    :name="memberLabel(data)"
+                    :seed="data.samAccountName ?? data.id"
+                    :shape="avatarShape(data)"
                     :size="26"
                   />
                   <div class="user-cell-stack">
                     <div class="user-name">
-                      {{ data.displayName ?? data.samAccountName }}
+                      {{ memberLabel(data) }}
                       <span
-                        v-if="data.passwordNeverExpires"
+                        v-if="data.kind === 'user' && data.passwordNeverExpires"
                         class="badge badge-violet name-flag"
                         title="never expires"
                       >
                         <i class="pi pi-shield" /> never expires
                       </span>
                     </div>
-                    <div class="user-meta">{{ data.userPrincipalName ?? data.samAccountName }}</div>
+                    <div class="user-meta">{{ accountOf(data) }}</div>
                   </div>
                 </div>
               </template>
             </Column>
             <Column header="Status" :style="{ width: '140px' }">
               <template #body="{ data }">
-                <StatusBadge :user="data" />
+                <StatusBadge v-if="data.kind === 'user'" :user="data" />
+                <span v-else class="badge badge-muted"><i class="pi pi-users" /> group</span>
               </template>
             </Column>
             <Column header="Email" :style="{ minWidth: '220px' }">
               <template #body="{ data }">
-                <span class="cell-mono">{{ data.email ?? '—' }}</span>
+                <span class="cell-mono">{{ (data.kind === 'user' && data.email) || '—' }}</span>
               </template>
             </Column>
             <Column :style="{ width: '110px' }" header-style="text-align: right">
@@ -390,6 +377,7 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
                 <Button
                   v-if="canManage"
                   label="Remove"
+                  :aria-label="`Remove ${memberLabel(data)}`"
                   icon="pi pi-times"
                   severity="danger"
                   size="small"
@@ -415,32 +403,43 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
       @update:visible="(v) => !v && closeAdd()"
     >
       <div class="add-form">
-        <p class="dialog-prose">Search the directory to pick a user to add.</p>
+        <p class="dialog-prose">Search the directory to pick a user or group to add.</p>
         <InputText
           v-model="addQuery"
-          placeholder="name, username, UPN, email"
+          placeholder="name, username, UPN, email, group name"
+          aria-label="Find a user or group"
           class="w-full"
-          @input="onAddSearchInput"
         />
         <ul v-if="addResults.length > 0" class="result-list" role="listbox">
           <li
-            v-for="u in addResults"
-            :key="u.id"
+            v-for="c in addResults"
+            :key="c.id"
             class="result-row"
-            :class="{ active: addSelected?.id === u.id }"
+            :class="{ active: addSelected?.id === c.id }"
             role="option"
-            :aria-selected="addSelected?.id === u.id"
-            @click="selectAddCandidate(u)"
+            :aria-selected="addSelected?.id === c.id"
+            @click="addSelected = c"
           >
-            <Avatar :name="u.displayName ?? u.samAccountName" :seed="u.samAccountName" :size="24" />
+            <Avatar
+              :name="memberLabel(c)"
+              :seed="c.samAccountName ?? c.id"
+              :shape="avatarShape(c)"
+              :size="24"
+            />
             <div class="result-stack">
-              <div class="result-name">{{ u.displayName ?? u.samAccountName }}</div>
-              <div class="result-meta mono">{{ u.userPrincipalName ?? u.samAccountName }}</div>
+              <div class="result-name">{{ memberLabel(c) }}</div>
+              <div class="result-meta mono">{{ accountOf(c) }}</div>
             </div>
-            <StatusBadge :user="u" />
+            <StatusBadge v-if="c.kind === 'user'" :user="c" />
+            <span v-else class="badge badge-muted"><i class="pi pi-users" /> group</span>
           </li>
         </ul>
-        <p v-else-if="addQuery.trim() && !addLoading" class="hint">No users matched.</p>
+        <Message v-else-if="addSearchError" severity="error" :closable="false">
+          Couldn’t search the directory: {{ addSearchError }}
+        </Message>
+        <p v-else-if="addQuery.trim() && !addLoading" class="hint">
+          No users or groups matched that aren’t members already.
+        </p>
         <p v-if="addLoading" class="hint">Searching…</p>
         <Message v-if="addFailure" severity="error" closable @close="dismiss">
           Couldn’t {{ membershipChangeText(addFailure.op.change, addFailure.op.membership) }}:

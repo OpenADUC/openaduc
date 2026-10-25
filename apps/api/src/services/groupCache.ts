@@ -77,3 +77,47 @@ export async function markGroupsStale(
     .where(uuidNotIn('object_guid', seenGuids))
     .execute();
 }
+
+/**
+ * Replace a group's rows in group_group_memberships with the cached groups
+ * among `memberDns`, its current `member` values in AD. Called after a write
+ * so the group's members show the change before the next rebuild.
+ */
+export async function reconcileNestedGroups(
+  db: Kysely<DB>,
+  providerId: number,
+  groupObjectGuid: string,
+  memberDns: readonly string[],
+): Promise<void> {
+  const dnsLower = memberDns.map((d) => d.toLowerCase());
+  const nested =
+    dnsLower.length === 0
+      ? []
+      : await db
+          .selectFrom('group_cache_records')
+          .select('object_guid')
+          .where('provider_id', '=', providerId)
+          .where('deleted_at', 'is', null)
+          .where(sql<string>`lower(distinguished_name)`, 'in', dnsLower)
+          .execute();
+
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .deleteFrom('group_group_memberships')
+      .where('provider_id', '=', providerId)
+      .where('group_object_guid', '=', groupObjectGuid)
+      .execute();
+    if (nested.length === 0) return;
+    await trx
+      .insertInto('group_group_memberships')
+      .values(
+        nested.map((g) => ({
+          provider_id: providerId,
+          group_object_guid: groupObjectGuid,
+          member_group_object_guid: g.object_guid,
+        })),
+      )
+      .onConflict((oc) => oc.doNothing())
+      .execute();
+  });
+}
