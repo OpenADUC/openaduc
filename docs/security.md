@@ -15,7 +15,19 @@ Operators sign in with their Active Directory username and password. The API per
 
 Every failed sign-in gets the same answer, whatever AD said (unknown user, wrong password, locked, disabled, expired, or no OpenADUC role), and directory outages don't reveal hosts or error text. The specific reason is recorded in the audit log. Step-up failures follow the same rule.
 
-There is no local break-glass account yet: if every domain controller is unreachable, or no one is left in a role group, nobody can sign in until that's fixed in AD.
+There is no local break-glass account, by design ([ADR 0004](adr/0004-no-break-glass-sign-in.md)): if every domain controller is unreachable, or no one is left in a role group, nobody can sign in until that's fixed.
+
+### Recovering admin access
+
+If nobody can sign in as an admin because the admin group is empty, deleted or renamed, fix it in AD: add someone to the group (they get the role at their next sign-in). If the group itself is gone, point OpenADUC at another group whose **direct** members should be admins, from the server running OpenADUC:
+
+```bash
+docker compose exec postgres psql -U openaduc openaduc -c \
+  "UPDATE app_settings SET value_json = to_jsonb('CN=OpenADUC Admins,OU=Groups,DC=example,DC=com'::text) WHERE key = 'authz.admin_group_dn';"
+docker compose restart api
+```
+
+Use your own group's DN, and your database's connection if it isn't the bundled one. The restart is needed because the API caches settings. The change isn't in OpenADUC's audit log, since it's made outside the app; the next admin sign-in is.
 
 ## Sessions
 
