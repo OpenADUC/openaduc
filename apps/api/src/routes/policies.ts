@@ -32,7 +32,7 @@ const idParamSchema = z.object({ id: z.guid() });
 export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/policies/groups ----------------------------------------
   app.get('/api/policies/groups', {
-    preHandler: app.requireCapability('read:group'),
+    config: { policy: { capability: 'read:group', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<GroupPolicyListResponse> => {
       const provider = await app.services.providers.buildForRequest(req);
 
@@ -69,7 +69,7 @@ export async function registerPolicyRoutes(app: FastifyInstance): Promise<void> 
   // `:id` is the AD-assigned objectGUID (canonical UUID), matching the
   // identifier the list response surfaces.
   app.get('/api/policies/groups/:id', {
-    preHandler: app.requireCapability('read:group'),
+    config: { policy: { capability: 'read:group', stepUp: false, directory: 'caller' } },
     handler: async (req): Promise<{ policy: GroupPolicyDetail }> => {
       const { id } = idParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);

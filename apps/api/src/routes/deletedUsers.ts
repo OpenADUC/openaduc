@@ -42,8 +42,8 @@ const guidParamSchema = z.object({ guid: z.guid() });
 
 /**
  * Build the operator WriteContext from the authenticated request. The
- * non-null assertions are safe because requireStepUp gates every handler
- * that calls this — without an elevated session + cached password we
+ * non-null assertions are safe because every route that calls this requires
+ * step-up — without an elevated session + cached password we
  * never reach the body.
  */
 function ctxFromReq(req: FastifyRequest): WriteContext {
@@ -59,7 +59,7 @@ function ctxFromReq(req: FastifyRequest): WriteContext {
 export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<void> {
   // ---- GET /api/deleted-users ------------------------------------------
   app.get('/api/deleted-users', {
-    preHandler: [app.requireCapability('read:user.deleted'), app.requireStepUp],
+    config: { policy: { capability: 'read:user.deleted', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<DeletedUserSearchResponse> => {
       const q = deletedUserSearchQuerySchema.parse(req.query);
       const provider = await app.services.providers.buildForRequest(req);
@@ -127,7 +127,7 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
 
   // ---- GET /api/deleted-users/:guid ------------------------------------
   app.get('/api/deleted-users/:guid', {
-    preHandler: [app.requireCapability('read:user.deleted'), app.requireStepUp],
+    config: { policy: { capability: 'read:user.deleted', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<{ user: DeletedUserDetail }> => {
       const { guid } = guidParamSchema.parse(req.params);
       const provider = await app.services.providers.buildForRequest(req);
@@ -165,7 +165,7 @@ export async function registerDeletedUserRoutes(app: FastifyInstance): Promise<v
 
   // ---- POST /api/deleted-users/:guid/restore ---------------------------
   app.post('/api/deleted-users/:guid/restore', {
-    preHandler: [app.requireCapability('write:user.restore'), app.requireStepUp],
+    config: { policy: { capability: 'write:user.restore', stepUp: true, directory: 'caller' } },
     handler: async (req): Promise<RestoreUserResponse> => {
       const { guid } = guidParamSchema.parse(req.params);
       const body = restoreUserRequestSchema.parse(req.body ?? {});

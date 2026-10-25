@@ -32,7 +32,7 @@ The session cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, and signed with `SES
 
 ## Capabilities
 
-Authorization is capability-based, not role-based at the call site. Routes declare the capability they need (`app.requireCapability('write:user.resetPassword')`) and the auth plugin checks the actor's snapshot. Roles (`admin`, `operator`, `auditor`) are convenience bundles defined in [`packages/shared/src/capabilities.ts`](../packages/shared/src/capabilities.ts) — adding a role is a config change, not a code change.
+Authorization is capability-based, not role-based at the call site. Each route declares a policy, the capability it needs (`config: { policy: { capability: 'write:user.resetPassword', stepUp: true, directory: 'caller' } }`), and the auth plugin checks it against the actor's snapshot. Roles (`admin`, `operator`, `auditor`) are convenience bundles defined in [`packages/shared/src/capabilities.ts`](../packages/shared/src/capabilities.ts) — adding a role is a config change, not a code change.
 
 Each role is granted to the **direct** members of one AD group; nested membership isn't followed yet. First-run setup grants admin only to a direct member of the admin group: `BOOTSTRAP_ADMIN_GROUP_DN` when set, otherwise Domain Admins. It checks this before anything is saved; whoever reaches a fresh install first can't make themselves admin with an ordinary domain account. The later setup steps require the admin capability, and once setup is done the public status endpoint reveals only that it's done.
 

@@ -18,7 +18,7 @@ const querySchema = z.object({
 
 export async function registerAuditRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/audit-events', {
-    preHandler: app.requireCapability('view:audit'),
+    config: { policy: { capability: 'view:audit', stepUp: false, directory: 'none' } },
     handler: async (req) => {
       const q = querySchema.parse(req.query);
       const offset = (q.page - 1) * q.pageSize;
