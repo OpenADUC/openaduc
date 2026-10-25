@@ -19,7 +19,9 @@ import WinContextMenu, { type CtxItem } from '../primitives/WinContextMenu.vue';
 import {
   useAccountActions,
   type AccountAction,
+  type AccountActionFailure,
 } from '../../design/composables/useAccountActions.js';
+import type { UndoOffer } from '../../design/lib/undoableWrite.js';
 
 const store = useOldSchool();
 const auth = useAuthStore();
@@ -61,6 +63,8 @@ interface Row {
   /** Optional sub-state used for sort + status bar. */
   disabled?: boolean;
   locked?: boolean;
+  /** A domain controller or critical computer, which OpenADUC won't disable, reset or move. */
+  protected?: boolean;
 }
 
 const rows = computed<Row[]>(() => {
@@ -96,6 +100,7 @@ const rows = computed<Row[]>(() => {
       description: c.operatingSystem ?? c.dnsHostName ?? '',
       icon: c.enabled ? 'computer' : 'computer-disabled',
       disabled: !c.enabled,
+      protected: c.writeBlock !== null,
     });
   }
   return out;
@@ -185,14 +190,22 @@ const DONE: Record<AccountAction, (name: string) => string> = {
   disable: (name) => `Object "${name}" has been disabled.`,
   unlock: (name) => `${name} unlocked.`,
 };
-const { runningOn, run: runAccountAction } = useAccountActions<Row>({
-  onDone: (action, r, offer) => {
+// Users and computers say the same things, as ADUC does.
+const feedback = {
+  onDone: (action: AccountAction, r: Row, offer: UndoOffer) => {
     toast.add(undoable({ severity: 'success', summary: DONE[action](r.name), life: 2500 }, offer));
     store.bumpData();
   },
-  onFailed: ({ op: { action, account }, message }) =>
+  onFailed: ({ op: { action, account }, message }: AccountActionFailure<Row>) =>
     store.reportError(`Windows cannot ${action} object ${account.name} because:\n${message}`),
-});
+};
+const { runningOn, run: runAccountAction } = useAccountActions<Row>(feedback);
+const { runningOn: computerRunningOn, run: runComputerAction } = useAccountActions<Row, 'computer'>(
+  {
+    kind: 'computer',
+    ...feedback,
+  },
+);
 
 function userItems(r: Row): CtxItem[] {
   const busy = runningOn(r.id) !== null;
@@ -239,7 +252,8 @@ function userItems(r: Row): CtxItem[] {
   if (can('write:user.move')) {
     items.push({
       label: 'Move…',
-      onSelect: () => store.openDialog({ kind: 'move', id: r.id, label: r.name }),
+      onSelect: () =>
+        store.openDialog({ kind: 'move', accountKind: 'user', id: r.id, label: r.name }),
     });
   }
   const canDelete = can('write:user.delete');
@@ -299,19 +313,44 @@ function groupItems(r: Row): CtxItem[] {
 }
 
 function computerItems(r: Row): CtxItem[] {
+  const busy = computerRunningOn(r.id) !== null;
+  const items: CtxItem[] = [{ label: 'Manage', disabled: true }];
+  if (can('write:computer.move')) {
+    items.push({
+      label: 'Move…',
+      disabled: r.protected,
+      onSelect: () =>
+        store.openDialog({ kind: 'move', accountKind: 'computer', id: r.id, label: r.name }),
+    });
+  }
+  const canToggle = can('write:computer.enableDisable');
+  const canReset = can('write:computer.resetAccount');
+  if (canToggle || canReset) items.push({ label: 'All Tasks', kind: 'header' });
+  if (canToggle) {
+    // Enabling a domain controller is harmless; disabling one isn't.
+    items.push(
+      r.disabled
+        ? {
+            label: 'Enable Account',
+            disabled: busy,
+            onSelect: () => runComputerAction('enable', r),
+          }
+        : {
+            label: 'Disable Account',
+            disabled: busy || r.protected,
+            onSelect: () => runComputerAction('disable', r),
+          },
+    );
+  }
+  if (canReset) {
+    items.push({
+      label: 'Reset Account',
+      disabled: r.protected,
+      onSelect: () => store.openDialog({ kind: 'reset-computer', id: r.id, label: r.name }),
+    });
+  }
   return [
-    {
-      label: 'Manage',
-      disabled: true,
-    },
-    { label: 'Move…', disabled: true },
-    {
-      label: 'All Tasks',
-      kind: 'header',
-    },
-    { label: 'Disable Account', disabled: r.disabled },
-    { label: 'Enable Account', disabled: !r.disabled },
-    { label: 'Reset Account', disabled: true },
+    ...items,
     { kind: 'separator' },
     {
       label: 'Properties',

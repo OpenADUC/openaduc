@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Computer routes — read-only mirror of the users/groups patterns.
+// Computer routes.
 //
 // Endpoints:
-//   GET /api/computers           cache search (paged + filtered)
-//   GET /api/computers/:id       detail (live-refreshed from AD)
+//   GET  /api/computers                    cache search (paged + filtered)
+//   GET  /api/computers/:id                detail (live-refreshed from AD)
+//   POST /api/computers/:id/disable        set ACCOUNTDISABLE
+//   POST /api/computers/:id/enable         clear ACCOUNTDISABLE
+//   POST /api/computers/:id/reset-account  ADUC's Reset Account
+//   POST /api/computers/:id/move           modifyDN to another OU
 //
-// Both bind as the service account: cache search is purely DB; detail does a
-// single live LDAP read so the operator sees the latest dnsHostName / OS /
-// last logon between syncs.
+// Reads bind as the service account: cache search is purely DB; detail does
+// a single live LDAP read so the operator sees the latest dnsHostName / OS /
+// last logon between syncs. Writes bind as the operator.
 
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
@@ -16,13 +20,17 @@ import {
   computerDetailSchema,
   computerSearchQuerySchema,
   computerSearchResponseSchema,
+  moveRequestSchema,
   type ComputerDetail,
   type ComputerSearchResponse,
 } from '@openaduc/shared';
 import { NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
+import { findCachedOu } from '../services/ouCache.js';
+import { computerWriteBlock } from '../lib/computerWrites.js';
 import { rawAttributesFor, rawScalarValue } from '../lib/rawAttributes.js';
 import { listFreshness } from '../services/listFreshness.js';
+import { writeComputer } from './computerWrite.js';
 
 const idParamSchema = z.object({ id: z.guid() });
 
@@ -222,6 +230,7 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
           isStale: Boolean(cacheRow?.stale_at),
         },
         rawAttributes: rawAttributesFor(req.actor?.session.capabilities, live.rawAttributes),
+        writeBlock: computerWriteBlock(live.rawAttributes),
       };
 
       // Audit the view, gated by the same setting as user/group views and
@@ -245,6 +254,69 @@ export async function registerComputerRoutes(app: FastifyInstance): Promise<void
       }
 
       return { computer: computerDetailSchema.parse(detail) };
+    },
+  });
+
+  // ---- POST /api/computers/:id/disable + /enable -----------------------
+  app.post('/api/computers/:id/disable', {
+    config: {
+      policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
+        action: 'computer.disable',
+        verb: 'disable',
+        refuseProtected: true,
+        write: (provider, id, c) => provider.disableComputer(id, c),
+      }),
+  });
+
+  app.post('/api/computers/:id/enable', {
+    config: {
+      policy: { capability: 'write:computer.enableDisable', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
+        action: 'computer.enable',
+        verb: 'enable',
+        refuseProtected: false,
+        write: (provider, id, c) => provider.enableComputer(id, c),
+      }),
+  });
+
+  // ---- POST /api/computers/:id/reset-account ---------------------------
+  // The computer's secure channel breaks until it rejoins the domain, which
+  // it can then do under the same name.
+  app.post('/api/computers/:id/reset-account', {
+    config: {
+      policy: { capability: 'write:computer.resetAccount', stepUp: true, directory: 'caller' },
+    },
+    handler: async (req) =>
+      writeComputer(app, req, await app.services.providers.buildForRequest(req), {
+        action: 'computer.account.reset',
+        verb: 'reset the account',
+        refuseProtected: true,
+        forbidden: 'directory refused the reset — you may lack the Reset Password right',
+        write: (provider, id, c) => provider.resetComputerAccount(id, c),
+      }),
+  });
+
+  // ---- POST /api/computers/:id/move ------------------------------------
+  // Body: { targetOuDn }, an OU the cache knows.
+  app.post('/api/computers/:id/move', {
+    config: { policy: { capability: 'write:computer.move', stepUp: true, directory: 'caller' } },
+    handler: async (req) => {
+      const body = moveRequestSchema.parse(req.body);
+      const provider = await app.services.providers.buildForRequest(req);
+      const targetOu = await findCachedOu(app.db, provider.id, body.targetOuDn);
+      if (!targetOu) throw app.httpErrors.badRequest('target OU not found in directory cache');
+      return writeComputer(app, req, provider, {
+        action: 'computer.move',
+        verb: 'move',
+        refuseProtected: true,
+        metadata: { targetOuDn: targetOu.distinguished_name, targetOuName: targetOu.name },
+        write: (p, id, c) => p.moveComputer(id, targetOu.distinguished_name, c),
+      });
     },
   });
 }

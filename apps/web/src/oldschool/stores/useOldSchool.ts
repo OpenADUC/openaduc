@@ -8,6 +8,7 @@
 // like to pull up two users side-by-side in the real console.
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
+import type { AccountKind } from '../../design/composables/useAccountActions.js';
 
 export type SelectedKind = 'root' | 'savedQueries' | 'domain' | 'ou' | 'container' | 'builtin';
 
@@ -28,7 +29,8 @@ export type DialogSpec =
   | { kind: 'delete-user'; id: string; label: string }
   | { kind: 'new-group'; parentDn: string }
   | { kind: 'delete-group'; id: string; label: string }
-  | { kind: 'move'; id: string; label: string }
+  | { kind: 'move'; accountKind: AccountKind; id: string; label: string }
+  | { kind: 'reset-computer'; id: string; label: string }
   | { kind: 'add-to-group'; userId: string; userLabel: string }
   | { kind: 'message'; title: string; message: string }
   | { kind: 'about' }
@@ -82,6 +84,7 @@ function defaultSizeFor(kind: DialogSpec['kind']): { width: number; height: numb
     case 'find':
       return { width: 580, height: 500 };
     case 'message':
+    case 'reset-computer':
       return { width: 420, height: 220 };
     case 'about':
       return { width: 460, height: 260 };

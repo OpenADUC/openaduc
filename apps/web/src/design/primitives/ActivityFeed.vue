@@ -37,6 +37,19 @@ const FRIENDLY_ACTION: Record<string, { title: string; iconClass: string; tone: 
   'user.rename': { title: 'Renamed', iconClass: 'pi pi-id-card', tone: 'tone-blue' },
   'user.delete': { title: 'Account deleted', iconClass: 'pi pi-trash', tone: 'tone-red' },
   'user.restore': { title: 'Account restored', iconClass: 'pi pi-replay', tone: 'tone-green' },
+  'computer.view': { title: 'Computer viewed', iconClass: 'pi pi-eye', tone: 'tone-muted' },
+  'computer.disable': { title: 'Computer disabled', iconClass: 'pi pi-ban', tone: 'tone-amber' },
+  'computer.enable': {
+    title: 'Computer enabled',
+    iconClass: 'pi pi-check-circle',
+    tone: 'tone-green',
+  },
+  'computer.account.reset': {
+    title: 'Computer account reset',
+    iconClass: 'pi pi-refresh',
+    tone: 'tone-amber',
+  },
+  'computer.move': { title: 'Moved to OU', iconClass: 'pi pi-folder', tone: 'tone-blue' },
 };
 
 const items = computed<FeedItem[]>(() =>
@@ -68,8 +81,9 @@ function detailFor(e: AuditEventRow): string {
   if (e.action === 'user.group.add' || e.action === 'user.group.remove') {
     if (md.groupName) return `Group: ${String(md.groupName)}`;
   }
-  if (e.action === 'user.move' && md.targetOu) {
-    return `To: ${String(md.targetOu)}`;
+  if (e.action === 'user.move' || e.action === 'computer.move') {
+    const to = md.targetOuName ?? md.targetOuDn;
+    if (to) return `To: ${String(to)}`;
   }
   if (e.result !== 'success') {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';

@@ -28,6 +28,7 @@ import type {
   LdapTlsMode,
   LoginRequest,
   MeResponse,
+  MoveRequest,
   OuContentsResponse,
   OuCreateRequest,
   OuDeleteRequest,
@@ -47,7 +48,6 @@ import type {
   UserDeletePreflightResponse,
   UserDeleteRequest,
   UserDetail,
-  UserMoveRequest,
   UserRenameRequest,
   UserSearchQuery,
   UserSearchResponse,
@@ -452,10 +452,7 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
-    move(
-      id: string,
-      body: UserMoveRequest,
-    ): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+    move(id: string, body: MoveRequest): Promise<{ ok: boolean; before: unknown; after: unknown }> {
       return apiFetch(`/users/${encodeURIComponent(id)}/move`, {
         method: 'POST',
         body: JSON.stringify(body),
@@ -574,6 +571,30 @@ export const api = {
     },
     get(id: string): Promise<{ computer: ComputerDetail }> {
       return apiFetch(`/computers/${encodeURIComponent(id)}`);
+    },
+    disable(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/disable`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    enable(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/enable`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    resetAccount(id: string): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/reset-account`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    },
+    move(id: string, body: MoveRequest): Promise<{ ok: boolean; before: unknown; after: unknown }> {
+      return apiFetch(`/computers/${encodeURIComponent(id)}/move`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
     },
   },
   deletedComputers: {
