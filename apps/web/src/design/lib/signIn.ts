@@ -174,6 +174,22 @@ export function signInFix(b: SignInBlocker): SignInFix {
   return CONDITIONS[b.kind].fix;
 }
 
+/**
+ * The fix for the most severe condition, if the operator `can` make it:
+ * fixing a lesser one wouldn't let the user sign in, so an operator who
+ * can't make it gets none.
+ */
+export function fixFor(
+  u: SignInInput,
+  can: (capability: Capability) => boolean,
+  now: Date = new Date(),
+): SignInFix | null {
+  const top = signInBlockers(u, now)[0];
+  if (!top) return null;
+  const fix = signInFix(top);
+  return can(fix.capability) ? fix : null;
+}
+
 export function describeBlocker(
   b: SignInBlocker,
   now: Date = new Date(),

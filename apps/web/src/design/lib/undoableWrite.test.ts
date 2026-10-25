@@ -161,3 +161,69 @@ describe('an undoable write', () => {
     expect(write).toHaveBeenCalledOnce();
   });
 });
+
+describe('undoable writes to several records', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // A switch per record.
+  interface Toggle {
+    id: string;
+    to: 'on' | 'off';
+  }
+
+  function setupMany(failuresPerKey: boolean) {
+    setActivePinia(createPinia());
+    useAuthStore().actor = { capabilities: [], elevated: ELEVATED } as never;
+    const write = vi.fn(async (_op: Toggle) => undefined);
+    const onDone = vi.fn();
+    const writes = useUndoableWrite<Toggle>({
+      write,
+      inverse: ({ id, to }) => ({ id, to: to === 'on' ? 'off' : 'on' }),
+      key: ({ id }) => id,
+      onDone,
+      failuresPerKey,
+    });
+    return { writes, write, onDone };
+  }
+
+  it('keeps each record’s failure while another record is written', async () => {
+    const { writes, write, onDone } = setupMany(true);
+    write.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    writes.run({ id: 'a', to: 'on' });
+    await vi.waitFor(() => expect(writes.failureOn('a')).not.toBeNull());
+    writes.run({ id: 'b', to: 'on' });
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+    expect(writes.failureOn('a')?.message).toBe('DC unreachable');
+    expect(writes.failureOn('b')).toBeNull();
+
+    writes.retryOn('a');
+    await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(2));
+    expect(write).toHaveBeenLastCalledWith({ id: 'a', to: 'on' });
+    expect(writes.failureOn('a')).toBeNull();
+  });
+
+  it('dismisses one record’s failure and leaves the others', async () => {
+    const { writes, write } = setupMany(true);
+    write.mockRejectedValue(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    writes.run({ id: 'a', to: 'on' });
+    writes.run({ id: 'b', to: 'on' });
+    await vi.waitFor(() => expect(writes.failureOn('b')).not.toBeNull());
+    writes.dismissOn('b');
+    expect(writes.failureOn('b')).toBeNull();
+    expect(writes.failureOn('a')).not.toBeNull();
+  });
+
+  it('keeps one failure, the last, without failuresPerKey', async () => {
+    const { writes, write } = setupMany(false);
+    write.mockRejectedValueOnce(new ApiError(500, 'ldap_error', 'DC unreachable'));
+
+    writes.run({ id: 'a', to: 'on' });
+    await vi.waitFor(() => expect(writes.failure.value).not.toBeNull());
+    writes.run({ id: 'b', to: 'on' });
+    await vi.waitFor(() => expect(writes.runningOn('b')).toBeNull());
+    expect(writes.failure.value).toBeNull();
+    expect(writes.failureOn('a')).toBeNull();
+  });
+});

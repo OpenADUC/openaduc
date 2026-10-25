@@ -4,7 +4,7 @@ import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
 import { placeFailure } from '../../design/lib/failurePlacement.js';
 import type { UndoOffer, WriteFailure } from '../../design/lib/undoableWrite.js';
-import type { ObjectActionFailure } from './objectPage';
+import type { ActionFailure } from '../../design/lib/actionFailure.js';
 
 /** What the dialog needs of the workflow it renders. */
 interface DialogWorkflow<Op> {
@@ -53,7 +53,7 @@ export function useUndoableDialog<
     if (inDialog.value) workflow.dismiss();
   }
 
-  const pageFailure = computed<ObjectActionFailure | null>(() => {
+  const pageFailure = computed<ActionFailure | null>(() => {
     const f = onPage.value;
     if (!f) return null;
     return {

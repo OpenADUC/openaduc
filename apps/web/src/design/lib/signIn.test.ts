@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { aUserDetail } from '../../test/userDetail.js';
 import {
   describeBlocker,
+  fixFor,
   lockoutEnd,
   signInBlockers,
   signInFix,
@@ -125,6 +126,31 @@ describe('signInFix', () => {
       fix: 'reset-password',
       capability: 'write:user.resetPassword',
     });
+  });
+});
+
+describe('fixFor', () => {
+  const can =
+    (...caps: string[]) =>
+    (c: string) =>
+      caps.includes(c);
+
+  it('fixes the most severe condition, which is what stops sign-in', () => {
+    const u = aUserDetail({ locked: true, passwordExpiresAt: HOUR_AGO });
+    expect(fixFor(u, can('write:user.unlock', 'write:user.resetPassword'), NOW)?.fix).toBe(
+      'unlock',
+    );
+  });
+
+  it('offers nothing the operator can’t do, rather than a lesser fix', () => {
+    const u = aUserDetail({ locked: true, passwordExpiresAt: HOUR_AGO });
+    expect(fixFor(u, can('write:user.resetPassword'), NOW)).toBeNull();
+  });
+
+  it('offers nothing for an account that can sign in', () => {
+    expect(
+      fixFor(aUserDetail({ passwordExpiresAt: IN_AN_HOUR }), can('write:user.resetPassword'), NOW),
+    ).toBeNull();
   });
 });
 
