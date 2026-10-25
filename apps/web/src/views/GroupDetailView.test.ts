@@ -7,6 +7,7 @@ import ToastService from 'primevue/toastservice';
 import Tooltip from 'primevue/tooltip';
 import { RouterView, createMemoryHistory, createRouter } from 'vue-router';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GroupLicenses, LicensedGroups } from '@openaduc/shared';
 import { ApiError } from '../api/client.js';
 
 const jane = {
@@ -40,6 +41,7 @@ const aGroup = (id: string, name: string) => ({
   groupScope: 'global',
   memberCount: 2,
   email: null,
+  entra: null as { licenses: boolean } | null,
   members: [jane, nested],
   freshness: { cachedAt: null, liveRefreshedAt: null },
 });
@@ -73,6 +75,13 @@ const api = {
       role: null,
     })),
     remove: vi.fn(async () => ({ ok: true })),
+    licensed: vi.fn(async (): Promise<LicensedGroups> => ({
+      enabled: false,
+      refreshedAt: null,
+      refreshFailed: false,
+      groups: [],
+    })),
+    licenses: vi.fn<(id: string) => Promise<GroupLicenses>>(),
   },
   users: {
     search: vi.fn(async () => ({
@@ -99,6 +108,7 @@ async function openMembers(
   const pinia = createPinia();
   setActivePinia(pinia);
   useAuthStore().actor = {
+    directoryId: 1,
     capabilities,
     elevated: {
       active: true,
@@ -304,5 +314,85 @@ describe('shortcuts on a group’s page', () => {
   it('offer no Add member key to an operator who can’t manage members', async () => {
     await openMembers('g1', ['read:group']);
     expect(listed()).toEqual(['Tabs 1 Overview', 'Tabs 2 Members']);
+  });
+});
+
+describe('a group’s licenses', () => {
+  const e3 = { skuId: 'e3', skuPartNumber: 'SPE_E3', name: 'Microsoft 365 E3' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: { ...aGroup(id, 'Engineering'), entra: { licenses: true } },
+    }));
+    api.groups.licensed.mockResolvedValue({
+      enabled: true,
+      refreshedAt: '2026-10-24T11:00:00Z',
+      refreshFailed: false,
+      groups: [{ id: 'g5', licenses: [e3] }],
+    });
+    api.groups.licenses.mockResolvedValue({
+      status: 'synced',
+      licenses: [{ ...e3, disabledPlanCount: 1 }],
+      processingState: 'ProcessingComplete',
+    });
+  });
+  afterAll(() => {
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: aGroup(id, id === 'g1' ? 'Engineering' : 'Sales'),
+    }));
+    api.groups.licensed.mockResolvedValue({
+      enabled: false,
+      refreshedAt: null,
+      refreshFailed: false,
+      groups: [],
+    });
+  });
+
+  it('shows what the group grants, read live, when the Entra integration reads licenses', async () => {
+    const { page } = await openMembers('g1', ['read:group'], 'overview');
+    expect(api.groups.licenses).toHaveBeenCalledWith('g1');
+    const card = page.findAll('.glic').at(0);
+    expect(card?.text()).toContain('Members get these through the group');
+    expect(card?.text()).toContain('Microsoft 365 E3');
+    expect(card?.text()).toContain('1 service plan turned off');
+  });
+
+  it('shows no licenses where the Entra integration doesn’t read them', async () => {
+    api.groups.get.mockImplementation(async (id: string) => ({
+      group: { ...aGroup(id, 'Engineering'), entra: { licenses: false } },
+    }));
+    const { page } = await openMembers('g1', ['read:group'], 'overview');
+    expect(page.find('.glic').exists()).toBe(false);
+    expect(api.groups.licenses).not.toHaveBeenCalled();
+  });
+
+  it('badges a licensed group among the members to add', async () => {
+    const { page } = await openMembers();
+    await click(page, 'Add member');
+    await page.get('[role="dialog"] input').setValue('con');
+    const option = await vi.waitFor(() => {
+      const found = page.findAll('[role="option"]').find((o) => o.text().includes('Contractors'));
+      expect(found).toBeDefined();
+      return found!;
+    });
+    expect(option.find('.license-badge').text()).toBe('Microsoft 365 E3');
+  });
+
+  it('says when the badges couldn’t be refreshed', async () => {
+    api.groups.licensed.mockResolvedValue({
+      enabled: true,
+      refreshedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      refreshFailed: true,
+      groups: [{ id: 'g5', licenses: [e3] }],
+    });
+    const { page } = await openMembers();
+    await click(page, 'Add member');
+    await page.get('[role="dialog"] input').setValue('con');
+    await vi.waitFor(() =>
+      expect(page.find('.license-note').text()).toBe(
+        'License badges couldn’t be refreshed from Microsoft Entra. Last updated 2h ago.',
+      ),
+    );
   });
 });

@@ -42,6 +42,10 @@ import type { ResetOutcome } from '../design/composables/usePasswordReset.js';
 import ReportingStructureCard from '../design/primitives/ReportingStructureCard.vue';
 import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
+import UserLicenseList from '../design/primitives/UserLicenseList.vue';
+import LicenseBadge from '../design/primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../design/primitives/LicenseBadgeNote.vue';
+import { LICENSE_ICON } from '../design/lib/licenses.js';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, nameOf } from '../design/lib/format.js';
 import type { UserCreateResponse, UserDetail } from '@openaduc/shared';
@@ -85,7 +89,8 @@ import {
 // 'overview' is new; 'raw' is admin-gated. 'signins' shows Microsoft Entra
 // sign-in events for this user — only rendered when the directory has an
 // Entra integration configured.
-type TabId = 'overview' | 'organization' | 'contact' | 'account' | 'groups' | 'signins' | 'raw';
+type TabId =
+  'overview' | 'organization' | 'contact' | 'account' | 'groups' | 'licenses' | 'signins' | 'raw';
 
 // Attributes already rendered with first-class affordances elsewhere on the
 // page (heading, subtitle, status badges, dedicated Security tab, dedicated
@@ -955,6 +960,12 @@ const tabs = computed<ObjectPageTab<TabId>[]>(() => {
     count: u?.groupMemberships.length ?? 0,
     visible: true,
   });
+  list.push({
+    id: 'licenses',
+    label: 'Licenses',
+    icon: LICENSE_ICON,
+    visible: !!u?.entra?.licenses,
+  });
   // Sign-ins is conditional on an Entra integration. We use the same
   // `entra` field the response carries when integration is enabled —
   // null = not configured, so the tab disappears entirely.
@@ -1744,6 +1755,10 @@ watch(user, (u) => {
           </Card>
         </div>
 
+        <Card v-else-if="activeTab === 'licenses' && user.entra?.licenses" title="Licenses">
+          <UserLicenseList :user-id="user.id" :name="displayName" />
+        </Card>
+
         <!-- Sign-ins — Microsoft Entra audit log for this user, served
            from the local entra_signin_events cache (delta-synced every
            15min by entra.signins.events). Filtering by user_object_guid
@@ -1912,6 +1927,7 @@ watch(user, (u) => {
                 member via a nested group
               </span>
             </div>
+            <LicenseBadge :group-id="g.id" />
             <Button
               v-if="existingMembership(g.id) !== 'direct'"
               label="Add"
@@ -1928,6 +1944,7 @@ watch(user, (u) => {
           Showing {{ groupSearchResults.length }} — refine your search
         </p>
       </div>
+      <LicenseBadgeNote v-if="groupSearchResults.length > 0" />
       <Message v-if="addGroupError" severity="error" :closable="false">{{ addGroupError }}</Message>
       <Message v-else-if="addDialogFailure" severity="error" closable @close="dismissAddFailure">
         Couldn’t

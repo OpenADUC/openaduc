@@ -23,6 +23,7 @@ import { isProtectedGroup } from '../lib/groupPrivilege.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
+import { entraFeatureOn } from '../services/entraIntegration.js';
 import { forgetDeletedGroup, upsertGroup } from '../services/groupCache.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { listFreshness } from '../services/listFreshness.js';
@@ -253,12 +254,15 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         m.id;
       members.sort((a, b) => label(a).localeCompare(label(b)));
 
-      const cacheRow = await app.db
-        .selectFrom('group_cache_records')
-        .select(['synced_at'])
-        .where('provider_id', '=', provider.id)
-        .where('object_guid', '=', id)
-        .executeTakeFirst();
+      const [cacheRow, integration] = await Promise.all([
+        app.db
+          .selectFrom('group_cache_records')
+          .select(['synced_at'])
+          .where('provider_id', '=', provider.id)
+          .where('object_guid', '=', id)
+          .executeTakeFirst(),
+        app.services.entraIntegration.getByProviderId(provider.id),
+      ]);
 
       const detail: GroupDetail = {
         id: live.objectGuid,
@@ -269,6 +273,7 @@ export async function registerGroupRoutes(app: FastifyInstance): Promise<void> {
         groupType: live.groupType,
         groupScope: live.groupScope,
         email: live.email,
+        entra: integration?.enabled ? { licenses: entraFeatureOn(integration, 'licenses') } : null,
         memberCount: members.length,
         members,
         freshness: {

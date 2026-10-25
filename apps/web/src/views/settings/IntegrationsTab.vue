@@ -14,7 +14,8 @@ import {
   type EntraIntegrationPut,
   type EntraIntegrationSummary,
 } from '../../api/index.js';
-import { TAP_PERMISSIONS, type EntraFeatureKey } from '@openaduc/shared';
+import { LICENSE_PERMISSIONS, TAP_PERMISSIONS, type EntraFeatureKey } from '@openaduc/shared';
+import LicenseBadgeNote from '../../design/primitives/LicenseBadgeNote.vue';
 import { ApiError } from '../../api/client.js';
 import { useAuthStore } from '../../stores/auth.js';
 import Card from '../../design/primitives/Card.vue';
@@ -143,6 +144,15 @@ const FEATURES: FeatureRow[] = [
       .join(', ')} (Application)`,
     risk: 'Whoever can issue a Temporary Access Pass can sign in as that user. OpenADUC refuses members of privileged AD groups, of groups mapped to its Admin role, and anyone holding or eligible for a Microsoft Entra role.',
   },
+  {
+    key: 'licenses',
+    label: 'Licenses',
+    description:
+      'Shows a user’s Microsoft licenses, each from a group or assigned directly, with any error assigning it; the licenses a group grants on its page; and a badge on licensed groups wherever a group is picked. Read-only: licenses are still assigned in Entra.',
+    permissionNote: `${Object.values(LICENSE_PERMISSIONS)
+      .map((p) => p.name)
+      .join(', ')} (Application)`,
+  },
 ];
 
 const editForm = reactive({
@@ -159,6 +169,7 @@ const editForm = reactive({
     teamsAdminWebhook: false,
     passwordExpiryNotifications: false,
     temporaryAccessPass: false,
+    licenses: false,
   } as Record<EntraFeatureKey, boolean>,
   // Empty = no change. Use the explicit "Clear" button to remove an existing one.
   teamsWebhookUrl: '',
@@ -194,6 +205,7 @@ function openEdit(row: DirectoryEntra): void {
     teamsAdminWebhook: ex?.features.teamsAdminWebhook ?? false,
     passwordExpiryNotifications: ex?.features.passwordExpiryNotifications ?? false,
     temporaryAccessPass: ex?.features.temporaryAccessPass ?? false,
+    licenses: ex?.features.licenses ?? false,
   };
   editForm.teamsWebhookUrl = '';
   editForm.teamsWebhookUrlClear = false;
@@ -467,6 +479,13 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
               <code>{{ TAP_PERMISSIONS.roles.name }}</code> &mdash; Entra roles a user holds or is
               eligible for, so Temporary Access Pass refuses them
             </li>
+            <li>
+              <code>{{ LICENSE_PERMISSIONS.groups.name }}</code> &mdash; the licenses groups grant
+            </li>
+            <li>
+              <code>{{ LICENSE_PERMISSIONS.organization.name }}</code> &mdash; the tenant’s
+              subscriptions, to name a license Microsoft’s product list lacks, and its last sync
+            </li>
           </ul>
           <p class="entra-help">
             <a v-if="editConsentUrl" :href="editConsentUrl" target="_blank" rel="noopener">
@@ -489,6 +508,9 @@ function lastTestText(integration: EntraIntegrationSummary | null): string {
                 <span v-if="f.risk" class="entra-feature-risk">
                   <i class="pi pi-exclamation-triangle" aria-hidden="true" /> {{ f.risk }}
                 </span>
+                <LicenseBadgeNote
+                  v-if="f.key === 'licenses' && editTarget?.integration?.features.licenses"
+                />
               </label>
             </li>
           </ul>

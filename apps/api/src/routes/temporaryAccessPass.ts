@@ -12,7 +12,7 @@ import { AppError, NotFound } from '../plugins/errorHandler.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
-import { GraphPermissionError } from '../services/graphClient.js';
+import { graphFailure } from './graphFailure.js';
 import {
   issueTap,
   tapPreflight,
@@ -132,26 +132,4 @@ export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): P
       return tapIssueResponseSchema.parse(outcome.issued);
     },
   });
-}
-
-/**
- * Graph refusing or failing: a request it rejects (400) in its own words,
- * anything else with the permission it most likely wants.
- */
-function graphFailure(err: unknown): never {
-  if (err instanceof GraphPermissionError && err.statusCode === 400) {
-    throw new AppError({
-      statusCode: 422,
-      code: 'entra_rejected',
-      message: `Microsoft Entra refused: ${err.graphMessage ?? err.message}`,
-    });
-  }
-  if (err instanceof GraphPermissionError) {
-    throw new AppError({
-      statusCode: 502,
-      code: 'entra_error',
-      message: err.hint ? `${err.message} (${err.hint})` : err.message,
-    });
-  }
-  throw err;
 }

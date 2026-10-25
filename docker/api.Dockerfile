@@ -31,6 +31,7 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY apps/api/package.json ./apps/api/
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/api/migrations ./apps/api/migrations
+COPY apps/api/data ./apps/api/data
 COPY apps/api/knexfile.ts ./apps/api/
 USER node-app
 EXPOSE 3000

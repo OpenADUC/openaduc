@@ -53,6 +53,7 @@ const api = {
     update: vi.fn(async () => ({ user })),
     resetPassword: vi.fn(async () => ({})),
     tapPreflight: vi.fn(async () => ({ status: 'unsynced', lastSyncAt: null })),
+    licenses: vi.fn(async () => ({ status: 'synced', licenses: [] })),
     unlock: vi.fn(async () => ({})),
     disable: vi.fn(async () => ({})),
     enable: vi.fn(async () => ({})),
@@ -677,6 +678,7 @@ describe('shortcuts on a user’s page', () => {
         lastStatus: null,
         mfa: null,
         temporaryAccessPass: true,
+        licenses: false,
       },
     });
     api.users.get.mockResolvedValue({ user: tapUser });
@@ -692,6 +694,29 @@ describe('shortcuts on a user’s page', () => {
     });
     await openTab('overview', [...ACTIONS, 'write:user.issueTap'], true);
     expect(listed()).not.toContain('t Issue Temporary Access Pass…');
+  });
+
+  it('shows the user’s licenses on their own tab when the Entra integration reads them', async () => {
+    const entra = {
+      lastSignInAt: null,
+      lastNonInteractiveSignInAt: null,
+      lastStatus: null,
+      mfa: null,
+      temporaryAccessPass: false,
+      licenses: true,
+    };
+    api.users.get.mockResolvedValue({ user: aUserDetail({ entra }) });
+    const { page } = await openTab('licenses', ['read:user'], false);
+    expect(api.users.licenses).toHaveBeenCalledWith('u1');
+    expect(page.text()).toContain('has no licenses');
+    page.unmount();
+
+    api.users.get.mockResolvedValue({
+      user: aUserDetail({ entra: { ...entra, licenses: false } }),
+    });
+    const off = await openTab('licenses', ['read:user'], false);
+    expect(off.page.find('[role="tablist"]').text()).not.toContain('Licenses');
+    off.page.unmount();
   });
 
   it('offers only the actions the operator has the capability for', async () => {

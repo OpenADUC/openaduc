@@ -16,7 +16,8 @@
     "migrate:latest": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:latest",
     "migrate:rollback": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback",
     "migrate:make": "tsx node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:make",
-    "ldap-spike": "tsx scripts/ldap-spike.ts"
+    "ldap-spike": "tsx scripts/ldap-spike.ts",
+    "refresh-sku-names": "tsx scripts/refresh-sku-names.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

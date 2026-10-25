@@ -128,6 +128,11 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
         await app.services.syncTasks
           .ensureSeeded(id, { hasEntra: true })
           .catch((err) => req.log.warn({ err, providerId: id }, 'entra task seeding failed'));
+        // Group pickers badge licensed groups from the task's cache, so
+        // fill it now rather than at the task's next slot.
+        if (integration.features.licenses && !existing?.features.licenses) {
+          app.services.sync.triggerNow(id, 'entra.licenses.groups');
+        }
       }
 
       const changedFields = Object.keys(body).filter((k) => k !== 'clientSecret');

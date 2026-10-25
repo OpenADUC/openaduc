@@ -36,6 +36,22 @@ export function missingPermissions(
   return [...missing];
 }
 
+/**
+ * Whether a feature is on: the integration is enabled, holds a client
+ * secret, and has the feature turned on. Pages offer a feature only then.
+ */
+export function entraFeatureOn(
+  integration: EntraIntegrationSummary | null,
+  feature: EntraFeatureKey,
+): boolean {
+  return (
+    !!integration &&
+    integration.enabled &&
+    integration.hasClientSecret &&
+    integration.features[feature] === true
+  );
+}
+
 export interface EntraIntegrationSummary {
   id: number;
   providerId: number;
@@ -111,10 +127,7 @@ export class EntraIntegrationService {
    * feature opted-in. Used by scheduler / runners to gate work.
    */
   async isFeatureEnabled(providerId: number, feature: EntraFeatureKey): Promise<boolean> {
-    const summary = await this.getByProviderId(providerId);
-    if (!summary || !summary.enabled) return false;
-    if (!summary.hasClientSecret) return false;
-    return summary.features[feature] === true;
+    return entraFeatureOn(await this.getByProviderId(providerId), feature);
   }
 
   /**

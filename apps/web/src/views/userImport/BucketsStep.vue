@@ -17,6 +17,8 @@ import { useOuTree } from '../../design/composables/useOuTree.js';
 import { MIN_GROUP_QUERY } from '../../design/composables/useAddToGroup.js';
 import { ouTreeNodes } from '../../design/lib/ouTree.js';
 import { fmtDate } from '../../design/lib/format.js';
+import LicenseBadge from '../../design/primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../../design/primitives/LicenseBadgeNote.vue';
 
 const props = defineProps<{ wizard: ReturnType<typeof useUserImport> }>();
 const w = props.wizard;
@@ -124,6 +126,7 @@ const ouName = (dn: string) =>
           >
             <li v-for="g in b.placement.groups" :key="g.id" class="bk-chip">
               <span>{{ g.name }}</span>
+              <LicenseBadge :group-id="g.id" />
               <button
                 type="button"
                 class="bk-chip-remove"
@@ -160,6 +163,7 @@ const ouName = (dn: string) =>
             <ul v-else class="bk-results">
               <li v-for="g in results" :key="g.id">
                 <span class="bk-result-name">{{ g.name || g.distinguishedName }}</span>
+                <LicenseBadge :group-id="g.id" />
                 <span v-if="b.placement.groups.some((p) => p.id === g.id)" class="hint">added</span>
                 <Button
                   v-else
@@ -171,6 +175,7 @@ const ouName = (dn: string) =>
                 />
               </li>
             </ul>
+            <LicenseBadgeNote v-if="results.length > 0" />
           </div>
         </template>
       </div>
@@ -316,6 +321,11 @@ const ouName = (dn: string) =>
   justify-content: space-between;
   gap: 8px;
   font-size: 12.5px;
+}
+
+.bk-result-name {
+  flex: 1;
+  min-width: 0;
 }
 
 .bk-rows summary {

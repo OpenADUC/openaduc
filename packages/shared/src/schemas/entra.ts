@@ -13,6 +13,7 @@ export const ENTRA_FEATURE_KEYS = [
   'teamsAdminWebhook',
   'passwordExpiryNotifications',
   'temporaryAccessPass',
+  'licenses',
 ] as const;
 export type EntraFeatureKey = (typeof ENTRA_FEATURE_KEYS)[number];
 
@@ -44,10 +45,32 @@ export const TAP_PERMISSIONS = {
   },
 } as const satisfies Record<string, GraphPermission>;
 
+/** What showing licenses needs: all reads, as OpenADUC never assigns one. */
+export const LICENSE_PERMISSIONS = {
+  /** A user's licenses and where each comes from (licenseAssignmentStates). */
+  users: TAP_PERMISSIONS.users,
+  /** The licenses a group grants, and the groups a user's licenses come from. */
+  groups: {
+    name: 'Group.Read.All',
+    alsoMetBy: ['Group.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
+  },
+  /**
+   * The tenant's subscriptions (part numbers for products Microsoft's name
+   * list lacks) and its last sync from AD, for a user or group not synced yet.
+   */
+  organization: {
+    name: 'Organization.Read.All',
+    alsoMetBy: ['Organization.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'],
+  },
+} as const satisfies Record<string, GraphPermission>;
+
 /** The permissions a feature needs that the connection test checks. */
 export const ENTRA_FEATURE_PERMISSIONS: Partial<
   Record<EntraFeatureKey, readonly GraphPermission[]>
-> = { temporaryAccessPass: Object.values(TAP_PERMISSIONS) };
+> = {
+  temporaryAccessPass: Object.values(TAP_PERMISSIONS),
+  licenses: Object.values(LICENSE_PERMISSIONS),
+};
 
 export const entraTestResponseSchema = z.object({
   ok: z.boolean(),

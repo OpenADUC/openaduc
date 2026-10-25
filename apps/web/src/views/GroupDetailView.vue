@@ -16,6 +16,9 @@ import Card from '../design/primitives/Card.vue';
 import StatusBadge from '../design/primitives/StatusBadge.vue';
 import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
+import GroupLicenseList from '../design/primitives/GroupLicenseList.vue';
+import LicenseBadge from '../design/primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../design/primitives/LicenseBadgeNote.vue';
 import AppToast from '../design/feedback/AppToast.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import DeleteGroupDialog from '../design/feedback/DeleteGroupDialog.vue';
@@ -329,6 +332,10 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               </li>
             </ul>
           </Card>
+
+          <Card v-if="group.entra?.licenses" title="Licenses">
+            <GroupLicenseList :group-id="group.id" :name="group.name ?? 'This group'" />
+          </Card>
         </div>
 
         <Card
@@ -468,12 +475,16 @@ const membersTop = computed(() => (group.value?.members ?? []).slice(0, 5));
               <div class="result-meta mono">{{ accountOf(c) }}</div>
             </div>
             <StatusBadge v-if="c.kind === 'user'" :user="c" />
-            <span v-else class="badge badge-muted"><i class="pi pi-users" /> group</span>
+            <template v-else>
+              <LicenseBadge :group-id="c.id" />
+              <span class="badge badge-muted"><i class="pi pi-users" /> group</span>
+            </template>
           </li>
         </ul>
         <Message v-else-if="addSearchError" severity="error" :closable="false">
           Couldn’t search the directory: {{ addSearchError }}
         </Message>
+        <LicenseBadgeNote v-if="addResults.some((c) => c.kind === 'group')" />
         <p v-else-if="addQuery.trim() && !addLoading" class="hint">
           No users or groups matched that aren’t members already.
         </p>

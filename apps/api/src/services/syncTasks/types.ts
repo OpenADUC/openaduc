@@ -35,7 +35,8 @@ export type SyncTaskKey =
   | 'entra.signin.activity'
   | 'entra.signins.events'
   | 'entra.mfa.registration'
-  | 'entra.password-expiry.notify';
+  | 'entra.password-expiry.notify'
+  | 'entra.licenses.groups';
 
 /**
  * Schedule kinds. Each interprets the row's anchor_at/interval_minutes/

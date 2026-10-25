@@ -67,6 +67,9 @@ import type {
   TapIssueRequest,
   TapIssueResponse,
   TapPreflight,
+  UserLicenses,
+  GroupLicenses,
+  LicensedGroups,
   RestoreUserRequest,
   MfaRegistrationResponse,
   MfaRegistrationStatus,
@@ -192,7 +195,8 @@ export type SyncTaskKey =
   | 'entra.signin.activity'
   | 'entra.signins.events'
   | 'entra.mfa.registration'
-  | 'entra.password-expiry.notify';
+  | 'entra.password-expiry.notify'
+  | 'entra.licenses.groups';
 
 export interface EntraIntegrationSummary {
   id: number;
@@ -526,6 +530,10 @@ export const api = {
     tapPreflight(id: string): Promise<TapPreflight> {
       return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`);
     },
+    /** The user's Microsoft licenses, read live from Entra. */
+    licenses(id: string): Promise<UserLicenses> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/licenses`);
+    },
     issueTap(id: string, body: TapIssueRequest): Promise<TapIssueResponse> {
       return apiFetch(`/users/${encodeURIComponent(id)}/temporary-access-pass`, {
         method: 'POST',
@@ -643,6 +651,14 @@ export const api = {
     },
     get(id: string): Promise<{ group: GroupDetail }> {
       return apiFetch(`/groups/${encodeURIComponent(id)}`);
+    },
+    /** The licenses the group grants, read live from Entra. */
+    licenses(id: string): Promise<GroupLicenses> {
+      return apiFetch(`/groups/${encodeURIComponent(id)}/licenses`);
+    },
+    /** Every group that grants a license, from the server's cache. */
+    licensed(): Promise<LicensedGroups> {
+      return apiFetch('/groups/licensed');
     },
     /** Nest group `id` in `groupId`: the group counterpart of `users.addGroup`. */
     addGroup(id: string, body: { groupId: string }): Promise<{ ok: boolean }> {

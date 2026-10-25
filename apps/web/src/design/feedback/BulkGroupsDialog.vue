@@ -13,6 +13,8 @@ import Message from 'primevue/message';
 import SelectButton from 'primevue/selectbutton';
 import { MAX_BULK_GROUPS, type BulkMembershipOp } from '@openaduc/shared';
 import EmptyState from '../primitives/EmptyState.vue';
+import LicenseBadge from '../primitives/LicenseBadge.vue';
+import LicenseBadgeNote from '../primitives/LicenseBadgeNote.vue';
 import { MIN_GROUP_QUERY } from '../composables/useAddToGroup.js';
 import type { useBulkGroupMembership } from '../composables/useBulkGroupMembership.js';
 
@@ -118,6 +120,7 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
               <span class="bg-result-name">{{ g.name || g.distinguishedName }}</span>
               <span class="bg-result-dn mono">{{ g.distinguishedName }}</span>
             </div>
+            <LicenseBadge :group-id="g.id" />
             <span v-if="w.isChosen(g.id)" class="hint">chosen</span>
             <Button
               v-else
@@ -134,6 +137,7 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
           Showing {{ results.length }}. Refine your search.
         </p>
         <p v-if="full" class="hint">Choose at most {{ MAX_BULK_GROUPS }} groups at a time.</p>
+        <LicenseBadgeNote v-if="results.length > 0" />
       </div>
       <Message v-if="previewError" severity="error" :closable="false">
         Couldn’t work out what it would change: {{ previewError }}
@@ -156,7 +160,9 @@ const opOptions: { label: string; value: BulkMembershipOp }[] = [
         }}
       </p>
       <section v-for="line in lines" :key="line.group.id" class="bg-group">
-        <h3 class="bg-group-name">{{ line.group.name }}</h3>
+        <h3 class="bg-group-name">
+          {{ line.group.name }} <LicenseBadge :group-id="line.group.id" />
+        </h3>
         <Message v-if="line.blocked" severity="error" :closable="false" class="bg-warning">
           {{ line.blocked }}
         </Message>
