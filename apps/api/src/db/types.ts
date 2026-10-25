@@ -4,6 +4,12 @@
 // kysely-codegen; for now hand-rolled keeps PR review clear.
 
 import type { ColumnType, Generated, JSONColumnType } from 'kysely';
+import type {
+  BulkJobAction,
+  BulkJobPauseReason,
+  BulkJobRowStatus,
+  BulkJobStatus,
+} from '@openaduc/shared';
 
 // Common alias for `timestamp(useTz: true)`. Read as Date, write as ISO string or Date.
 type Timestamp = ColumnType<Date, Date | string, Date | string>;
@@ -192,6 +198,48 @@ export interface AuditEventsTable {
   before_json: JSONColumnType<Record<string, unknown>> | null;
   after_json: JSONColumnType<Record<string, unknown>> | null;
   metadata_json: JSONColumnType<Record<string, unknown>>;
+  // bigint, which pg returns as a string.
+  bulk_job_id: ColumnType<string | null, string | null | undefined, never>;
+}
+
+// One run of a bulk action; see migrations/20261023000005_bulk_jobs.ts.
+// Ids are bigints, which pg returns as strings.
+export interface BulkJobsTable {
+  id: Generated<string>;
+  provider_id: number;
+  action: BulkJobAction;
+  status: BulkJobStatus;
+  pause_reason: BulkJobPauseReason | null;
+  run_token: string | null;
+  actor_user_id: string;
+  actor_display_name: string | null;
+  actor_username: string;
+  admin_session_id: string;
+  source_ip: string | null;
+  user_agent: string | null;
+  correlation_id: string | null;
+  created_at: TimestampDefault;
+  heartbeat_at: TimestampDefault;
+  finished_at: Timestamp | null;
+}
+
+export interface BulkJobRowsTable {
+  id: Generated<string>;
+  job_id: string;
+  ordinal: number;
+  target_id: string;
+  target_dn: string | null;
+  target_name: string | null;
+  status: ColumnType<BulkJobRowStatus, BulkJobRowStatus | undefined, BulkJobRowStatus>;
+  run_token: string | null;
+  attempts: ColumnType<number, number | undefined, number>;
+  error_code: string | null;
+  error_message: string | null;
+  input_json: JSONColumnType<Record<string, unknown>> | null;
+  before_json: JSONColumnType<Record<string, unknown>> | null;
+  after_json: JSONColumnType<Record<string, unknown>> | null;
+  started_at: Timestamp | null;
+  finished_at: Timestamp | null;
 }
 
 export interface AdminSessionsTable {
@@ -397,6 +445,8 @@ export interface DB {
   user_group_memberships: UserGroupMembershipsTable;
   group_group_memberships: GroupGroupMembershipsTable;
   audit_events: AuditEventsTable;
+  bulk_jobs: BulkJobsTable;
+  bulk_job_rows: BulkJobRowsTable;
   admin_sessions: AdminSessionsTable;
   elevated_sessions: ElevatedSessionsTable;
   app_settings: AppSettingsTable;

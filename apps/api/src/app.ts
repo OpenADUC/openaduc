@@ -17,6 +17,7 @@ import csrfPlugin from './plugins/csrf.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerUserRoutes } from './routes/users.js';
+import { registerBulkJobRoutes } from './routes/bulkJobs.js';
 import { registerUserCreationRoutes } from './routes/userCreation.js';
 import { registerDeletedUserRoutes } from './routes/deletedUsers.js';
 import { registerAuditRoutes } from './routes/audit.js';
@@ -87,6 +88,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerSetupRoutes(app);
   await registerAuthRoutes(app);
   await registerUserRoutes(app);
+  await registerBulkJobRoutes(app);
   await registerUserCreationRoutes(app);
   await registerDeletedUserRoutes(app);
   await registerAuditRoutes(app);
