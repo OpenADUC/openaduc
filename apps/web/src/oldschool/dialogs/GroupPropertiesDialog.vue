@@ -4,37 +4,19 @@
      today, so editable fields are disabled. Selection and view actions
      still feel right. -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
 import WinTabs from '../primitives/WinTabs.vue';
 import WinIcon from '../primitives/WinIcon.vue';
-import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
 import { useOldSchool } from '../stores/useOldSchool.js';
-import type { GroupDetail } from '@openaduc/shared';
+import { useGroupRecord } from '../../design/composables/useDirectoryRecords.js';
 
 const props = defineProps<{ windowId: number; id: string }>();
 defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
 
-const group = ref<GroupDetail | null>(null);
-const loading = ref(true);
-const err = ref<string | null>(null);
-
-async function load(): Promise<void> {
-  loading.value = true;
-  err.value = null;
-  try {
-    const resp = await api.groups.get(props.id);
-    group.value = resp.group;
-  } catch (e) {
-    err.value = e instanceof ApiError ? e.message : (e as Error).message;
-  } finally {
-    loading.value = false;
-  }
-}
-onMounted(load);
-watch(() => store.dataVersion, load);
+const { record: group, loading, error: err, load } = useGroupRecord({ id: () => props.id });
+watch(() => store.dataVersion, load, { immediate: true });
 
 type TabId = 'general' | 'members' | 'memberOf' | 'managedBy';
 const tabs: { id: TabId; label: string }[] = [

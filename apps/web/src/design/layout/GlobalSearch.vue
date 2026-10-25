@@ -3,15 +3,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import type { DirectoryOu } from '@openaduc/shared';
-import { api } from '../../api/index.js';
-import { useAuthStore } from '../../stores/auth.js';
-import { latestRequest } from '../lib/latestRequest.js';
+import {
+  useDirectorySearch,
+  type SearchKind,
+  type SearchResults,
+} from '../composables/useDirectorySearch.js';
 import Avatar from '../primitives/Avatar.vue';
 
-type Kind = 'user' | 'group' | 'computer' | 'ou';
-
 interface ResultRow {
-  kind: Kind;
+  kind: SearchKind;
   id: string;
   primary: string;
   secondary: string | null;
@@ -21,15 +21,13 @@ interface ResultRow {
 const PER_KIND = 6;
 
 const router = useRouter();
-const auth = useAuthStore();
+const finder = useDirectorySearch({ pageSize: PER_KIND });
+const { loading } = finder;
 
 const open = ref(false);
 const query = ref('');
 const inputRef = ref<HTMLInputElement | null>(null);
 const resultsRef = ref<HTMLElement | null>(null);
-const loading = ref(false);
-const results = ref<ResultRow[]>([]);
-const failed = ref<string[]>([]);
 const highlight = ref(0);
 
 // The RDNs of a DN, unescaped: "OU=Sales\, East,DC=corp" → ["OU=Sales, East", "DC=corp"].
@@ -61,49 +59,18 @@ function ouPath(ou: DirectoryOu): string {
   return [domain, ...ous.reverse()].filter(Boolean).join(' / ');
 }
 
-// OUs have no search endpoint; the list is small enough to filter here.
-// Fetched once per open of the search panel.
-let ouList: Promise<DirectoryOu[]> | null = null;
-
-async function searchOus(text: string): Promise<ResultRow[]> {
-  ouList ??= api.ous.list().then((r) => r.ous);
-  let all: DirectoryOu[];
-  try {
-    all = await ouList;
-  } catch (err) {
-    ouList = null;
-    throw err;
-  }
-  const needle = text.trim().toLowerCase();
-  return all
-    .map((ou) => ({ ou, at: ou.name.toLowerCase().indexOf(needle) }))
-    .filter((m) => m.at >= 0)
-    .sort((a, b) => Number(a.at !== 0) - Number(b.at !== 0) || a.ou.name.localeCompare(b.ou.name))
-    .slice(0, PER_KIND)
-    .map<ResultRow>(({ ou }) => ({
-      kind: 'ou',
-      id: ou.distinguishedName,
-      primary: ou.name,
-      secondary: ouPath(ou) || null,
-      to: { path: '/browse', query: { ou: ou.distinguishedName } },
-    }));
-}
-
 // Display order of the result groups; arrow keys walk them in this order.
-// The OU list sits behind read:user on the API, like the OU browser.
 const KINDS: {
-  kind: Kind;
+  kind: SearchKind;
   label: string;
   icon?: string;
-  allowed: () => boolean;
-  search: (text: string) => Promise<ResultRow[]>;
+  rows: (found: SearchResults) => ResultRow[];
 }[] = [
   {
     kind: 'user',
     label: 'Users',
-    allowed: () => auth.hasCapability('read:user'),
-    search: async (q) =>
-      (await api.users.search({ q, pageSize: PER_KIND })).rows.map((u) => ({
+    rows: (found) =>
+      found.user.map((u) => ({
         kind: 'user',
         id: u.id,
         primary: u.displayName ?? u.samAccountName,
@@ -115,9 +82,8 @@ const KINDS: {
     kind: 'group',
     label: 'Groups',
     icon: 'pi-objects-column',
-    allowed: () => auth.hasCapability('read:group'),
-    search: async (q) =>
-      (await api.groups.search({ q, pageSize: PER_KIND })).rows.map((g) => ({
+    rows: (found) =>
+      found.group.map((g) => ({
         kind: 'group',
         id: g.id,
         primary: g.name ?? g.samAccountName ?? '(unnamed group)',
@@ -129,9 +95,8 @@ const KINDS: {
     kind: 'computer',
     label: 'Computers',
     icon: 'pi-desktop',
-    allowed: () => auth.hasCapability('read:computer'),
-    search: async (q) =>
-      (await api.computers.search({ q, pageSize: PER_KIND })).rows.map((c) => ({
+    rows: (found) =>
+      found.computer.map((c) => ({
         kind: 'computer',
         id: c.id,
         primary: c.name ?? c.samAccountName ?? '(unnamed computer)',
@@ -143,36 +108,33 @@ const KINDS: {
     kind: 'ou',
     label: 'OUs',
     icon: 'pi-folder',
-    allowed: () => auth.hasCapability('read:user'),
-    search: searchOus,
+    rows: (found) =>
+      found.ou.map((ou) => ({
+        kind: 'ou',
+        id: ou.distinguishedName,
+        primary: ou.name,
+        secondary: ouPath(ou) || null,
+        to: { path: '/browse', query: { ou: ou.distinguishedName } },
+      })),
   },
 ];
 
-const searches = latestRequest();
+const results = computed(() => KINDS.flatMap((k) => k.rows(finder.results.value)));
+const failed = computed(() =>
+  KINDS.filter((k) => finder.failed.value.includes(k.kind)).map((k) => k.label),
+);
+watch(results, () => (highlight.value = 0));
+
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
-async function runSearch(text: string): Promise<void> {
-  const isCurrent = searches.begin();
-  if (!text || text.trim().length < 2) {
-    results.value = [];
-    failed.value = [];
-    loading.value = false;
-    return;
-  }
-  loading.value = true;
-  const kinds = KINDS.filter((k) => k.allowed());
-  // One kind failing to load shouldn't hide the others.
-  const settled = await Promise.allSettled(kinds.map((k) => k.search(text)));
-  if (!isCurrent()) return;
-  results.value = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-  failed.value = kinds.filter((_, i) => settled[i]!.status === 'rejected').map((k) => k.label);
-  highlight.value = 0;
-  loading.value = false;
+function runSearch(text: string): void {
+  if (text.trim().length < 2) finder.clear();
+  else void finder.search(text);
 }
 
 watch(query, (next) => {
   if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => void runSearch(next), 200);
+  debounceTimer = setTimeout(() => runSearch(next), 200);
 });
 
 function focusInput(): void {
@@ -186,14 +148,10 @@ function openSearch(): void {
 
 function close(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
-  searches.begin(); // drop any search still in flight
+  finder.reset();
   open.value = false;
   query.value = '';
-  results.value = [];
-  failed.value = [];
-  loading.value = false;
   highlight.value = 0;
-  ouList = null;
 }
 
 function pick(row: ResultRow): void {

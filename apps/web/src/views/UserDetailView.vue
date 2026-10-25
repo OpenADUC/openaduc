@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 <script setup lang="ts">
 import { latestRequest } from '../design/lib/latestRequest.js';
-import { useDetailRecord } from '../design/composables/useDetailRecord.js';
+import { useUserRecord } from '../design/composables/useDirectoryRecords.js';
 import DetailLoading from '../design/primitives/DetailLoading.vue';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
@@ -329,11 +329,8 @@ const {
   load,
   refreshing,
   refresh,
-} = useDetailRecord<UserDetail>({
+} = useUserRecord({
   id: () => props.id,
-  fetch: async (id) => (await api.users.get(id)).user,
-  notFoundMessage: 'User not found',
-  failedMessage: 'Failed to load user',
   // The Overview activity card belongs to the previous user: clear it, and
   // abandon a request for it still in flight.
   beforeLoad: () => {
