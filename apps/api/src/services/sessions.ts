@@ -308,6 +308,46 @@ export class SessionsService {
       .execute();
     return rows.map((r) => r.id);
   }
+
+  /**
+   * End every elevated session still open, for the API's start: their
+   * passwords were cached in the previous process's memory, so none of
+   * them can write any more. Returns who held each, for the audit log.
+   */
+  async endOpenElevatedSessions(): Promise<
+    {
+      id: string;
+      adminSessionId: string;
+      actorUserId: string;
+      actorDisplayName: string | null;
+      directoryId: number;
+    }[]
+  > {
+    const now = new Date();
+    const rows = await this.db
+      .updateTable('elevated_sessions')
+      .from('admin_sessions')
+      .set({ revoked_at: now.toISOString() })
+      .whereRef('admin_sessions.id', '=', 'elevated_sessions.admin_session_id')
+      .where('elevated_sessions.revoked_at', 'is', null)
+      .where('elevated_sessions.idle_expires_at', '>', now)
+      .where('elevated_sessions.expires_at', '>', now)
+      .returning([
+        'elevated_sessions.id',
+        'elevated_sessions.admin_session_id',
+        'elevated_sessions.actor_user_id',
+        'admin_sessions.actor_display_name',
+        'admin_sessions.directory_id',
+      ])
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      adminSessionId: r.admin_session_id,
+      actorUserId: r.actor_user_id,
+      actorDisplayName: r.actor_display_name,
+      directoryId: Number(r.directory_id),
+    }));
+  }
 }
 
 /** How the current-session and step-up responses describe an elevated session. */

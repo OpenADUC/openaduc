@@ -15,6 +15,7 @@ import {
 } from '@openaduc/shared';
 import { computerWriteBlock } from '../lib/computerWrites.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
+import { rawScalarValue } from '../lib/rawAttributes.js';
 import { Unauthorized } from '../plugins/errorHandler.js';
 import { leafRdn, parentDn } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
@@ -130,6 +131,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
             'email',
             'enabled',
             'locked',
+            sql<unknown>`raw_attributes_json->'description'`.as('description'),
           ])
           .orderBy('display_name', 'asc')
           .limit(2000)
@@ -161,6 +163,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
             'sam_account_name',
             'dns_host_name',
             'operating_system',
+            'description',
             'enabled',
             sql<unknown>`raw_attributes_json->'userAccountControl'`.as('uac'),
             sql<unknown>`raw_attributes_json->'isCriticalSystemObject'`.as('critical'),
@@ -245,6 +248,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
           samAccountName: u.sam_account_name ?? '',
           displayName: u.display_name,
           email: u.email,
+          description: rawScalarValue(u.description),
           enabled: u.enabled,
           locked: u.locked,
         })),
@@ -260,6 +264,7 @@ export async function registerOuRoutes(app: FastifyInstance): Promise<void> {
           samAccountName: c.sam_account_name,
           dnsHostName: c.dns_host_name,
           operatingSystem: c.operating_system,
+          description: c.description,
           enabled: c.enabled,
           writeBlock: computerWriteBlock({
             userAccountControl: c.uac,

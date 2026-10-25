@@ -226,3 +226,94 @@ describe('elevated sessions end when idle', () => {
     ).toBe(200);
   });
 });
+
+// The cached password lives in process memory, so a restart takes it: the
+// elevated session must not be reported as live without it.
+describe('elevated sessions end when the API restarts', () => {
+  let api: TestApi;
+
+  beforeAll(async () => {
+    api = await startApi();
+    await configureDirectory(api);
+  });
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const elevated = async (client: TestClient) => {
+    const res = await client.get('/api/auth/me');
+    return {
+      active: res.json<{ actor: { elevated: { active: boolean } } }>().actor.elevated.active,
+      idleEndHeader: res.headers['x-elevated-idle-expires-at'],
+    };
+  };
+
+  /** Sign in and step up; returns the client and its elevated session's row. */
+  async function steppedUp(username: string) {
+    const client = api.client();
+    await client.signIn(api, username);
+    await client.stepUp();
+    const session = await api.app.db
+      .selectFrom('elevated_sessions')
+      .select(['id', 'actor_user_id'])
+      .orderBy('created_at', 'desc')
+      .executeTakeFirstOrThrow();
+    return { client, session };
+  }
+
+  it('ends every open elevated session at boot and audits why', async () => {
+    const { client: operator, session: operatorSession } = await steppedUp('oa.operator');
+    const { session: adminSession } = await steppedUp('oa.admin');
+    expect((await elevated(operator)).active).toBe(true);
+
+    await api.restart();
+
+    expect(await elevated(operator)).toEqual({ active: false, idleEndHeader: undefined });
+    const open = await api.app.db
+      .selectFrom('elevated_sessions')
+      .select('id')
+      .where('revoked_at', 'is', null)
+      .execute();
+    expect(open).toEqual([]);
+    const ended = await api.app.db
+      .selectFrom('audit_events')
+      .select([
+        'target_id',
+        'actor_user_id',
+        'actor_auth_method',
+        'result',
+        'metadata_json',
+        'correlation_id',
+      ])
+      .where('action', '=', 'auth.stepup.revoke')
+      .where('target_id', 'in', [operatorSession.id, adminSession.id])
+      .execute();
+    expect(ended).toHaveLength(2);
+    for (const session of [operatorSession, adminSession]) {
+      expect(ended.find((e) => e.target_id === session.id)).toMatchObject({
+        actor_user_id: session.actor_user_id,
+        actor_auth_method: 'system',
+        result: 'success',
+        metadata_json: { reason: 'api_restart' },
+      });
+    }
+    // One boot, one correlation id, so the log groups them.
+    expect(ended[0]!.correlation_id).toEqual(expect.any(String));
+    expect(ended[1]!.correlation_id).toBe(ended[0]!.correlation_id);
+
+    const write = await operator.patch('/api/users/00000000-0000-0000-0000-000000000000', {});
+    expect(write.json()).toMatchObject({ error: { code: 'step_up_required' } });
+    await operator.stepUp();
+    expect((await elevated(operator)).active).toBe(true);
+  });
+
+  it('reports an elevated session whose password isn’t cached as not active', async () => {
+    const operator = api.client();
+    await operator.signIn(api, 'oa.operator');
+    await operator.stepUp();
+    const open = await api.app.db.selectFrom('elevated_sessions').select('id').execute();
+    api.app.services.credentialCache.deleteMany(open.map((e) => e.id));
+
+    expect(await elevated(operator)).toEqual({ active: false, idleEndHeader: undefined });
+  });
+});

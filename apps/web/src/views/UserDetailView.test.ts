@@ -469,6 +469,31 @@ describe('a failed change', () => {
   });
 });
 
+describe('the Groups tab of a user in no groups', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('says so, without suggesting a sync', async () => {
+    api.users.get.mockResolvedValue({ user: aUserDetail({ groupMemberships: [] }) });
+    const { page } = await openTab('groups', ['read:user'], false);
+
+    expect(page.get('.ds-empty').text()).toContain('Not a member of any groups');
+    expect(page.get('.ds-empty').text()).not.toContain('sync');
+  });
+
+  it('says the cache has none, and suggests a sync, when it’s stale', async () => {
+    api.users.get.mockResolvedValue({
+      user: aUserDetail({
+        groupMemberships: [],
+        freshness: { cachedAt: null, liveRefreshedAt: null, isStale: true },
+      }),
+    });
+    const { page } = await openTab('groups', ['read:user'], false);
+
+    expect(page.get('.ds-empty').text()).toContain('No groups in the cache');
+    expect(page.get('.ds-empty').text()).toContain('Run a sync if this seems wrong');
+  });
+});
+
 describe('why the user can’t sign in', () => {
   const HOUR_AGO = new Date(Date.now() - 3_600_000).toISOString();
   const ALL_FIXES = [

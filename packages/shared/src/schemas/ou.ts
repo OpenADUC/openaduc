@@ -86,6 +86,7 @@ export const ouUserRowSchema = z.object({
   samAccountName: z.string(),
   displayName: z.string().nullable(),
   email: z.string().nullable(),
+  description: z.string().nullable(),
   enabled: z.boolean(),
   locked: z.boolean(),
 });
@@ -105,6 +106,7 @@ export const ouComputerRowSchema = z.object({
   samAccountName: z.string().nullable(),
   dnsHostName: z.string().nullable(),
   operatingSystem: z.string().nullable(),
+  description: z.string().nullable(),
   enabled: z.boolean(),
   writeBlock: computerWriteBlockSchema.nullable(),
 });

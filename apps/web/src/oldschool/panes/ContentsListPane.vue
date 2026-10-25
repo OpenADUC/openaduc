@@ -1,16 +1,18 @@
 <!-- SPDX-License-Identifier: BUSL-1.1
      Right pane: classic ADUC list view.
 
-     Renders the contents of whatever container is selected in the tree.
-     Columns mirror ADUC's default Users-in-OU view: Name | Type |
+     Renders the contents of whatever container is selected in the tree:
+     its sub-OUs and containers first, as ADUC lists them, then its
+     objects. Columns mirror ADUC's default Users-in-OU view: Name | Type |
      Description. Header click toggles sort direction; row click
-     selects; double-click opens Properties; right-click pops the
-     context menu with the canonical action list.
+     selects; double-click opens a container or an object's Properties;
+     right-click pops the context menu with the canonical action list.
 -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useOuContents } from '../../design/composables/useOuContents.js';
-import { useOldSchool, type SelectedRow } from '../stores/useOldSchool.js';
+import { useOldSchool, type SelectedKind, type SelectedRow } from '../stores/useOldSchool.js';
+import { pathTo, type ConsoleNode } from '../consoleTree.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { useToast } from 'primevue/usetoast';
 import { undoable } from '../../design/feedback/undoToast.js';
@@ -49,12 +51,12 @@ watch(
 
 // --- Row model --------------------------------------------------------
 //
-// Flatten users/groups/computers into a single Row[] so the table can
-// sort across them. The Type column reads "User" / "Security Group" /
-// "Computer" — same labels MMC uses.
+// Flatten child containers and users/groups/computers into a single
+// Row[] so the table can sort across them. The Type column uses the
+// labels MMC does.
 
 interface Row {
-  kind: 'user' | 'group' | 'computer';
+  kind: 'user' | 'group' | 'computer' | 'container';
   id: string;
   name: string;
   type: string;
@@ -65,17 +67,43 @@ interface Row {
   locked?: boolean;
   /** A domain controller or critical computer, which OpenADUC won't disable, reset or move. */
   protected?: boolean;
+  /** The tree's node, for a container. */
+  node?: ConsoleNode;
 }
+
+const CONTAINER_TYPES: Partial<Record<SelectedKind, string>> = {
+  ou: 'Organizational Unit',
+  container: 'Container',
+  builtin: 'builtinDomain',
+};
+
+const childContainers = computed<ConsoleNode[]>(() => {
+  const dn = store.selectedNode.dn;
+  return (dn ? pathTo(store.consoleTree, dn)?.at(-1)?.children : undefined) ?? [];
+});
 
 const rows = computed<Row[]>(() => {
   const out: Row[] = [];
+  for (const n of childContainers.value) {
+    out.push({
+      kind: 'container',
+      id: n.key,
+      name: n.label,
+      type: CONTAINER_TYPES[n.kind] ?? 'Container',
+      description: n.description ?? '',
+      icon: n.icon,
+      node: n,
+    });
+  }
+  // While loading, `contents` still holds the previous container's objects.
+  if (loading.value) return out;
   for (const u of contents.value.users) {
     out.push({
       kind: 'user',
       id: u.id,
       name: u.displayName || u.samAccountName,
       type: 'User',
-      description: u.email ?? '',
+      description: u.description ?? '',
       icon: u.locked ? 'user-locked' : u.enabled ? 'user' : 'user-disabled',
       disabled: !u.enabled,
       locked: u.locked,
@@ -97,7 +125,7 @@ const rows = computed<Row[]>(() => {
       id: c.id,
       name: c.name ?? '(unnamed)',
       type: 'Computer',
-      description: c.operatingSystem ?? c.dnsHostName ?? '',
+      description: c.description ?? '',
       icon: c.enabled ? 'computer' : 'computer-disabled',
       disabled: !c.enabled,
       protected: c.writeBlock !== null,
@@ -112,7 +140,10 @@ const sortKey = ref<SortKey>('name');
 const sortDir = ref<'asc' | 'desc'>('asc');
 
 const sorted = computed<Row[]>(() => {
+  // Containers stay above objects whichever way the list is sorted.
   const cmp = (a: Row, b: Row): number => {
+    const ac = a.kind === 'container';
+    if (ac !== (b.kind === 'container')) return ac ? -1 : 1;
     const av = (a[sortKey.value] ?? '').toString();
     const bv = (b[sortKey.value] ?? '').toString();
     const r = av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' });
@@ -163,8 +194,13 @@ function clickRow(r: Row, e: MouseEvent): void {
 }
 
 function dblClickRow(r: Row): void {
+  if (r.node) return openContainer(r.node);
   store.setSelection([selectionRowFromRow(r)]);
   openProperties(r);
+}
+
+function openContainer(n: ConsoleNode): void {
+  store.selectNode({ kind: n.kind, dn: n.dn, label: n.label });
 }
 
 function openProperties(r: Row): void {
@@ -180,7 +216,8 @@ function buildItems(r: Row): CtxItem[] {
   if (r.kind === 'user') return userItems(r);
   if (r.kind === 'group') return groupItems(r);
   if (r.kind === 'computer') return computerItems(r);
-  return [];
+  const node = r.node!;
+  return [{ label: 'Open', bold: true, onSelect: () => openContainer(node) }];
 }
 
 const can = (capability: string): boolean => auth.hasCapability(capability);
@@ -378,23 +415,13 @@ const headerLabel = computed(() => store.selectedNode.label);
   <div class="os-list-pane">
     <div class="os-pane-header">{{ headerLabel }}</div>
 
-    <div v-if="loading" style="padding: 8px">Loading…</div>
-    <div v-else-if="errorMsg" class="os-error" style="padding: 8px">{{ errorMsg }}</div>
-    <div
-      v-else-if="sorted.length === 0 && store.selectedNode.kind !== 'root'"
-      class="os-list-empty"
-    >
-      There are no items to show in this view.
-    </div>
-    <div
-      v-else-if="store.selectedNode.kind === 'root' || store.selectedNode.kind === 'savedQueries'"
-      class="os-list-empty"
-    >
+    <div v-if="store.selectedNode.kind === 'root'" class="os-list-empty">
       Select a container in the console tree to view its contents.
     </div>
 
+    <!-- The containers come from the tree, so they show while the objects load or fail. -->
     <div v-else class="os-list">
-      <table class="os-list-table">
+      <table v-if="sorted.length > 0" class="os-list-table">
         <thead>
           <tr>
             <th @click="clickHeader('name')">
@@ -436,6 +463,11 @@ const headerLabel = computed(() => store.selectedNode.label);
           </tr>
         </tbody>
       </table>
+      <div v-if="loading" class="os-list-status">Loading…</div>
+      <div v-else-if="errorMsg" class="os-error os-list-status">{{ errorMsg }}</div>
+      <div v-else-if="sorted.length === 0" class="os-list-empty">
+        There are no items to show in this view.
+      </div>
     </div>
 
     <WinContextMenu v-if="ctx" :x="ctx.x" :y="ctx.y" :items="ctx.items" @close="ctx = null" />

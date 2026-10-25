@@ -9,6 +9,7 @@ import { ApiError } from '../../api/client.js';
 const STAFF = 'OU=Staff,DC=corp,DC=example';
 const api = {
   ous: {
+    list: vi.fn(async () => ({ ous: [] as unknown[] })),
     contents: vi.fn(async () => ({
       users: [
         {
@@ -16,6 +17,7 @@ const api = {
           samAccountName: 'jdoe',
           displayName: 'Jane Doe',
           email: null,
+          description: null,
           enabled: true,
           locked: false,
         },
@@ -227,5 +229,132 @@ describe('a computer in the Old School contents list', () => {
     for (const label of ['Disable Account', 'Reset Account', 'Move…']) {
       expect(items.find((i) => i.text() === label)?.classes(), label).toContain('disabled');
     }
+  });
+});
+
+describe('a container in the Old School contents list', () => {
+  const ou = (name: string, parent: string, description: string | null = null) => ({
+    distinguishedName: `OU=${name},${parent}`,
+    name,
+    parentDn: parent,
+    description,
+    stale: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.ous.list.mockResolvedValue({
+      ous: [
+        ou('Staff', 'DC=corp,DC=example'),
+        ou('Interns', STAFF, 'Summer intake'),
+        ou('Contractors', STAFF),
+      ],
+    });
+  });
+
+  async function openStaffTree() {
+    const opened = await openStaff();
+    await opened.oldSchool.loadTree();
+    await flushPromises();
+    return opened;
+  }
+
+  const listed = (pane: Awaited<ReturnType<typeof openStaff>>['pane']) =>
+    pane.findAll('.os-list-row').map((r) => r.findAll('td').map((td) => td.text()));
+
+  it('lists its sub-OUs above its objects, with their descriptions', async () => {
+    const { pane } = await openStaffTree();
+
+    expect(listed(pane)).toEqual([
+      ['Contractors', 'Organizational Unit', ''],
+      ['Interns', 'Organizational Unit', 'Summer intake'],
+      ['Jane Doe', 'User', ''],
+    ]);
+    await pane.findAll('th')[0]!.trigger('click');
+    expect(listed(pane).map(([name]) => name)).toEqual(['Interns', 'Contractors', 'Jane Doe']);
+  });
+
+  it('opens a sub-OU on double-click', async () => {
+    const { pane, oldSchool } = await openStaffTree();
+
+    await pane.findAll('.os-list-row')[1]!.trigger('dblclick');
+
+    expect(oldSchool.selectedNode).toEqual({
+      kind: 'ou',
+      dn: `OU=Interns,${STAFF}`,
+      label: 'Interns',
+    });
+  });
+
+  it('lists its sub-OUs while its objects load, and after they fail', async () => {
+    api.ous.contents.mockReturnValueOnce(new Promise(() => {}) as never);
+    const { pane } = await openStaffTree();
+
+    expect(listed(pane).map(([name]) => name)).toEqual(['Contractors', 'Interns']);
+    expect(pane.get('.os-list-status').text()).toBe('Loading…');
+
+    api.ous.contents.mockRejectedValueOnce(
+      new ApiError(503, 'directory_unavailable', 'AD is down'),
+    );
+    const { pane: failed } = await openStaffTree();
+
+    expect(listed(failed).map(([name]) => name)).toEqual(['Contractors', 'Interns']);
+    expect(failed.get('.os-error').text()).toBe('AD is down');
+  });
+
+  it('lists the domain’s containers and top-level OUs', async () => {
+    const { pane, oldSchool } = await openStaffTree();
+
+    oldSchool.selectNode({ kind: 'domain', dn: 'DC=corp,DC=example', label: 'corp.example' });
+    await flushPromises();
+
+    expect(listed(pane).map(([name, type]) => `${name}: ${type}`)).toEqual([
+      'Builtin: builtinDomain',
+      'Computers: Container',
+      'ForeignSecurityPrincipals: Container',
+      'Managed Service Accounts: Container',
+      'Staff: Organizational Unit',
+      'Users: Container',
+      'Jane Doe: User',
+    ]);
+  });
+});
+
+describe('the Description column', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows an object’s description, not its email', async () => {
+    api.ous.contents.mockResolvedValueOnce({
+      users: [
+        {
+          id: 'u1',
+          samAccountName: 'jdoe',
+          displayName: 'Jane Doe',
+          email: 'jane@corp.example',
+          description: 'Front desk',
+          enabled: true,
+          locked: false,
+        },
+      ],
+      groups: [],
+      computers: [
+        {
+          id: 'c1',
+          name: 'WS01',
+          samAccountName: 'WS01$',
+          dnsHostName: 'ws01.corp.example',
+          operatingSystem: 'Windows 11 Pro',
+          description: 'Reception PC',
+          enabled: true,
+          writeBlock: null,
+        },
+      ],
+    } as never);
+    const { pane } = await openStaff();
+
+    expect(pane.findAll('.os-list-row').map((r) => r.findAll('td')[2]!.text())).toEqual([
+      'Front desk',
+      'Reception PC',
+    ]);
   });
 });
