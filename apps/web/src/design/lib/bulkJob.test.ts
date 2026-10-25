@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import type { AuditBulkSummary, BulkJobCounts } from '@openaduc/shared';
+import type { AuditBulkSummary, BulkAttributeField, BulkJobCounts } from '@openaduc/shared';
 import { describeBulkEntry } from './bulkJob.js';
 
 const counts = (c: Partial<BulkJobCounts>): BulkJobCounts => ({
@@ -69,6 +69,27 @@ describe('a bulk job in the audit log', () => {
         null,
       ).title,
     ).toBe('Bulk remove from Sales and 2 other groups: 42 users');
+  });
+
+  it('names the fields an edit changed', () => {
+    const attributes = (...fields: BulkAttributeField[]) => ({
+      attributes: fields.map((field) => ({ field, value: null })),
+    });
+    expect(
+      describeBulkEntry(
+        summary({ action: 'user.update', subject: attributes('department', 'title') }),
+        'Jane',
+      ).title,
+    ).toBe('Bulk edit (department and title) by Jane: 42 users');
+    expect(
+      describeBulkEntry(
+        summary({
+          action: 'user.update',
+          subject: attributes('department', 'physicalDeliveryOfficeName', 'l', 'country'),
+        }),
+        null,
+      ).title,
+    ).toBe('Bulk edit (department and 3 more fields): 42 users');
   });
 
   it('keeps its heading once the job’s record is gone', () => {

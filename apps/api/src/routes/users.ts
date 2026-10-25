@@ -5,6 +5,8 @@ import {
   accountExpiryRequestSchema,
   bulkGroupMembershipPreviewRequestSchema,
   bulkGroupMembershipPreviewSchema,
+  bulkUserAttributesPreviewRequestSchema,
+  bulkUserAttributesPreviewSchema,
   csvRow,
   moveRequestSchema,
   resetPasswordRequestSchema,
@@ -18,6 +20,7 @@ import {
   userSearchResponseSchema,
   userUpdateRequestSchema,
   type BulkGroupMembershipPreview,
+  type BulkUserAttributesPreview,
   type RecycleBinStatus,
   type UserDeletePreflightResponse,
   type UserDetail,
@@ -32,9 +35,12 @@ import { lookupsFor, matchEntries } from '../lib/userMatch.js';
 import { BadRequest, NotFound, StepUpRequired, Unauthorized } from '../plugins/errorHandler.js';
 import { StepUpBindFailedError, type DirectoryProvider } from '../providers/types.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
+import { previewAttributes } from '../services/bulkAttributes.js';
+import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { findCachedUser } from '../services/userCache.js';
+import { UserAttributeRefusal, writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
   DISABLE_USER,
   ENABLE_USER,
@@ -849,32 +855,18 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       const beforeRefresh = await app.services.userLiveRefresh.refresh(provider, id);
       if (!beforeRefresh) throw NotFound('user not found');
 
-      const result = await withAudit(
-        app.services.audit,
-        {
-          ...auditContextFromRequest(req),
-          action: 'user.update',
-          actorAuthMethod: 'ad-password',
-          providerId: provider.id,
-          targetType: 'user',
-          targetId: beforeRefresh.user.objectGuid,
-          targetDn: beforeRefresh.user.distinguishedName,
-          metadata: { fields: Object.keys(body.patch) },
-        },
-        async () => {
-          const r = await provider.updateUserAttributes(
-            { kind: 'objectGuid', value: id },
-            body.patch,
-            ctx(actor, req),
-          );
-          return {
-            ok: r.ok,
-            before: r.before ?? null,
-            after: r.after ?? null,
-            errorCode: r.reason ?? null,
-          };
-        },
-      );
+      const result = await writeUserAttributes(
+        app.services,
+        provider,
+        beforeRefresh.user,
+        body.patch,
+        ctx(actor, req),
+        auditContextFromRequest(req),
+      ).catch((err: unknown) => {
+        if (err instanceof UserAttributeRefusal)
+          throw app.httpErrors.unprocessableEntity(err.message);
+        throw err;
+      });
 
       if (!result.ok) {
         if (result.errorCode === 'permission_denied') {
@@ -882,9 +874,6 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         }
         throw app.httpErrors.badGateway(`update failed: ${result.errorCode ?? 'unknown'}`);
       }
-
-      // Refresh cache so subsequent reads show the new values.
-      await app.services.userLiveRefresh.refresh(provider, id);
 
       return {
         ok: true,
@@ -1090,6 +1079,20 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       );
       if (!preview) throw NotFound('group not found');
       return bulkGroupMembershipPreviewSchema.parse(preview);
+    },
+  });
+
+  // ---- POST /api/users/bulk-update/preview ------------------------------
+  // What editing the selected users' attributes would change, and each
+  // field's values across them, from the cache, before the job starts.
+  app.post('/api/users/bulk-update/preview', {
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'caller' } },
+    handler: async (req): Promise<BulkUserAttributesPreview> => {
+      const body = bulkUserAttributesPreviewRequestSchema.parse(req.body);
+      const preview = await previewAttributes(app.db, req.directoryId!, body).catch(
+        refuseBulkRequest,
+      );
+      return bulkUserAttributesPreviewSchema.parse(preview);
     },
   });
 

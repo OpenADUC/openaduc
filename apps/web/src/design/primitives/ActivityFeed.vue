@@ -88,8 +88,11 @@ const items = computed<FeedItem[]>(() =>
 
 function detailFor(e: AuditEventRow): string {
   const md = (e.metadata ?? {}) as Record<string, unknown>;
-  if ((e.action === 'user.update' || e.action === 'user.rename') && md.fields) {
-    return `Fields: ${Array.isArray(md.fields) ? md.fields.join(', ') : String(md.fields)}`;
+  if (e.action === 'user.update' && md.unchanged === true)
+    return 'Already as asked; nothing changed';
+  if (e.action === 'user.update' || e.action === 'user.rename') {
+    const fields = Array.isArray(md.fields) ? md.fields : md.fields ? [md.fields] : [];
+    if (fields.length > 0) return `Fields: ${fields.map(String).join(', ')}`;
   }
   if (e.action === 'user.group.add' || e.action === 'user.group.remove') {
     if (md.groupName) return `Group: ${String(md.groupName)}`;

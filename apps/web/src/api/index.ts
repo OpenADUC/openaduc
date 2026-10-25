@@ -13,6 +13,9 @@ import type {
   BulkJobRow,
   BulkJobRowStatus,
   BulkMembershipOp,
+  BulkUserAttributesPreview,
+  BulkUserAttributesPreviewRequest,
+  BulkUserAttributesRequest,
   ComputerDetail,
   ComputerSearchQuery,
   ComputerSearchResponse,
@@ -525,6 +528,15 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
+    /** What editing these users' attributes would change, and their current values; nothing is written. */
+    previewAttributeEdit(
+      body: BulkUserAttributesPreviewRequest,
+    ): Promise<BulkUserAttributesPreview> {
+      return apiFetch('/users/bulk-update/preview', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
     match(entries: string[]): Promise<UserMatchResponse> {
       return apiFetch('/users/match', {
         method: 'POST',
@@ -678,7 +690,7 @@ export const api = {
   },
   bulkJobs: {
     start(
-      action: Exclude<BulkJobAction, 'user.group.add' | 'user.group.remove'>,
+      action: Exclude<BulkJobAction, 'user.group.add' | 'user.group.remove' | 'user.update'>,
       ids: string[],
     ): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath(action), {
@@ -691,6 +703,12 @@ export const api = {
       ...body
     }: { op: BulkMembershipOp } & BulkGroupMembershipRequest): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath(`user.group.${op}`), {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    startAttributeEdit(body: BulkUserAttributesRequest): Promise<{ job: BulkJob }> {
+      return apiFetch(bulkJobPath('user.update'), {
         method: 'POST',
         body: JSON.stringify(body),
       });
