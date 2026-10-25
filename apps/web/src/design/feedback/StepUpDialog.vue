@@ -11,8 +11,8 @@ import { ELEVATED_SESSION_LIMITS } from '@openaduc/shared';
 
 const props = defineProps<{
   visible: boolean;
-  // Optional context shown above the password field — populated when
-  // the server refused a write because the elevated session was gone.
+  /** Why the prompt is here, when the operator couldn't know: the server
+   *  refused a write, or the write says what it needs. */
   reason?: string | null;
 }>();
 const emit = defineEmits<{
@@ -76,13 +76,14 @@ function onCancel(): void {
     :visible="visible"
     @update:visible="(v) => emit('update:visible', v)"
     modal
+    class="ds-sheet"
     header="Confirm your identity"
     :style="{ width: '26rem' }"
     :closable="!submitting"
   >
-    <Message v-if="reason" severity="warn" :closable="false" class="dialog-reason">
-      {{ reason }}
-    </Message>
+    <!-- Not a Message: its enter animation grows it from zero height, which
+         left the text clipped in the opening dialog. -->
+    <p v-if="reason" class="dialog-reason" role="alert">{{ reason }}</p>
     <p class="dialog-prose">
       Re-enter your AD password to unlock writes. The server uses it to bind as you when applying
       changes. Writes stay unlocked until you've been idle a while or reach a time limit (by default
@@ -123,7 +124,13 @@ function onCancel(): void {
 }
 
 .dialog-reason {
-  margin-bottom: 12px !important;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in oklab, var(--amber) 22%, transparent);
+  border-radius: 6px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 13px;
 }
 
 .dialog-error {

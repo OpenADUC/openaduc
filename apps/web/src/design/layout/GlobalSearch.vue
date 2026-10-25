@@ -10,6 +10,7 @@ import {
   type SearchResults,
 } from '../composables/useDirectorySearch.js';
 import { useAccountActions } from '../composables/useAccountActions.js';
+import { useResponsive } from '../composables/useResponsive.js';
 import { useResultKeys } from '../composables/useResultKeys.js';
 import type { ResetOutcome } from '../composables/usePasswordReset.js';
 import AppToast from '../feedback/AppToast.vue';
@@ -56,6 +57,7 @@ const toast = useToast();
 const finder = useDirectorySearch({ pageSize: PER_KIND });
 const { loading } = finder;
 const can = (capability: Capability) => auth.hasCapability(capability);
+const { isMobile } = useResponsive();
 
 const open = ref(false);
 const query = ref('');
@@ -194,8 +196,10 @@ const { highlight, actionAt, highlighted, selectedAction } = keys;
 const waitNotice = ref<string | null>(null);
 watch(results, () => (waitNotice.value = null));
 
+// On a phone nothing hovers, and tapping a row opens it, so every row
+// shows its actions.
 function showsActions(row: ResultRow): boolean {
-  return verb.value !== null || isHighlighted(row);
+  return verb.value !== null || isMobile.value || isHighlighted(row);
 }
 
 // Why a user found by a verb isn't offered it, e.g. Unlock for an account
@@ -641,6 +645,7 @@ const announcement = computed(() => {
 
 .gs-input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: 0;
   outline: none;
@@ -660,6 +665,7 @@ const announcement = computed(() => {
 }
 
 .gs-close {
+  flex-shrink: 0;
   background: transparent;
   border: 0;
   color: var(--text-3);
@@ -847,21 +853,67 @@ const announcement = computed(() => {
 
 @media (max-width: 767.98px) {
   .gs-trigger {
-    padding: 6px 8px;
+    min-height: var(--tap-target);
+    padding: 6px 12px;
   }
 
   .gs-trigger-kbd {
     display: none;
   }
 
+  /* Within what the on-screen keyboard leaves, the search box at the top
+     of it even when Safari has panned down (useVisualViewport). */
   .gs-overlay {
-    padding: 0;
+    padding: var(--visual-viewport-top, 0px) 0 var(--keyboard-inset, 0px);
   }
 
   .gs-panel {
-    max-height: 100vh;
+    align-self: stretch;
+    max-height: none;
     border-radius: 0;
-    height: 100vh;
+  }
+
+  .gs-input-row {
+    padding: 4px 4px 4px 16px;
+  }
+
+  .gs-input {
+    min-height: var(--tap-target);
+  }
+
+  .gs-close {
+    width: var(--tap-target);
+    height: var(--tap-target);
+  }
+
+  .gs-row {
+    flex-wrap: wrap;
+    min-height: 48px;
+  }
+
+  .gs-actions {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-left: 40px;
+  }
+
+  .gs-action {
+    min-height: var(--tap-target);
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  /* Under the name, leaving the arrow beside it. */
+  .gs-row-note {
+    order: 1;
+    flex: 1 0 100%;
+    padding-left: 40px;
+    white-space: normal;
+  }
+
+  .gs-foot {
+    display: none;
   }
 }
 </style>

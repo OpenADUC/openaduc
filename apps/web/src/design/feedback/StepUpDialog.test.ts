@@ -10,11 +10,11 @@ vi.mock('../../api/index.js', () => ({ api }));
 
 const { default: StepUpDialog } = await import('./StepUpDialog.vue');
 
-async function prompt() {
+async function prompt(reason: string | null = null) {
   const pinia = createPinia();
   setActivePinia(pinia);
   const dialog = mount(StepUpDialog, {
-    props: { visible: true, reason: null },
+    props: { visible: true, reason },
     global: { plugins: [pinia, PrimeVue], stubs: { teleport: true } },
   });
   await flushPromises();
@@ -43,5 +43,21 @@ describe('the step-up prompt', () => {
     await input.trigger('keydown', { key: 'Enter', keyCode: 229 });
     await flushPromises();
     expect(dialog.text()).not.toContain('Password required');
+  });
+
+  it('says why it opened, in full, when given a reason', async () => {
+    const { dialog } = await prompt(
+      'Writes were locked again — confirm your password to continue.',
+    );
+
+    expect(dialog.get('.dialog-reason').text()).toBe(
+      'Writes were locked again — confirm your password to continue.',
+    );
+  });
+
+  it('says nothing more when it has no reason to', async () => {
+    const { dialog } = await prompt();
+
+    expect(dialog.find('.dialog-reason').exists()).toBe(false);
   });
 });

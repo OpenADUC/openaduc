@@ -8,6 +8,7 @@ import StepUpDialog from '../feedback/StepUpDialog.vue';
 import OldSchoolMmc from '../../oldschool/OldSchoolMmc.vue';
 import ShortcutSheet from './ShortcutSheet.vue';
 import { useAuthStore } from '../../stores/auth.js';
+import { useVisualViewport } from '../composables/useVisualViewport.js';
 import { useResponsive } from '../composables/useResponsive.js';
 import { useThemeStore } from '../stores/useTheme.js';
 
@@ -16,6 +17,7 @@ const showShell = computed(() => route.meta.layout !== 'bare');
 const auth = useAuthStore();
 const theme = useThemeStore();
 const { isMobile } = useResponsive();
+useVisualViewport();
 
 // Old School takes over the entire browser window — sidebar, topbar, and
 // page content all hide behind the MMC overlay. The operator returns to
@@ -54,9 +56,7 @@ watch(
 // Global StepUpDialog. Mounted once at the shell level so any view (or
 // the API client itself, on a 'step_up_required' response) can flip
 // `auth.stepUpRequested` to open the dialog without each view needing
-// to own its own copy. The reason field is populated when the server
-// refused a write (e.g. cached step-up password expired); it's null when
-// a write prompted step-up up front.
+// to own its own copy. The auth store supplies the reason, if any.
 function onDialogVisibility(open: boolean): void {
   // Closing after a successful step-up finds nothing left to cancel; the
   // cancel/X-close case drops the queued action so it can't fire on an

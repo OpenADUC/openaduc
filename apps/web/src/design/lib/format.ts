@@ -2,6 +2,11 @@
 // Small formatting helpers used across the design layer. Kept dependency-free
 // so they can be unit-tested without DOM/PrimeVue overhead.
 
+/** The text with its first letter upper-cased: "user" reads "User". */
+export function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function fmtRelative(
   input: string | Date | null | undefined,
   now: Date = new Date(),

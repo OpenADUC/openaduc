@@ -30,3 +30,11 @@ export const ELEVATED_SESSION_LIMITS: {
   idleTimeout: { key: 'stepup.idle_timeout_minutes', default: 15, min: 1, max: 480 },
   absoluteLifetime: { key: 'stepup.absolute_lifetime_minutes', default: 240, min: 1, max: 1440 },
 };
+
+/**
+ * Why the API answered a write `step_up_required`, as its error's
+ * `details.reason`: the operator has no elevated session (it ended, or
+ * never began), or the directory refused the password it held.
+ */
+export const STEP_UP_REQUIRED_REASONS = ['not_elevated', 'password_rejected'] as const;
+export type StepUpRequiredReason = (typeof STEP_UP_REQUIRED_REASONS)[number];

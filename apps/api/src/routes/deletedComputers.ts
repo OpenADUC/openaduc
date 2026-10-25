@@ -57,7 +57,7 @@ export async function registerDeletedComputerRoutes(app: FastifyInstance): Promi
         all = await provider.searchDeletedComputers(q.q ? { text: q.q } : {}, ctx);
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired('the directory rejected your step-up password — step up again');
+          throw StepUpRequired('password_rejected');
         }
         throw err;
       }
@@ -110,7 +110,7 @@ export async function registerDeletedComputerRoutes(app: FastifyInstance): Promi
         computer = await provider.getDeletedComputer(guid, ctxFromReq(req));
       } catch (err) {
         if (err instanceof StepUpBindFailedError) {
-          throw StepUpRequired('the directory rejected your step-up password — step up again');
+          throw StepUpRequired('password_rejected');
         }
         throw err;
       }
