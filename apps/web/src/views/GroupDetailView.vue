@@ -13,7 +13,6 @@ import Message from 'primevue/message';
 import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { api } from '../api/index.js';
-import { ApiError } from '../api/client.js';
 import { useAuthStore } from '../stores/auth.js';
 import type { GroupDetail, GroupMember, UserSummary } from '@openaduc/shared';
 import LiveBadge from '../design/primitives/LiveBadge.vue';
@@ -23,6 +22,7 @@ import Avatar from '../design/primitives/Avatar.vue';
 import EmptyState from '../design/primitives/EmptyState.vue';
 import { useStickyHeader } from './_detail/useStickyHeader';
 import { useRecordCrumb } from '../design/layout/recordCrumb.js';
+import { membershipOf, useGroupMembership } from '../design/composables/useGroupMembership.js';
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -44,9 +44,34 @@ const addLoading = ref(false);
 const addSelected = ref<UserSummary | null>(null);
 let addTimer: ReturnType<typeof setTimeout> | undefined;
 
-// Tracks which row is busy for the per-row spinner.
-const writeRunning = ref(false);
-const busyMemberId = ref<string | null>(null);
+const {
+  pending,
+  add: addMembership,
+  remove: removeMembership,
+} = useGroupMembership({
+  onChanged: async (change, m) => {
+    if (change === 'add') closeAdd();
+    toast.add({
+      severity: 'success',
+      summary: change === 'add' ? 'Added to group' : 'Removed from group',
+      detail:
+        change === 'add' ? `${m.userLabel} → ${m.groupLabel}` : `${m.userLabel} ← ${m.groupLabel}`,
+      life: 3000,
+    });
+    await load();
+  },
+  onFailed: (change, _m, message) =>
+    toast.add({
+      severity: 'error',
+      summary: change === 'add' ? 'Add failed' : 'Remove failed',
+      detail: message,
+      life: 6000,
+    }),
+});
+const adding = computed(() => pending.value?.change === 'add');
+const removingMemberId = computed(() =>
+  pending.value?.change === 'remove' ? pending.value.membership.userId : null,
+);
 
 const canManage = computed(() => auth.hasCapability('write:group.membership'));
 const memberCount = computed(() => group.value?.members.length ?? 0);
@@ -112,61 +137,21 @@ function selectAddCandidate(u: UserSummary): void {
   addSelected.value = u;
 }
 
-async function confirmAdd(): Promise<void> {
-  if (!addSelected.value || !group.value) return;
-  const target = addSelected.value;
-  const userName = target.displayName ?? target.samAccountName;
-  writeRunning.value = true;
-  try {
-    await api.users.addGroup(target.id, { groupId: group.value.id });
-    toast.add({
-      severity: 'success',
-      summary: 'Added to group',
-      detail: `${userName} → ${group.value.name}`,
-      life: 3000,
-    });
-    addOpen.value = false;
-    addSelected.value = null;
-    addQuery.value = '';
-    addResults.value = [];
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, confirmAdd)) return;
-    toast.add({
-      severity: 'error',
-      summary: 'Add failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    writeRunning.value = false;
-  }
+function confirmAdd(): void {
+  const u = addSelected.value;
+  if (!u || !group.value) return;
+  addMembership(membershipOf(u, group.value));
 }
 
-async function startRemove(member: GroupMember): Promise<void> {
-  if (!group.value) return;
-  const userName = member.displayName ?? member.samAccountName;
-  busyMemberId.value = member.id;
-  try {
-    await api.users.removeGroup(member.id, { groupId: group.value.id });
-    toast.add({
-      severity: 'success',
-      summary: 'Removed from group',
-      detail: `${userName} ← ${group.value.name}`,
-      life: 3000,
-    });
-    await load();
-  } catch (err) {
-    if (auth.retryAfterStepUp(err, () => startRemove(member))) return;
-    toast.add({
-      severity: 'error',
-      summary: 'Remove failed',
-      detail: err instanceof ApiError ? err.message : String(err),
-      life: 6000,
-    });
-  } finally {
-    busyMemberId.value = null;
-  }
+function closeAdd(): void {
+  addOpen.value = false;
+  addSelected.value = null;
+  addQuery.value = '';
+  addResults.value = [];
+}
+
+function startRemove(member: GroupMember): void {
+  if (group.value) removeMembership(membershipOf(member, group.value));
 }
 
 function openMember(ev: DataTableRowClickEvent): void {
@@ -390,8 +375,9 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
                 severity="danger"
                 size="small"
                 text
-                :loading="busyMemberId === (data as GroupMember).id"
-                @click.stop="auth.requireStepUp(() => startRemove(data as GroupMember))"
+                :loading="removingMemberId === (data as GroupMember).id"
+                :disabled="pending !== null"
+                @click.stop="startRemove(data as GroupMember)"
               />
             </template>
           </Column>
@@ -405,7 +391,7 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
       modal
       header="Add member to group"
       :style="{ width: '32rem' }"
-      :closable="!writeRunning"
+      :closable="!adding"
       @update:visible="(v) => !v && (addOpen = false)"
     >
       <div class="add-form">
@@ -442,13 +428,13 @@ async function copy(kind: 'email' | 'dn'): Promise<void> {
           label="Cancel"
           text
           severity="secondary"
-          :disabled="writeRunning"
+          :disabled="adding"
           @click="addOpen = false"
         />
         <Button
           label="Add"
-          :disabled="!addSelected || writeRunning"
-          :loading="writeRunning"
+          :disabled="!addSelected || adding"
+          :loading="adding"
           @click="confirmAdd"
         />
       </template>
