@@ -149,6 +149,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
           maxPwdAgeDays: days(policy.maxPwdAgeMs),
           minPwdLength: policy.minPwdLength,
           pwdHistoryLength: policy.pwdHistoryLength,
+          complexityRequired: policy.complexityRequired,
           fetchedAt: new Date().toISOString(),
         },
       };

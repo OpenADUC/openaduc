@@ -332,6 +332,7 @@ export interface UserAttributePatch {
 export interface ResetPasswordInput {
   newPassword: string;
   forceChangeAtNextLogin: boolean;
+  unlock: boolean;
 }
 
 export interface SyncInput {
@@ -360,6 +361,8 @@ export interface DirectoryDomainPolicy {
   minPwdLength: number | null;
   /** Number of past passwords AD remembers. */
   pwdHistoryLength: number | null;
+  /** `pwdProperties` DOMAIN_PASSWORD_COMPLEX: passwords must meet AD's complexity rules. */
+  complexityRequired: boolean | null;
 }
 
 export interface DirectoryProvider {

@@ -68,6 +68,11 @@ declare module 'fastify' {
   interface FastifyInstance {
     /** Every route registered after the auth plugin, with its declared policy. */
     routePolicies: readonly RoutePolicyEntry[];
+    /**
+     * For a capability only some requests to a route need, on top of its
+     * policy's. Refuses and audits the denial the way the policy guard does.
+     */
+    requireCapability(req: FastifyRequest, capability: Capability): Promise<void>;
   }
   interface FastifyContextConfig {
     policy?: RoutePolicy;
@@ -111,6 +116,10 @@ export default fp(async (app) => {
   // preHandler it runs after the global hooks (CSRF).
   const routePolicies: RoutePolicyEntry[] = [];
   app.decorate('routePolicies', routePolicies);
+  app.decorate('requireCapability', async (req: FastifyRequest, capability: Capability) => {
+    if (!req.actor) throw SessionRequired();
+    await requireActorCapability(req, req.actor, capability);
+  });
 
   app.addHook('onRoute', (route) => {
     const policy = route.config?.policy;
@@ -125,7 +134,7 @@ export default fp(async (app) => {
   function policyGuard(policy: Exclude<RoutePolicy, { public: true }>) {
     return async (req: FastifyRequest): Promise<void> => {
       if (!req.actor) throw SessionRequired();
-      if (policy.capability) await requireCapability(req, req.actor, policy.capability);
+      if (policy.capability) await requireActorCapability(req, req.actor, policy.capability);
       if (policy.stepUp) requireStepUp(req.actor);
       if (policy.directory === 'param') requireCallersDirectory(req);
     };
@@ -136,7 +145,7 @@ export default fp(async (app) => {
     throw Forbidden('route has no access policy');
   }
 
-  async function requireCapability(
+  async function requireActorCapability(
     req: FastifyRequest,
     actor: ResolvedActor,
     capability: Capability,

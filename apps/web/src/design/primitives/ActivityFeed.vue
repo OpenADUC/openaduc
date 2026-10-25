@@ -74,6 +74,7 @@ function detailFor(e: AuditEventRow): string {
   if (e.result !== 'success') {
     return e.errorCode ? `Failed (${e.errorCode})` : 'Failed';
   }
+  if (e.action === 'user.password.reset' && md.unlock === true) return 'Account unlocked too';
   return '';
 }
 </script>
