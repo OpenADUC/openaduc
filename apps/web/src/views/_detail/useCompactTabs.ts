@@ -2,7 +2,7 @@
 import { onBeforeUnmount, ref, type Ref } from 'vue';
 
 // Watches a tab nav element and flips `compact` true when its content
-// would overflow horizontally. Used by the User detail toolbar to hide
+// would overflow horizontally. Used by the object pages' tab bar to hide
 // tab labels (icon-only) once the tabs + actions cluster no longer fit.
 //
 // Why measurement over a CSS media query: the toolbar's available width

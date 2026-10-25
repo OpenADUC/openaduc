@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { onBeforeUnmount, ref, type Ref } from 'vue';
 
-// Drives the compact-on-scroll behavior shared by the User, Group, and
-// Computer detail pages.
+// Drives the compact-on-scroll header of the object pages (ObjectPageLayout)
+// and the Group Policy page.
 //
 // Detection: we discover the actual scrolling ancestor of the hero by
 // listening for scroll events on window with capture phase (scroll events
@@ -14,8 +14,8 @@ import { onBeforeUnmount, ref, type Ref } from 'vue';
 //
 // `heroHeight` tracks the rendered border-box height via ResizeObserver
 // so pages can bind it to `--detail-sticky-offset` and have downstream
-// sticky elements (User tab bar, Group Members card head) pin flush
-// with the hero's current bottom edge mid-animation.
+// sticky elements (the object pages' tab bar) pin flush with the hero's
+// current bottom edge mid-animation.
 
 type VueTemplateRefArg = Element | { $el?: unknown } | null;
 

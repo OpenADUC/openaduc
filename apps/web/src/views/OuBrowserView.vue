@@ -1261,15 +1261,6 @@ async function onDeleteSubmit(): Promise<void> {
   border-radius: 2px;
 }
 
-.ds-tab-count {
-  font-size: 11px;
-  margin-left: 6px;
-  color: var(--text-3);
-  background: var(--surface-3);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-
 .ds-tab.active .ds-tab-count {
   color: var(--text-2);
 }
