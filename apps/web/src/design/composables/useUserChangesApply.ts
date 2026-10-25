@@ -25,7 +25,7 @@ export function useUserChangesApply(options: {
   });
   const account = useAccountActions<UserDetail>({
     onDone: () => undefined,
-    onFailed: async (_action, _u, message) => {
+    onFailed: async ({ message }) => {
       if (!attributesSaved.value) return options.onFailed('Unlock failed', message);
       await options.onFailed('Changes applied, but the account was not unlocked.', message);
       await options.refresh();

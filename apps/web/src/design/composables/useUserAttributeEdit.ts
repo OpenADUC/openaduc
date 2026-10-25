@@ -25,17 +25,23 @@ type AttributeChange =
   | { key: ScalarAttribute; from: string | null; to: string | null }
   | { key: MultiValuedAttribute; from: string[]; to: string[] };
 
+/**
+ * Edit a user's attributes and save the changes in one write. A failed save
+ * stays in `failure` until the next save, a reset or `dismiss()`.
+ */
 export function useUserAttributeEdit(options: {
   onSaved?: (changed: number) => void | Promise<void>;
-  onFailed: (message: string) => void;
+  onFailed?: (message: string) => void;
 }) {
   const auth = useAuthStore();
   const user = ref<UserDetail | null>(null);
   const draft = reactive(emptyDraft());
   const saving = ref(false);
+  const failure = ref<string | null>(null);
 
   function reset(u: UserDetail | null): void {
     user.value = u;
+    failure.value = null;
     for (const key of SCALAR_ATTRIBUTES) draft[key] = u?.[key] ?? '';
     for (const key of MULTI_VALUED_ATTRIBUTES) draft[key] = (u?.[key] ?? []).join('\n');
   }
@@ -94,6 +100,7 @@ export function useUserAttributeEdit(options: {
   async function commit(after?: () => void | Promise<void>): Promise<void> {
     if (!user.value || !dirty.value || !valid.value || saving.value) return;
     saving.value = true;
+    failure.value = null;
     const count = changes.value.length;
     try {
       await api.users.update(user.value.id, { patch: patch.value });
@@ -101,13 +108,30 @@ export function useUserAttributeEdit(options: {
       await after?.();
     } catch (err) {
       if (auth.retryAfterStepUp(err, () => commit(after))) return;
-      options.onFailed(err instanceof ApiError ? err.message : String(err));
+      failure.value = err instanceof ApiError ? err.message : String(err);
+      options.onFailed?.(failure.value);
     } finally {
       saving.value = false;
     }
   }
 
-  return { draft, reset, changes, changed, dirty, problems, valid, saving, save };
+  function dismiss(): void {
+    failure.value = null;
+  }
+
+  return {
+    draft,
+    reset,
+    changes,
+    changed,
+    dirty,
+    problems,
+    valid,
+    saving,
+    save,
+    failure,
+    dismiss,
+  };
 }
 
 function emptyDraft(): Record<UserAttribute, string> {

@@ -7,7 +7,12 @@ import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
+import { undoable } from '../../design/feedback/undoToast.js';
 import { MIN_GROUP_QUERY, useAddToGroup } from '../../design/composables/useAddToGroup.js';
+import {
+  membershipChangeText,
+  membershipDoneText,
+} from '../../design/composables/useGroupMembership.js';
 import type { GroupSummary } from '@openaduc/shared';
 
 const props = defineProps<{ windowId: number; userId: string; userLabel: string }>();
@@ -16,7 +21,6 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const store = useOldSchool();
 const toast = useToast();
 
-const addError = ref<string | null>(null);
 const {
   error: loadError,
   query,
@@ -31,19 +35,23 @@ const {
   load,
   add,
 } = useAddToGroup({
-  onAdded: (m) => {
-    toast.add({
-      severity: 'success',
-      summary: `${m.userLabel} added to ${m.groupLabel}.`,
-      life: 3000,
-    });
+  // Runs for an Undo too, after this dialog has closed.
+  onChanged: (change, m, offer) => {
+    toast.add(
+      undoable(
+        { severity: 'success', summary: `${membershipDoneText(change, m)}.`, life: 3000 },
+        offer,
+      ),
+    );
     store.bumpData();
-    emit('close');
+    if (change === 'add') emit('close');
   },
-  onFailed: (message) => {
-    addError.value = message;
-  },
+  onFailed: ({ op: { change, membership }, message }) =>
+    store.reportError(
+      `Windows cannot ${membershipChangeText(change, membership)} because:\n${message}`,
+    ),
 });
+
 onMounted(() => load(props.userId));
 
 const selected = ref<GroupSummary | null>(null);
@@ -54,7 +62,6 @@ const canOk = computed(
 
 function ok(): void {
   if (!canOk.value) return;
-  addError.value = null;
   add(selected.value!);
 }
 </script>
@@ -109,9 +116,7 @@ function ok(): void {
       <div v-if="truncated && !searching" class="os-info" style="margin-top: 6px">
         Showing {{ results.length }} — refine your search.
       </div>
-      <div v-if="loadError ?? addError" class="os-error" style="margin-top: 10px">
-        {{ loadError ?? addError }}
-      </div>
+      <div v-if="loadError" class="os-error" style="margin-top: 10px">{{ loadError }}</div>
     </div>
   </WinDialog>
 </template>

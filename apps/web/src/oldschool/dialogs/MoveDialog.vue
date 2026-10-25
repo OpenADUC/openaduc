@@ -7,6 +7,7 @@ import WinDialog from './WinDialog.vue';
 import WinIcon from '../primitives/WinIcon.vue';
 import { useOldSchool } from '../stores/useOldSchool.js';
 import { useToast } from 'primevue/usetoast';
+import { undoable } from '../../design/feedback/undoToast.js';
 import { useUserMove } from '../../design/composables/useUserMove.js';
 import type { DirectoryOu } from '@openaduc/shared';
 
@@ -15,12 +16,20 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 
 const store = useOldSchool();
 const toast = useToast();
-const { ous, loading, destination, atCurrent, ready, error, load, submit } = useUserMove({
-  onMoved: () => {
-    toast.add({ severity: 'success', summary: `${props.label} moved.`, life: 3000 });
+// Runs for an Undo too, after this dialog has closed.
+const { ous, loading, destination, atCurrent, ready, error, load, submit, ouName } = useUserMove({
+  onMoved: (_user, to, offer) => {
+    toast.add(
+      undoable(
+        { severity: 'success', summary: `Moved ${props.label} to ${ouName(to)}.`, life: 3000 },
+        offer,
+      ),
+    );
     store.bumpData();
     emit('close');
   },
+  onFailed: ({ message }) =>
+    store.reportError(`Windows cannot move object ${props.label} because:\n${message}`),
 });
 
 onMounted(() => load(props.id));

@@ -48,3 +48,37 @@ describe('the elevated idle end', () => {
     expect(auth.elevated).toBe(false);
   });
 });
+
+describe('a write waiting on step-up', () => {
+  it('tells its caller when the operator cancels the prompt', () => {
+    const auth = signedIn(false);
+    const action = vi.fn();
+    const cancelled = vi.fn();
+
+    auth.requireStepUp(action, null, cancelled);
+    expect(auth.stepUpRequested).toBe(true);
+    auth.cancelStepUp();
+
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(action).not.toHaveBeenCalled();
+    expect(auth.stepUpRequested).toBe(false);
+    expect(auth.stepUpPendingAction).toBeNull();
+  });
+
+  it('forgets the cancel once the operator steps up', async () => {
+    const auth = signedIn(false);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ elevated: { active: true } }))),
+    );
+    const action = vi.fn();
+    const cancelled = vi.fn();
+
+    auth.requireStepUp(action, null, cancelled);
+    await auth.stepUp('pw');
+    auth.cancelStepUp();
+    await vi.waitFor(() => expect(action).toHaveBeenCalledOnce());
+    expect(cancelled).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

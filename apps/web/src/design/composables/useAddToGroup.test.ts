@@ -30,9 +30,10 @@ const OPS = aGroup('g3', 'Ops');
 const get = vi.fn();
 const search = vi.fn();
 const addGroup = vi.fn();
+const removeGroup = vi.fn();
 const stepUp = vi.fn(async () => ({ elevated: ELEVATED }));
 vi.mock('../../api/index.js', () => ({
-  api: { users: { get, addGroup }, groups: { search }, auth: { stepUp } },
+  api: { users: { get, addGroup, removeGroup }, groups: { search }, auth: { stepUp } },
 }));
 
 const { useAddToGroup } = await import('./useAddToGroup.js');
@@ -42,11 +43,11 @@ async function setup() {
   setActivePinia(createPinia());
   const auth = useAuthStore();
   auth.actor = { capabilities: [], elevated: ELEVATED } as never;
-  const onAdded = vi.fn();
+  const onChanged = vi.fn();
   const onFailed = vi.fn();
-  const picker = useAddToGroup({ onAdded, onFailed });
+  const picker = useAddToGroup({ onChanged, onFailed });
   await picker.load('u1');
-  return { picker, auth, onAdded, onFailed };
+  return { picker, auth, onChanged, onFailed };
 }
 
 async function typeQuery(picker: Awaited<ReturnType<typeof setup>>['picker'], q: string) {
@@ -69,6 +70,7 @@ describe('useAddToGroup', () => {
     });
     search.mockResolvedValue({ rows: [SALES, STAFF, OPS], total: 3 });
     addGroup.mockResolvedValue({ ok: true });
+    removeGroup.mockResolvedValue({ ok: true });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -121,20 +123,24 @@ describe('useAddToGroup', () => {
   });
 
   it('adds the user to the group, refreshing before it’s done', async () => {
-    const { picker, onAdded } = await setup();
+    const { picker, onChanged } = await setup();
     let refreshed!: () => void;
-    onAdded.mockImplementation(() => new Promise<void>((r) => (refreshed = r)));
+    onChanged.mockImplementation(() => new Promise<void>((r) => (refreshed = r)));
     const after = vi.fn();
 
     picker.add(aGroup('g9', null), after);
-    await vi.waitFor(() => expect(onAdded).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
     expect(addGroup).toHaveBeenCalledWith('u1', { groupId: 'g9' });
-    expect(onAdded).toHaveBeenCalledWith({
-      userId: 'u1',
-      userLabel: 'Jane Doe',
-      groupId: 'g9',
-      groupLabel: 'CN=g9,DC=corp,DC=example',
-    });
+    expect(onChanged).toHaveBeenCalledWith(
+      'add',
+      {
+        userId: 'u1',
+        userLabel: 'Jane Doe',
+        groupId: 'g9',
+        groupLabel: 'CN=g9,DC=corp,DC=example',
+      },
+      { undo: expect.any(Function) },
+    );
     expect(picker.adding.value).toBe('g9');
 
     refreshed();
@@ -143,36 +149,54 @@ describe('useAddToGroup', () => {
   });
 
   it('won’t add the user to a group they’re directly in, but will to one they’re in by nesting', async () => {
-    const { picker, onAdded } = await setup();
+    const { picker, onChanged } = await setup();
     picker.add(SALES);
     await vi.advanceTimersByTimeAsync(10);
     expect(addGroup).not.toHaveBeenCalled();
 
     picker.add(STAFF);
-    await vi.waitFor(() => expect(onAdded).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
     expect(addGroup).toHaveBeenCalledWith('u1', { groupId: 'g2' });
   });
 
   it('reports a refused add', async () => {
-    const { picker, onAdded, onFailed } = await setup();
+    const { picker, onChanged, onFailed } = await setup();
     addGroup.mockRejectedValueOnce(new ApiError(403, 'forbidden', 'directory rejected the change'));
 
     picker.add(OPS);
-    await vi.waitFor(() => expect(onFailed).toHaveBeenCalledWith('directory rejected the change'));
-    expect(onAdded).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(onFailed).toHaveBeenCalledWith({
+        op: { change: 'add', membership: expect.objectContaining({ groupId: 'g3' }) },
+        message: 'directory rejected the change',
+        undo: false,
+      }),
+    );
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(picker.failure.value?.message).toBe('directory rejected the change');
   });
 
   it('adds after step-up when the server says the elevated session is gone', async () => {
-    const { picker, auth, onAdded, onFailed } = await setup();
+    const { picker, auth, onChanged, onFailed } = await setup();
     addGroup.mockRejectedValueOnce(new ApiError(403, 'step_up_required', 'step-up required'));
 
     picker.add(OPS);
     await vi.waitFor(() => expect(addGroup).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(picker.adding.value).toBeNull());
     await auth.stepUp('pw');
-    await vi.waitFor(() => expect(onAdded).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
     expect(addGroup).toHaveBeenCalledTimes(2);
     expect(onFailed).not.toHaveBeenCalled();
+  });
+
+  it('undoes an add by removing the user from the group again', async () => {
+    const { picker, onChanged } = await setup();
+
+    picker.add(OPS);
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    (onChanged.mock.calls[0]![2] as { undo: () => void }).undo();
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    expect(removeGroup).toHaveBeenCalledWith('u1', { groupId: 'g3' });
+    expect(onChanged.mock.calls[1]![0]).toBe('remove');
   });
 
   it('says why the account couldn’t be read', async () => {

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { ref } from 'vue';
 import { api } from '../../api/index.js';
-import { ApiError } from '../../api/client.js';
-import { useAuthStore } from '../../stores/auth.js';
+import { useUndoableWrite, type UndoOffer, type WriteFailure } from '../lib/undoableWrite.js';
 
 export type AccountAction = 'disable' | 'enable' | 'unlock';
 
@@ -12,50 +10,54 @@ const CALLS: Record<AccountAction, (id: string) => Promise<unknown>> = {
   unlock: (id) => api.users.unlock(id),
 };
 
+// An unlock can't be undone: there is no write that locks an account.
+const INVERSE: Record<AccountAction, AccountAction | null> = {
+  disable: 'enable',
+  enable: 'disable',
+  unlock: null,
+};
+
+export interface AccountActionRun<T> {
+  action: AccountAction;
+  account: T;
+}
+
+export type AccountActionFailure<T> = WriteFailure<AccountActionRun<T>>;
+
 /**
  * Disable, enable or unlock accounts, one action at a time per account.
  * `onDone` gets the account the action ran on, as the caller passed it, so
- * it can refresh and describe it.
+ * it can refresh and describe it, and the offer of Undo (none for an
+ * unlock). The last failure stays in `failure` until it's retried,
+ * dismissed or another action starts.
  */
 export function useAccountActions<T extends { id: string }>(options: {
-  onDone: (action: AccountAction, account: T) => void | Promise<void>;
-  onFailed: (action: AccountAction, account: T, message: string) => void | Promise<void>;
+  onDone: (action: AccountAction, account: T, offer: UndoOffer) => void | Promise<void>;
+  onFailed?: (failure: AccountActionFailure<T>) => void | Promise<void>;
 }) {
-  const auth = useAuthStore();
-  const running = ref(new Map<string, AccountAction>());
-  const runningOn = (id: string): AccountAction | null => running.value.get(id) ?? null;
+  const writes = useUndoableWrite<AccountActionRun<T>>({
+    write: ({ action, account }) => CALLS[action](account.id),
+    inverse: ({ action, account }) => {
+      const inverse = INVERSE[action];
+      return inverse ? { action: inverse, account } : null;
+    },
+    key: ({ account }) => account.id,
+    onDone: ({ action, account }, offer) => options.onDone(action, account, offer),
+    onFailed: options.onFailed,
+  });
+
+  const runningOn = (id: string): AccountAction | null => writes.runningOn(id)?.action ?? null;
 
   /** `after` runs once the action lands, after `onDone`, including after a step-up. */
   function run(action: AccountAction, account: T, after?: () => void | Promise<void>): void {
-    if (runningOn(account.id)) return;
-    auth.requireStepUp(() => commit(action, account, after));
+    writes.run({ action, account }, after);
   }
 
-  async function commit(
-    action: AccountAction,
-    account: T,
-    after?: () => void | Promise<void>,
-  ): Promise<void> {
-    if (runningOn(account.id)) return;
-    running.value.set(account.id, action);
-    try {
-      try {
-        await CALLS[action](account.id);
-      } catch (err) {
-        if (auth.retryAfterStepUp(err, () => commit(action, account, after))) return;
-        await options.onFailed(
-          action,
-          account,
-          err instanceof ApiError ? err.message : String(err),
-        );
-        return;
-      }
-      await options.onDone(action, account);
-      await after?.();
-    } finally {
-      running.value.delete(account.id);
-    }
-  }
-
-  return { runningOn, run };
+  return {
+    runningOn,
+    run,
+    failure: writes.failure,
+    retry: writes.retry,
+    dismiss: writes.dismiss,
+  };
 }
