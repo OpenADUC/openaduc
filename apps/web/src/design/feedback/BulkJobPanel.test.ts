@@ -17,6 +17,9 @@ function aJob(
     subject: null,
     status,
     pauseReason: null,
+    revertsJobId: null,
+    revertible: false,
+    revertedBy: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: '2026-10-23T10:00:00.000Z',
     finishedAt: null,
@@ -81,6 +84,23 @@ describe('the bulk job panel', () => {
     const page = panel(aJob('finished', { succeeded: 40, failed: 2 }), null, true);
 
     expect(page.findAll('button').map((b) => b.attributes('disabled'))).toEqual(['', '']);
+  });
+
+  it('offers to revert a stopped job that can be', async () => {
+    const page = panel(aJob('finished', { succeeded: 42 }, { revertible: true }));
+
+    expect(buttons(page)).toEqual(['Revert…', 'Dismiss']);
+    await page.findAll('button')[0]!.trigger('click');
+    expect(page.emitted('revert')).toHaveLength(1);
+  });
+
+  it('says a revert reverts, and where its failures are explained', () => {
+    const running = panel(aJob('running', { pending: 42 }, { revertsJobId: '6' }));
+    expect(text(running)).toContain('Reverting 42 accounts…');
+
+    const done = panel(aJob('finished', { succeeded: 40, failed: 2 }, { revertsJobId: '6' }));
+    expect(text(done)).toContain('Reverted 40 of 42 accounts');
+    expect(text(done)).toContain('2 failed. The revert’s entry below lists why.');
   });
 
   it('reports a result with failures, and offers to retry them', async () => {

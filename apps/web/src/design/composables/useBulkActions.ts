@@ -12,10 +12,15 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import type { BulkAccountRequest, BulkJob, BulkUserAttributesRequest } from '@openaduc/shared';
+import type {
+  BulkAccountRequest,
+  BulkJob,
+  BulkJobRevertRequest,
+  BulkUserAttributesRequest,
+} from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
-import { accounts, BULK_VERBS, bulkJobActive, bulkJobTarget } from '../lib/bulkJob.js';
+import { accounts, BULK_VERBS, bulkJobActive, bulkJobWords } from '../lib/bulkJob.js';
 import type { GroupChange } from './useBulkGroupMembership.js';
 
 /** The bulk actions that change the accounts themselves. */
@@ -178,10 +183,10 @@ export function useBulkActions(opts: {
       store(SELECTED_KEY, done.id);
     }
     if (failures.length === 0 && done.status === 'finished' && announce) {
-      const { ed } = BULK_VERBS[done.action];
+      const { ed, target } = bulkJobWords(done);
       opts.toast.add({
         severity: 'success',
-        summary: `${ed} ${accounts(done.counts.succeeded)}${bulkJobTarget(done.action, done.subject)}`,
+        summary: `${ed} ${accounts(done.counts.succeeded)}${target}`,
         ...(done.counts.skipped > 0 ? { detail: `${done.counts.skipped} needed no change.` } : {}),
         life: 4000,
       });
@@ -260,6 +265,16 @@ export function useBulkActions(opts: {
     write(() => api.bulkJobs.startAccountChange(change), true);
   }
 
+  /** Revert a job as the operator previewed it; `started` hears of the revert's job. */
+  function startRevert(
+    jobId: string,
+    request: BulkJobRevertRequest,
+    started?: (job: BulkJob) => void,
+  ): void {
+    bulkErrors.value = new Map();
+    write(() => api.bulkJobs.revert(jobId, request), true, started);
+  }
+
   function continueJob(): void {
     const current = job.value;
     if (current) write(() => api.bulkJobs.resume(current.id), true);
@@ -331,6 +346,7 @@ export function useBulkActions(opts: {
     startGroupChange,
     startAttributeEdit,
     startAccountChange,
+    startRevert,
     continueJob,
     retryFailed,
     stopJob,

@@ -6,11 +6,15 @@ export class BulkJobRequestError extends Error {
   constructor(
     readonly code:
       | 'group_not_found'
+      | 'job_running'
       | 'manager_not_found'
+      | 'nothing_to_revert'
+      | 'not_revertible'
       | 'ou_not_found'
       | 'ou_refused'
       | 'preview_mismatch'
-      | 'protected_unacknowledged',
+      | 'protected_unacknowledged'
+      | 'revert_running',
     message: string,
   ) {
     super(message);
@@ -26,8 +30,12 @@ export function refuseBulkRequest(err: unknown): never {
       case 'manager_not_found':
       case 'ou_not_found':
         throw NotFound(err.message);
+      case 'job_running':
       case 'preview_mismatch':
+      case 'revert_running':
         throw Conflict(err.message);
+      case 'nothing_to_revert':
+      case 'not_revertible':
       case 'ou_refused':
       case 'protected_unacknowledged':
         throw new AppError({

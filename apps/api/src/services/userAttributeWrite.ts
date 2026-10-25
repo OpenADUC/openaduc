@@ -42,7 +42,7 @@ export async function writeUserAttributes(
   patch: UserAttributePatch,
   writeCtx: WriteContext,
   audit: Omit<AuditEventInput, 'action' | 'result' | 'providerId' | 'targetType'>,
-): Promise<WriteOpResult> {
+): Promise<WriteOpResult & { refreshed: DirectoryUser | null }> {
   if (patch.managerDn) {
     if (patch.managerDn.toLowerCase() === user.distinguishedName.toLowerCase()) {
       throw new UserAttributeRefusal('self_manager', SELF_MANAGER_MESSAGE);
@@ -83,8 +83,9 @@ export async function writeUserAttributes(
       };
     },
   );
-  if (result.ok && fields.length > 0) {
-    await services.userLiveRefresh.refresh(provider, user.objectGuid);
-  }
-  return result;
+  const refreshed =
+    result.ok && fields.length > 0
+      ? await services.userLiveRefresh.refresh(provider, user.objectGuid)
+      : null;
+  return { ...result, refreshed: refreshed?.user ?? null };
 }
