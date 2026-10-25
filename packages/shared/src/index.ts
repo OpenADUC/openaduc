@@ -31,3 +31,5 @@ export * from './schemas/temporaryAccessPass.js';
 export * from './temporaryAccessPass.js';
 export * from './schemas/entra.js';
 export * from './schemas/licenses.js';
+export * from './schemas/classTap.js';
+export * from './classTap.js';

@@ -48,7 +48,7 @@ const groupNames = computed(() => protectedGroups.value.map((g) => g.name).join(
 const fixIn = (kind: ImportCheckIssueKind) =>
   kind === 'ou_missing' || kind === 'group_missing' || kind === 'role_group'
     ? ('buckets' as const)
-    : kind === 'password'
+    : kind === 'password' || kind === 'class'
       ? ('options' as const)
       : ('names' as const);
 const FIX_LABEL = { names: 'Review names', buckets: 'Buckets', options: 'Options' };

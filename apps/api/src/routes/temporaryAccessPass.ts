@@ -9,13 +9,14 @@ import {
 } from '@openaduc/shared';
 import { z } from 'zod';
 import { AppError, NotFound } from '../plugins/errorHandler.js';
-import { rawScalarValue } from '../lib/rawAttributes.js';
 import type { DirectoryUser } from '../providers/types.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { graphFailure } from './graphFailure.js';
 import {
   issueTap,
+  TapNotEnabled,
   tapPreflight,
+  tapUserOf,
   type TapDeps,
   type TapIssueOutcome,
   type TapUser,
@@ -28,38 +29,20 @@ import {
 
 const idParamSchema = z.object({ id: z.guid() });
 
-const NotEnabled = () =>
-  new AppError({
-    statusCode: 409,
-    code: 'tap_not_enabled',
-    message:
-      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
-  });
-
 export async function registerTemporaryAccessPassRoutes(app: FastifyInstance): Promise<void> {
   async function prepare(
     req: FastifyRequest,
   ): Promise<{ user: DirectoryUser; tapUser: TapUser; deps: TapDeps }> {
     const { id } = idParamSchema.parse(req.params);
     const directoryId = req.directoryId!;
-    if (
-      !(await app.services.entraIntegration.isFeatureEnabled(directoryId, 'temporaryAccessPass'))
-    ) {
-      throw NotEnabled();
-    }
-    const graph = await app.services.graphClient.build(directoryId);
-    if (!graph) throw NotEnabled();
+    const graph = await app.services.graphClient.tapGraph(directoryId);
+    if (!graph) throw TapNotEnabled();
     const provider = await app.services.providers.buildForRequest(req);
     const user = await provider.getUser({ kind: 'objectGuid', value: id });
     if (!user) throw NotFound('user not found');
     return {
       user,
-      tapUser: {
-        sid: user.sid,
-        displayName: user.displayName,
-        samAccountName: user.samAccountName,
-        protectedAccount: rawScalarValue(user.rawAttributes['adminCount']) === '1',
-      },
+      tapUser: tapUserOf(user),
       deps: {
         graph,
         tokenGroups: () =>

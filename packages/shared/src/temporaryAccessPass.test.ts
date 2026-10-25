@@ -25,14 +25,14 @@ describe('tapRequestProblem', () => {
     expect(tapRequestProblem(policy, { ...request, lifetimeMinutes: 481 }, now)).toBe(problem);
   });
 
-  it('refuses a multi-use pass when the tenant allows only one-time passes', () => {
+  it('refuses a multi-use pass when the tenant allows only single-use passes', () => {
     expect(
       tapRequestProblem(
         { ...policy, usableOnceOnly: true },
         { ...request, isUsableOnce: false },
         now,
       ),
-    ).toBe('The tenant’s policy allows only one-time passes.');
+    ).toBe('The tenant’s policy allows only single-use passes.');
   });
 
   it('refuses a start in the past, allowing for clock skew', () => {

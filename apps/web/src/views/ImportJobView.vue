@@ -2,8 +2,9 @@
 <!--
   An import's results: its progress while it runs, then each row's
   result with a link to the account, the retry of what failed, the
-  results CSV, and once its passwords are gone, a reset of them. The
-  workflow lives in useImportJob; this renders it.
+  results CSV, and once its passwords are gone, a reset of them. An
+  import that issues TAPs for class has its class roster as a second tab.
+  The workflow lives in useImportJob; this renders it.
 -->
 <script setup lang="ts">
 import { computed, watch } from 'vue';
@@ -16,6 +17,9 @@ import {
   type ImportJobRow,
 } from '@openaduc/shared';
 import BulkJobPanel from '../design/feedback/BulkJobPanel.vue';
+import ClassAlerts from './importJob/ClassAlerts.vue';
+import ImportJobTabs from './importJob/ImportJobTabs.vue';
+import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import { useImportJob } from '../design/composables/useImportJob.js';
 import { bulkJobTitle } from '../design/lib/bulkJob.js';
@@ -33,7 +37,9 @@ function save({ fileName, csv }: BulkJobResultsDownload): void {
 }
 
 const imp = useImportJob({ save });
+const auth = useAuthStore();
 const {
+  classTap,
   job,
   rows,
   results,
@@ -97,6 +103,14 @@ const downloadLabel = computed(() =>
     <p v-else-if="loading && !job" class="hint">Loading…</p>
 
     <template v-if="job">
+      <ImportJobTabs
+        v-if="classTap && auth.hasCapability('write:user.issueTap')"
+        :id="job.id"
+        active="people"
+        people
+        roster
+      />
+      <ClassAlerts v-if="classTap" :alerts="classTap.alerts" />
       <BulkJobPanel
         :job="job"
         :failure="failure"

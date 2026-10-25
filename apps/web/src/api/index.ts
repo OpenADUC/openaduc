@@ -3,6 +3,12 @@
 // shape are handled in one place.
 
 import type {
+  ClassPassReissue,
+  ClassPassReveal,
+  ClassReschedule,
+  ClassRescheduleRequest,
+  ClassRoster,
+  ClassTapOptions,
   AccountExpiryRequest,
   AuditBulkSummary,
   BulkAccountPreview,
@@ -473,6 +479,38 @@ export const api = {
       /** An import's job, row by row, and whether its results CSV still holds the passwords. */
       job(id: string, init: Background = {}): Promise<ImportJobResponse> {
         return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}`, init);
+      },
+      /** Whether an import can issue TAPs for class, and within what limits. */
+      classTaps(): Promise<ClassTapOptions> {
+        return apiFetch('/users/import/class-taps');
+      },
+      /** An import's class roster, each pass's status read from Entra. */
+      classRoster(id: string, init: Background = {}): Promise<ClassRoster> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/class-roster`, init);
+      },
+      revealClassPass(id: string, rowId: string): Promise<ClassPassReveal> {
+        return apiFetch(
+          `/users/import/jobs/${encodeURIComponent(id)}/class-roster/${encodeURIComponent(rowId)}/reveal`,
+          { method: 'POST', body: JSON.stringify({}) },
+        );
+      },
+      reissueClassPass(id: string, rowId: string): Promise<ClassPassReissue> {
+        return apiFetch(
+          `/users/import/jobs/${encodeURIComponent(id)}/class-roster/${encodeURIComponent(rowId)}/reissue`,
+          { method: 'POST', body: JSON.stringify({}) },
+        );
+      },
+      rescheduleClass(id: string, body: ClassRescheduleRequest): Promise<ClassReschedule> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/class-roster/reschedule`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+      },
+      takeOverClass(id: string): Promise<void> {
+        return apiFetch(`/users/import/jobs/${encodeURIComponent(id)}/class-roster/take-over`, {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
       },
     },
     copySource(id: string): Promise<UserCopySource> {

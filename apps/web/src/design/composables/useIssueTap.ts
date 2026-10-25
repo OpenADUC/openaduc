@@ -6,6 +6,7 @@ import {
   tapRequestProblem,
   type ExistingTap,
   type TapIssueResponse,
+  type TapPolicy,
   type TapPreflight,
   type UserDetail,
 } from '@openaduc/shared';
@@ -20,6 +21,19 @@ import { useAuthStore } from '../../stores/auth.js';
 export type TapTarget = Pick<UserDetail, 'id' | 'displayName' | 'samAccountName'>;
 
 const LIFETIME_PRESETS = [10, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320, 10080, 43200];
+
+/** The lifetimes to offer within the tenant's policy, its own bounds and default among them. */
+export function lifetimeOptionsFor(policy: TapPolicy): { value: number; label: string }[] {
+  const values = new Set(
+    [
+      ...LIFETIME_PRESETS,
+      policy.minLifetimeMinutes,
+      policy.maxLifetimeMinutes,
+      policy.defaultLifetimeMinutes,
+    ].filter((v) => v >= policy.minLifetimeMinutes && v <= policy.maxLifetimeMinutes),
+  );
+  return [...values].sort((a, b) => a - b).map((value) => ({ value, label: lifetimeLabel(value) }));
+}
 
 export function useIssueTap(options: { onIssued?: (issued: TapIssueResponse) => void } = {}) {
   const auth = useAuthStore();
@@ -43,21 +57,7 @@ export function useIssueTap(options: { onIssued?: (issued: TapIssueResponse) => 
     preflight.value?.status === 'ready' ? preflight.value.existing : null,
   );
   const multiUseAllowed = computed(() => policy.value?.usableOnceOnly === false);
-  const lifetimeOptions = computed(() => {
-    const p = policy.value;
-    if (!p) return [];
-    const values = new Set(
-      [
-        ...LIFETIME_PRESETS,
-        p.minLifetimeMinutes,
-        p.maxLifetimeMinutes,
-        p.defaultLifetimeMinutes,
-      ].filter((v) => v >= p.minLifetimeMinutes && v <= p.maxLifetimeMinutes),
-    );
-    return [...values]
-      .sort((a, b) => a - b)
-      .map((value) => ({ value, label: lifetimeLabel(value) }));
-  });
+  const lifetimeOptions = computed(() => (policy.value ? lifetimeOptionsFor(policy.value) : []));
   const startsAt = computed(() =>
     startLater.value && startsAtLocal.value ? new Date(startsAtLocal.value).toISOString() : null,
   );

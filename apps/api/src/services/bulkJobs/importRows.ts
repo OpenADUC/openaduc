@@ -13,6 +13,7 @@ import {
   NEW_USER_ORGANISATION_FIELDS,
   PASSWORD_MODES,
   childDn,
+  classTapRequestSchema,
   importPasswordSchema,
   remainingSteps,
   type ImportStep,
@@ -28,6 +29,7 @@ import {
   type UserCreateResult,
 } from '../../providers/types.js';
 import { withAudit } from '../auditContext.js';
+import { storeClass } from '../classPasses/service.js';
 import { findCachedGroupsById } from '../groupCache.js';
 import { membershipRequirements } from '../groupMembershipWrite.js';
 import {
@@ -82,6 +84,8 @@ export const importPlanSchema = z.object({
   rows: z.array(importPlanRowSchema).min(1),
   password: importPasswordSchema,
   enabled: z.boolean(),
+  /** Temporary Access Passes for the onboarding class, made once each account is in Entra. */
+  classTap: classTapRequestSchema.optional(),
 });
 export type ImportPlan = z.infer<typeof importPlanSchema>;
 
@@ -216,6 +220,9 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
       });
     },
     secret: (plan) => (plan.password.mode === 'set' ? plan.password.password : null),
+    async stored(trx, jobId, plan) {
+      if (plan.classTap) await storeClass(trx, jobId, plan.classTap);
+    },
     async prepare(plan, { db, directoryId }) {
       const ids = [...new Set(plan.rows.flatMap((r) => r.groupIds.map((id) => id.toLowerCase())))];
       const found = await findCachedGroupsById(db, directoryId, ids);
@@ -228,7 +235,10 @@ export function importHandler(): BulkJobHandler<ImportPlan, RowInput, string | n
           distinguishedName: group.distinguishedName,
         };
       });
-      return { ...(groups.length > 0 ? { groups } : {}), import: optionsOf(plan) };
+      return {
+        ...(groups.length > 0 ? { groups } : {}),
+        import: { ...optionsOf(plan), ...(plan.classTap ? { classTap: plan.classTap } : {}) },
+      };
     },
     requires(subject, roleGroups) {
       const groups = subject?.groups ?? [];

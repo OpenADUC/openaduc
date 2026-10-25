@@ -64,7 +64,7 @@ const existingText = computed(() => {
   const start = held.startsAt ?? held.createdAt;
   const ends = start && held.lifetimeMinutes ? tapExpiresAt(start, held.lifetimeMinutes) : null;
   const parts = [
-    held.isUsableOnce ? 'one-time' : 'multi-use',
+    held.isUsableOnce ? 'single-use' : 'multi-use',
     held.usabilityReason === 'NotYetValid' && start
       ? `starts ${fmtAbsolute(start)}`
       : ends
@@ -196,7 +196,7 @@ function close(): void {
         <input v-model="isUsableOnce" type="checkbox" :disabled="submitting || !multiUseAllowed" />
         <span>One sign-in only</span>
       </label>
-      <p v-if="!multiUseAllowed" class="tap-note">The tenant allows only one-time passes.</p>
+      <p v-if="!multiUseAllowed" class="tap-note">The tenant allows only single-use passes.</p>
       <p v-if="problem" class="tap-problem">{{ problem }}</p>
     </template>
 

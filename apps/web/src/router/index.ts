@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    path: '/users/import/jobs/:id/roster',
+    name: 'user-import-roster',
+    component: () => import('../views/ClassRosterView.vue'),
+    props: true,
+  },
+  {
     path: '/users/:id',
     name: 'user-detail',
     component: () => import('../views/UserDetailView.vue'),

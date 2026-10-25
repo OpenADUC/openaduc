@@ -11,6 +11,7 @@ import {
   heldPasswordsSchema,
   type BulkJobRowStatus,
 } from './bulkJob.js';
+import { classAlertsSchema, classTapRequestSchema } from './classTap.js';
 import { startsLikeFormula } from '../csv.js';
 import {
   CONTROL_CHARS,
@@ -202,6 +203,8 @@ export const importRequestSchema = z
     enabled: z.boolean(),
     /** Set `mail` to the UPN for rows without an email. */
     mailFromUpn: z.boolean(),
+    /** Issue each new hire a Temporary Access Pass for their onboarding class. */
+    classTap: classTapRequestSchema.optional(),
   })
   .strict()
   .superRefine((body, ctx) => {
@@ -296,6 +299,8 @@ export const importJobResponseSchema = z.object({
   results: heldPasswordsSchema,
   /** The latest password reset of the import's accounts, and its own results. */
   passwordReset: z.object({ job: bulkJobSchema, results: heldPasswordsSchema }).nullable(),
+  /** The import scheduled a class: its roster is a tab of the page. */
+  classTap: z.object({ alerts: classAlertsSchema }).nullable(),
 });
 export type ImportJobResponse = z.infer<typeof importJobResponseSchema>;
 
@@ -309,7 +314,8 @@ export type ImportCheckIssueKind =
   | 'role_group'
   | 'manager_missing'
   | 'password'
-  | 'phone';
+  | 'phone'
+  | 'class';
 
 export interface ImportCheckIssue {
   /** The index of the row in the request, or null for what isn't one row's. */

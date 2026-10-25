@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
+  TAP_POLICY_OFF_MESSAGE,
   tapExpiresAt,
   tapRequestProblem,
   type ExistingTap,
@@ -22,6 +23,9 @@ import {
   tenantLastSync,
   type GraphReader,
 } from './entraLookup.js';
+import { rawScalarValue } from '../lib/rawAttributes.js';
+import { AppError } from '../plugins/errorHandler.js';
+import type { DirectoryUser } from '../providers/types.js';
 import { GraphPermissionError, type GraphResponse } from './graphClient.js';
 
 // Issuing a Temporary Access Pass to an AD user's Entra twin. Whoever holds
@@ -43,6 +47,21 @@ export interface TapUser {
   protectedAccount: boolean;
 }
 
+export const TapNotEnabled = () =>
+  new AppError({
+    statusCode: 409,
+    code: 'tap_not_enabled',
+    message:
+      'Temporary Access Pass isn’t turned on for this directory. An administrator turns it on in Settings → Integrations.',
+  });
+
+export const tapUserOf = (user: DirectoryUser): TapUser => ({
+  sid: user.sid,
+  displayName: user.displayName,
+  samAccountName: user.samAccountName,
+  protectedAccount: rawScalarValue(user.rawAttributes['adminCount']) === '1',
+});
+
 export interface TapDeps {
   graph: TapGraph;
   /**
@@ -57,7 +76,11 @@ export interface TapDeps {
 export interface TapPreflightResult {
   preflight: TapPreflight;
   entraUserId: string | null;
+  /** The passes Entra lists for the user, spent ones included, when it was asked. */
+  passes?: TapMethod[];
 }
+
+export type TapMethod = z.infer<typeof passSchema>;
 
 export type TapIssueCode =
   | 'privileged'
@@ -70,7 +93,7 @@ export type TapIssueCode =
   | 'tap_exists';
 
 export type TapIssueOutcome =
-  | { ok: true; entraUserId: string; issued: TapIssueResponse }
+  | { ok: true; entraUserId: string; methodId: string | null; issued: TapIssueResponse }
   | { ok: false; code: TapIssueCode; message: string; existing?: ExistingTap };
 
 const POLICY_PATH =
@@ -93,7 +116,7 @@ const SPENT_REASONS = new Set(['Expired', 'OneTimeUsed', 'DisabledByPolicy']);
 // it is the best this can do.
 const DNS_ADMINS = /^CN=DnsAdmins,CN=Users,DC=/i;
 
-const REFUSAL_CODES: Record<TapRefusalReason, TapIssueCode> = {
+export const REFUSAL_CODES: Record<TapRefusalReason, TapIssueCode> = {
   privileged: 'privileged',
   entraAdminRole: 'entra_admin_role',
   entraRolesUnknown: 'entra_roles_unknown',
@@ -114,6 +137,7 @@ const policySchema = z.object({
 type GraphPolicy = z.infer<typeof policySchema>;
 
 const passSchema = z.object({
+  id: z.string().nullish(),
   createdDateTime: z.string().nullish(),
   startDateTime: z.string().nullish(),
   lifetimeInMinutes: z.number().int().nullish(),
@@ -123,6 +147,7 @@ const passSchema = z.object({
 });
 
 const createdPassSchema = z.object({
+  id: z.string().nullish(),
   temporaryAccessPass: z.string().min(1),
   createdDateTime: z.string().nullish(),
   startDateTime: z.string().nullish(),
@@ -137,7 +162,23 @@ const WHY_NOT =
   'Whoever holds a Temporary Access Pass can sign in as them, so OpenADUC doesn’t issue one to an administrator.';
 
 // Per Graph client, so new credentials (a new client) read it afresh.
-const policyCache = new WeakMap<TapGraph, { policy: GraphPolicy; at: number }>();
+const policyCache = new WeakMap<GraphReader, { policy: GraphPolicy; at: number }>();
+
+/** The tenant's Temporary Access Pass policy, as far as OpenADUC heeds it; null when it's turned off. */
+export async function tenantTapPolicy(
+  graph: GraphReader,
+  now: Date = new Date(),
+): Promise<TapPolicy | null> {
+  const policy = await readPolicy(graph, now);
+  return policy.state === 'enabled' ? policyLimits(policy) : null;
+}
+
+const policyLimits = (policy: GraphPolicy): TapPolicy => ({
+  defaultLifetimeMinutes: policy.defaultLifetimeInMinutes,
+  minLifetimeMinutes: policy.minimumLifetimeInMinutes,
+  maxLifetimeMinutes: policy.maximumLifetimeInMinutes,
+  usableOnceOnly: policy.isUsableOnce,
+});
 
 export async function tapPreflight(deps: TapDeps, user: TapUser): Promise<TapPreflightResult> {
   const now = deps.now?.() ?? new Date();
@@ -172,10 +213,7 @@ export async function tapPreflight(deps: TapDeps, user: TapUser): Promise<TapPre
   const { graph } = deps;
   const policy = await readPolicy(graph, now);
   if (policy.state !== 'enabled') {
-    return refused(
-      'policyDisabled',
-      'Temporary Access Pass is turned off in the tenant’s authentication methods policy. Turn it on in the Microsoft Entra admin center first.',
-    );
+    return refused('policyDisabled', TAP_POLICY_OFF_MESSAGE);
   }
 
   const entraUserId = await findEntraUser(graph, user.sid!);
@@ -204,32 +242,32 @@ export async function tapPreflight(deps: TapDeps, user: TapUser): Promise<TapPre
   return {
     preflight: {
       status: 'ready',
-      policy: {
-        defaultLifetimeMinutes: policy.defaultLifetimeInMinutes,
-        minLifetimeMinutes: policy.minimumLifetimeInMinutes,
-        maxLifetimeMinutes: policy.maximumLifetimeInMinutes,
-        usableOnceOnly: policy.isUsableOnce,
-      } satisfies TapPolicy,
+      policy: policyLimits(policy),
       existing: live ? toExisting(live) : null,
       inPolicyScope: inScope(policy, roles.groupIds),
     },
     entraUserId,
+    passes: passes.value,
   };
 }
 
 /**
  * Issue a pass, checking everything the preflight does again first. Graph
  * keeps one pass per user and replaces the old one itself, so a replace is
- * a plain create once the operator has been warned.
+ * a plain create once the operator has been warned. `fitLifetime` brings
+ * the lifetime within the policy's range rather than refusing it: a class
+ * pass made after class started lasts until class ends, or the shortest
+ * the tenant allows.
  */
 export async function issueTap(
   deps: TapDeps,
   user: TapUser,
-  request: {
+  asked: {
     startsAt: string | null;
     lifetimeMinutes: number;
     isUsableOnce: boolean;
     replaceExisting: boolean;
+    fitLifetime?: boolean;
   },
 ): Promise<TapIssueOutcome> {
   const now = deps.now?.() ?? new Date();
@@ -244,6 +282,10 @@ export async function issueTap(
       message: 'This user isn’t in Microsoft Entra yet: they appear after Connect Sync next runs.',
     };
   }
+  const { minLifetimeMinutes: min, maxLifetimeMinutes: max } = preflight.policy;
+  const request = asked.fitLifetime
+    ? { ...asked, lifetimeMinutes: Math.min(max, Math.max(min, asked.lifetimeMinutes)) }
+    : asked;
   const problem = tapRequestProblem(preflight.policy, request, now);
   if (problem) return { ok: false, code: 'outside_policy', message: problem };
   if (preflight.existing && !request.replaceExisting) {
@@ -268,6 +310,7 @@ export async function issueTap(
   return {
     ok: true,
     entraUserId,
+    methodId: created.id ?? null,
     issued: {
       temporaryAccessPass: created.temporaryAccessPass,
       startsAt: startsAt.toISOString(),
@@ -313,7 +356,7 @@ export function tokenPrivilege(
   return token.sids.every((sid) => bySid.has(sid)) ? null : { kind: 'unknown' };
 }
 
-async function readPolicy(graph: TapGraph, now: Date): Promise<GraphPolicy> {
+async function readPolicy(graph: GraphReader, now: Date): Promise<GraphPolicy> {
   const cached = policyCache.get(graph);
   if (cached && now.getTime() - cached.at < POLICY_TTL_MS) return cached.policy;
   const policy = policySchema.parse((await graph.getJson(POLICY_PATH)).data);

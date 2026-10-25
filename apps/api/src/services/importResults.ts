@@ -128,7 +128,7 @@ export async function importJobView(
   db: Kysely<DB>,
   describe: (id: string) => Promise<BulkJob>,
   job: JobRecord,
-): Promise<ImportJobResponse> {
+): Promise<Omit<ImportJobResponse, 'classTap'>> {
   const described = await describe(String(job.id));
   const rows = await importRows(db, String(job.id));
   const { results, held } = await summary(db, job, described, rows);

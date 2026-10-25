@@ -61,6 +61,8 @@ export function useImportJob(opts: {
   const rows = computed(() => data.value?.rows ?? []);
   const results = computed(() => data.value?.results ?? null);
   const reset = computed(() => data.value?.passwordReset ?? null);
+  /** The import issues TAPs for class: whether anyone is still unsynced close to it. */
+  const classTap = computed(() => data.value?.classTap ?? null);
   const stopped = computed(() => !!job.value && bulkJobStopped(job.value));
 
   /** Whichever of the import and its reset may still change, for polling. */
@@ -227,6 +229,7 @@ export function useImportJob(opts: {
     job,
     rows,
     results,
+    classTap,
     stopped,
     problems,
     failure,

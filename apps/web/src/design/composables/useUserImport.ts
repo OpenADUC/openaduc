@@ -2,7 +2,9 @@
 // Import users from a spreadsheet, from the user list or from an OU (which
 // every bucket then starts in). Six steps: the source, which column is
 // which, the names, the buckets rows are placed in, the options, and the
-// final check right before the run.
+// final check right before the run. The options can have the run issue
+// each person a Temporary Access Pass for their onboarding class, made
+// once they're in Entra and listed on the import's class roster.
 //
 // The draft lives in sessionStorage (importDraft.ts). Before the final
 // check the server is only read from: the naming check and the lookup of
@@ -14,6 +16,7 @@
 
 import { computed, reactive, ref, shallowRef, watch } from 'vue';
 import {
+  CLASS_TAP_DEFAULT_LIFETIME_MINUTES,
   DEFAULT_NEW_USER_SETTINGS,
   IMPORT_FIELDS,
   IMPORT_FIELD_LABEL,
@@ -23,6 +26,8 @@ import {
   bucketKey,
   bucketsOf,
   checkPassword,
+  classTapDefaults,
+  classTapProblems,
   startsLikeFormula,
   guessMapping,
   importRowRequest,
@@ -39,6 +44,8 @@ import {
   startingPlacement,
   type PlannedAccount,
   type BucketPlacement,
+  type ClassTapOptions,
+  type ClassTapRequest,
   type DirectoryPolicy,
   type GroupSummary,
   type ImportCheckIssue,
@@ -70,11 +77,14 @@ import {
   saveDraft,
   type DraftOwner,
   type ImportDraft,
+  type ClassTapDraft,
   type ImportStep,
   type TypedNames,
 } from '../lib/importDraft.js';
 import { latestRequest } from '../lib/latestRequest.js';
+import { fromLocalInputs } from '../lib/localDateTime.js';
 import { GROUP_PAGE_SIZE, MIN_GROUP_QUERY } from './useAddToGroup.js';
+import { lifetimeOptionsFor } from './useIssueTap.js';
 import { useDebouncedSearch } from './useDebouncedSearch.js';
 
 const CHECK_DELAY_MS = 300;
@@ -205,6 +215,7 @@ export function useUserImport() {
     const saved = loadDraft(owner.value);
     Object.assign(draft, saved ?? blankDraft(startOuDn, settings.value));
     if (startOuDn) draft.startOuDn = startOuDn;
+    await loadClassTapOptions();
   }
 
   watch(
@@ -709,11 +720,100 @@ export function useUserImport() {
     draft.options.passwordMode === 'random' ? RANDOM_MODE_MUST_CHANGE_NOTE : null,
   );
 
+  // ---- Issue TAPs for class --------------------------------------------------
+
+  /** Whether the directory and the tenant let an import issue class passes, and within what. */
+  const classTapOptions = shallowRef<ClassTapOptions | null>(null);
+  const classTapError = ref<string | null>(null);
+  const canIssueTaps = computed(() => auth.hasCapability('write:user.issueTap'));
+  const classPolicy = computed(() =>
+    classTapOptions.value?.status === 'ready' ? classTapOptions.value.policy : null,
+  );
+  /** The operator's time zone: a time of day for each person's start date is read in it. */
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const startDateMapped = computed(() => draft.mapping.includes('startDate'));
+  const classLifetimeOptions = computed(() =>
+    classPolicy.value ? lifetimeOptionsFor(classPolicy.value) : [],
+  );
+  /** The tenant lets a pass be used more than once within its lifetime. */
+  const multiUseAllowed = computed(() => classPolicy.value?.usableOnceOnly === false);
+
+  async function loadClassTapOptions(): Promise<void> {
+    classTapOptions.value = null;
+    classTapError.value = null;
+    if (!canIssueTaps.value) return;
+    try {
+      classTapOptions.value = await api.users.import.classTaps();
+    } catch (err) {
+      classTapError.value = errorMessage(
+        err,
+        'Couldn’t read the tenant’s Temporary Access Pass policy',
+      );
+    }
+  }
+
+  function setClassTap(on: boolean): void {
+    const policy = classPolicy.value;
+    const current: ClassTapDraft = draft.options.classTap ?? {
+      on: false,
+      date: '',
+      time: '09:00',
+      byStartDate: startDateMapped.value,
+      ...(policy
+        ? classTapDefaults(policy)
+        : { lifetimeMinutes: CLASS_TAP_DEFAULT_LIFETIME_MINUTES, isUsableOnce: true }),
+    };
+    draft.options.classTap = { ...current, on };
+  }
+
+  /** What the run asks for its class; null when it issues no passes, or the start isn't set yet. */
+  const classTapRequest = computed<ClassTapRequest | null>(() => {
+    const ct = draft.options.classTap;
+    const policy = classPolicy.value;
+    if (!ct?.on || !policy) return null;
+    const byStartDate = ct.byStartDate && startDateMapped.value;
+    if (!ct.time) return null;
+    const startsAt = fromLocalInputs(ct.date, ct.time);
+    if (!byStartDate && !startsAt) return null;
+    return {
+      start: byStartDate
+        ? { kind: 'startDate', time: ct.time, timeZone }
+        : { kind: 'fixed', startsAt: startsAt! },
+      lifetimeMinutes: ct.lifetimeMinutes,
+      isUsableOnce: policy.usableOnceOnly || ct.isUsableOnce,
+    };
+  });
+
+  /** Why the class's passes can't be issued as asked, by spreadsheet row where it's one row's. */
+  const classTapIssues = computed(() => {
+    if (!draft.options.classTap?.on) return [];
+    const whole = (message: string) => [{ row: null, line: null, name: null, message }];
+    if (classTapOptions.value?.status === 'unavailable') {
+      return whole(classTapOptions.value.message);
+    }
+    if (!classPolicy.value) {
+      return whole(classTapError.value ?? 'Reading the tenant’s Temporary Access Pass policy…');
+    }
+    const request = classTapRequest.value;
+    if (!request) return whole('Choose when class starts.');
+    const rows = toCreate.value;
+    return classTapProblems(
+      request,
+      rows.map((row) => ({ startDate: reviews.value.get(row)?.review.startDate ?? null })),
+      classPolicy.value,
+    ).map((p) =>
+      p.row === null
+        ? { row: null, line: null, name: null, message: p.message }
+        : { ...rowRef(rows[p.row]!), message: p.message },
+    );
+  });
+
   // ---- Final check ---------------------------------------------------------
 
   /** The import as the final check judges it and the run will make it; null until it's ready. */
   const importRequest = computed<ImportRequest | null>(() => {
     if (!namesReady.value || bucketProblems.value.length > 0 || !importPassword.value) return null;
+    if (classTapIssues.value.length > 0) return null;
     const rows = toCreate.value;
     const position = new Map(rows.map((row, i) => [row, i]));
     const out: ImportRow[] = rows.map((row) => {
@@ -736,6 +836,7 @@ export function useUserImport() {
       password: importPassword.value,
       enabled: draft.options.enabled,
       mailFromUpn: draft.options.mailFromUpn,
+      ...(classTapRequest.value ? { classTap: classTapRequest.value } : {}),
     };
   });
   const requestKey = computed(() => JSON.stringify(importRequest.value));
@@ -965,6 +1066,18 @@ export function useUserImport() {
     passwordChecks,
     setPasswordMode,
     mustChangeNote,
+    // Issue TAPs for class
+    canIssueTaps,
+    classTapOptions,
+    classTapError,
+    classPolicy,
+    classLifetimeOptions,
+    multiUseAllowed,
+    startDateMapped,
+    timeZone,
+    setClassTap,
+    classTapRequest,
+    classTapIssues,
     // Final check
     importRequest,
     runCheck,

@@ -245,6 +245,7 @@ export function importPlan(body: CheckedImportRequest, phoneCountry: string | nu
   return {
     password: body.password,
     enabled: body.enabled,
+    ...(body.classTap ? { classTap: body.classTap } : {}),
     rows: body.rows.map((r) => {
       const phones = phonesToWrite(r, r.keepPhonesAsTyped ?? [], phoneCountry).values;
       return {

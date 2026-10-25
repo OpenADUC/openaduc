@@ -4,6 +4,7 @@ import { loadEnv } from '../config/env.js';
 import { AuditService } from '../services/audit.js';
 import { AuthorizationService } from '../services/authorization.js';
 import { BulkJobService } from '../services/bulkJobs/service.js';
+import { ClassPassService } from '../services/classPasses/service.js';
 import { CredentialCacheService } from '../services/credentialCache.js';
 import { DirectoryConfigService } from '../services/directoryConfig.js';
 import { EntraIntegrationService } from '../services/entraIntegration.js';
@@ -27,6 +28,7 @@ declare module 'fastify' {
       audit: AuditService;
       authorization: AuthorizationService;
       bulkJobs: BulkJobService;
+      classPasses: ClassPassService;
       credentialCache: CredentialCacheService;
       directoryConfig: DirectoryConfigService;
       entraIntegration: EntraIntegrationService;
@@ -76,6 +78,17 @@ export default fp(async (app) => {
     app.log,
   );
 
+  const classPasses = new ClassPassService({
+    db: app.db,
+    audit,
+    entra: entraIntegration,
+    graph: graphClient,
+    providers,
+    roleGroups: () => authorization.roleGroups(),
+    capabilitiesOf: (dns) => authorization.resolveCapabilities(dns),
+    logger: app.log,
+  });
+
   const sync = new SyncTaskScheduler(
     app.db,
     app.pgLockPool,
@@ -95,6 +108,7 @@ export default fp(async (app) => {
     audit,
     authorization,
     bulkJobs,
+    classPasses,
     credentialCache,
     directoryConfig,
     entraIntegration,
@@ -118,11 +132,13 @@ export default fp(async (app) => {
   app.addHook('onReady', async () => {
     if (env.SYNC_SCHEDULER_ENABLED) sync.start();
     bulkJobs.start();
+    classPasses.start();
   });
 
   app.addHook('onClose', async () => {
     // Before the credential cache is wiped, so rows in flight can finish.
     await bulkJobs.stop();
+    await classPasses.stop();
     sync.stop();
     credentialCache.stop();
     loginBackoff.stop();

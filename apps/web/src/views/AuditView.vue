@@ -351,13 +351,19 @@ function openDetail(ev: DataTableRowClickEvent): void {
 }
 
 const bulkEntry = (row: AuditEventRow) => describeBulkEntry(row.bulk!, row.actorDisplayName);
-/** An import's results page, which only the operator who ran it can open. */
-const importResults = (row: AuditEventRow) =>
-  row.bulk?.action === IMPORT_JOB_ACTION &&
-  row.bulkJobId !== null &&
-  row.actorUserId === auth.actor?.actorId
-    ? { name: 'user-import-job', params: { id: row.bulkJobId } }
+/**
+ * An import's results page, which only the operator who ran it can open,
+ * or its class roster, which anyone who may issue a TAP can.
+ */
+const importResults = (row: AuditEventRow) => {
+  if (row.bulk?.action !== IMPORT_JOB_ACTION || row.bulkJobId === null) return null;
+  if (row.actorUserId === auth.actor?.actorId) {
+    return { name: 'user-import-job', params: { id: row.bulkJobId } };
+  }
+  return row.bulk.subject?.import?.classTap && auth.hasCapability('write:user.issueTap')
+    ? { name: 'user-import-roster', params: { id: row.bulkJobId } }
     : null;
+};
 
 const revertBulk = useBulkActions({ selectedIds: ref(new Set()), toast: useToast(), reload: load });
 const { job: revertJob, busy: revertBusy, jobFailure: revertFailure } = revertBulk;
@@ -557,7 +563,9 @@ onMounted(() => {
                 :to="importResults(data)!"
                 class="bulk-results"
                 @click.stop
-                >Results</RouterLink
+                >{{
+                  importResults(data)!.name === 'user-import-roster' ? 'Class roster' : 'Results'
+                }}</RouterLink
               >
               <Button
                 v-if="revert.canRevert(data.bulk)"
@@ -850,48 +858,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-/* Tab strip mirrors SettingsView for visual consistency. */
-.ds-tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
-}
-
-.ds-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: transparent;
-  border: 0;
-  padding: 9px 14px;
-  color: var(--text-3);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-  border-radius: 6px 6px 0 0;
-  font-family: var(--font-sans);
-}
-
-.ds-tab:hover {
-  color: var(--text);
-}
-
-.ds-tab.active {
-  color: var(--text);
-}
-
-.ds-tab.active::after {
-  content: '';
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-  border-radius: 2px;
 }
 
 .audit-log-section,

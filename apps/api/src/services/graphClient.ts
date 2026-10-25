@@ -130,6 +130,13 @@ export class GraphClient {
     return await readJson<T>(res, path);
   }
 
+  /** Issue a DELETE against Graph. Something already gone (404) is as good as deleted. */
+  async delete(path: string): Promise<void> {
+    const res = await this.request(path, { method: 'DELETE' });
+    if (res.status === 404) return;
+    if (!res.ok) await raiseFromError(res, path);
+  }
+
   /**
    * The application permissions admin consent has granted, from the access
    * token's `roles` claim, so a missing one can be named without calling
@@ -406,6 +413,13 @@ export class GraphClientFactory {
     private readonly entra: EntraIntegrationService,
     private readonly log: FastifyBaseLogger,
   ) {}
+
+  /** The directory's client while its Temporary Access Pass feature is on; null otherwise. */
+  async tapGraph(providerId: number): Promise<GraphClient | null> {
+    return (await this.entra.isFeatureEnabled(providerId, 'temporaryAccessPass'))
+      ? this.build(providerId)
+      : null;
+  }
 
   async build(providerId: number): Promise<GraphClient | null> {
     const existing = this.cache.get(providerId);

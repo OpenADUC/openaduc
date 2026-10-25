@@ -137,13 +137,14 @@ describe('tapPreflight', () => {
         inPolicyScope: true,
       },
       entraUserId: ENTRA_ID,
+      passes: [],
     });
     expect(graph.gets).toContain(
       `/users?$filter=onPremisesSecurityIdentifier eq '${alice.sid}'&$select=id&$count=true`,
     );
   });
 
-  it('says when the tenant makes every pass one-time', async () => {
+  it('says when the tenant makes every pass single-use', async () => {
     const graph = new FakeGraph();
     graph.policy.isUsableOnce = true;
     const { preflight } = await tapPreflight(deps(graph), alice);
@@ -397,6 +398,7 @@ describe('issueTap', () => {
     expect(outcome).toEqual({
       ok: true,
       entraUserId: ENTRA_ID,
+      methodId: 'tap-1',
       issued: {
         temporaryAccessPass: '+drkzqAD',
         startsAt: '2026-10-24T12:00:00.000Z',
@@ -422,7 +424,7 @@ describe('issueTap', () => {
     expect(graph.posts).toHaveLength(1);
   });
 
-  it('holds to the tenant policy’s lifetime range and one-time setting', async () => {
+  it('holds to the tenant policy’s lifetime range and single-use setting', async () => {
     const graph = new FakeGraph();
     graph.policy.isUsableOnce = true;
     expect(await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 600 })).toEqual({
@@ -435,6 +437,15 @@ describe('issueTap', () => {
       code: 'outside_policy',
     });
     expect(graph.posts).toEqual([]);
+  });
+
+  it('fits a lifetime within the policy’s range when asked to, rather than refusing it', async () => {
+    const graph = new FakeGraph();
+    await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 25, fitLifetime: true });
+    await issueTap(deps(graph), alice, { ...request, lifetimeMinutes: 900, fitLifetime: true });
+    expect(
+      graph.posts.map((p) => (p.body as { lifetimeInMinutes: number }).lifetimeInMinutes),
+    ).toEqual([60, 480]);
   });
 
   it('won’t replace the user’s pass unless the operator was warned', async () => {

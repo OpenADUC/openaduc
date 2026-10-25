@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   importTemplateCsv,
   resolveNames,
+  type ClassTapOptions,
   type ImportCheckResponse,
   type ImportLookupRequest,
   type ImportPerson,
@@ -40,6 +41,16 @@ const check = vi.fn(async (_id: number, body: NamingCheckRequest) => ({
 const lookup = vi.fn(async (_body: ImportLookupRequest) => ({ people }));
 const finalCheck = vi.fn(async () => PASSED);
 const runImport = vi.fn(async (_body: ImportRunRequest) => ({ job: { id: '42' } }));
+const TAP_POLICY = {
+  defaultLifetimeMinutes: 60,
+  minLifetimeMinutes: 60,
+  maxLifetimeMinutes: 480,
+  usableOnceOnly: false,
+};
+const classTaps = vi.fn(async (): Promise<ClassTapOptions> => ({
+  status: 'ready',
+  policy: TAP_POLICY,
+}));
 // Answers with every rule, as the API does.
 const saveRules = vi.fn(async (_id: number, body: PlacementRulesSave) => ({
   rules: [...rules, ...body.rules].map((r) => ({
@@ -64,7 +75,7 @@ vi.mock('../../api/index.js', () => ({
       policy: async () => ({ policy: { minPwdLength: 8, complexityRequired: true } }),
       placementRules: { get: async () => ({ rules }), save: saveRules },
     },
-    users: { import: { lookup, check: finalCheck, run: runImport } },
+    users: { import: { lookup, check: finalCheck, run: runImport, classTaps } },
     auth: { logout: async () => ({ ok: true }) },
     groups: { search: async () => ({ rows: [], total: 0 }) },
   },
@@ -126,6 +137,7 @@ describe('useUserImport', () => {
     finalCheck.mockReset().mockResolvedValue(PASSED);
     runImport.mockReset().mockResolvedValue({ job: { id: '42' } });
     saveRules.mockClear();
+    classTaps.mockClear();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -550,6 +562,100 @@ describe('useUserImport', () => {
       expect(wizard.canContinue.value).toBe(false);
       wizard.password.value = 'Brand-new-Start9';
       expect(wizard.canContinue.value).toBe(true);
+    });
+  });
+
+  describe('class TAPs', () => {
+    const TAPS = ['read:user', 'write:user.create', 'write:user.issueTap'];
+    const day = (days: number) =>
+      new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+    const SHEET_WITH_STARTS = [
+      'First Name\tSurname\tStart date',
+      `Jane\tDoe\t${day(5)}`,
+      'John\tRoe\t',
+    ].join('\n');
+
+    async function atOptions(text = SHEET, capabilities = TAPS) {
+      const wizard = signedIn(capabilities);
+      await wizard.start(STAFF);
+      wizard.paste(text);
+      wizard.next();
+      wizard.next();
+      await settled();
+      wizard.next();
+      wizard.next();
+      await settled();
+      return wizard;
+    }
+
+    it('issues TAPs for class at one time for everyone, a class’s length and multi-use', async () => {
+      const wizard = await atOptions();
+      expect(wizard.draft.step).toBe('options');
+      expect(wizard.classTapOptions.value).toEqual({ status: 'ready', policy: TAP_POLICY });
+      wizard.setClassTap(true);
+      expect(wizard.draft.options.classTap).toMatchObject({
+        lifetimeMinutes: 240,
+        isUsableOnce: false,
+      });
+      expect(wizard.classTapIssues.value).toEqual([
+        { row: null, line: null, name: null, message: 'Choose when class starts.' },
+      ]);
+      expect(wizard.canContinue.value).toBe(false);
+
+      wizard.draft.options.classTap!.date = day(3);
+      wizard.draft.options.classTap!.time = '09:30';
+      expect(wizard.classTapIssues.value).toEqual([]);
+      expect(wizard.importRequest.value?.classTap).toEqual({
+        start: { kind: 'fixed', startsAt: new Date(`${day(3)}T09:30`).toISOString() },
+        lifetimeMinutes: 240,
+        isUsableOnce: false,
+      });
+
+      wizard.draft.options.classTap!.lifetimeMinutes = 600;
+      expect(wizard.classTapIssues.value[0]?.message).toContain('1 hour to 8 hours');
+      expect(wizard.importRequest.value).toBeNull();
+    });
+
+    it('starts each person’s class on their start date, naming rows without one', async () => {
+      const wizard = await atOptions(SHEET_WITH_STARTS);
+      expect(wizard.startDateMapped.value).toBe(true);
+      wizard.setClassTap(true);
+      expect(wizard.draft.options.classTap?.byStartDate).toBe(true);
+      expect(wizard.classTapIssues.value).toEqual([
+        expect.objectContaining({
+          line: 3,
+          name: 'John Roe',
+          message: expect.stringContaining('no start date'),
+        }),
+      ]);
+
+      wizard.exclude(1);
+      await settled();
+      expect(wizard.importRequest.value?.classTap?.start).toEqual({
+        kind: 'startDate',
+        time: '09:00',
+        timeZone: wizard.timeZone,
+      });
+    });
+
+    it('makes every pass single-use when the tenant allows nothing else', async () => {
+      classTaps.mockResolvedValueOnce({
+        status: 'ready',
+        policy: { ...TAP_POLICY, usableOnceOnly: true },
+      });
+      const wizard = await atOptions();
+      wizard.setClassTap(true);
+      wizard.draft.options.classTap!.date = day(3);
+      wizard.draft.options.classTap!.isUsableOnce = false;
+      expect(wizard.multiUseAllowed.value).toBe(false);
+      expect(wizard.importRequest.value?.classTap?.isUsableOnce).toBe(true);
+    });
+
+    it('isn’t offered to an operator who may not issue a TAP', async () => {
+      const wizard = await atOptions(SHEET, ['read:user', 'write:user.create']);
+      expect(classTaps).not.toHaveBeenCalled();
+      expect(wizard.classTapOptions.value).toBeNull();
+      expect(wizard.importRequest.value?.classTap).toBeUndefined();
     });
   });
 
