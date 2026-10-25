@@ -56,6 +56,8 @@ The elevated session ends at whichever comes first:
 
 Both are policy settings (**Settings → Policy**). Changing them requires step-up and writes a `settings.update` audit row; a new idle timeout applies to open elevated sessions at their next request, a new absolute lifetime from the next step-up.
 
+The web UI has no mode to enter (see [ADR 0001](adr/0001-step-up-without-edit-mode.md)). Write-capable operators always see editable fields and actions, and dialogs open without step-up; a write without an elevated session prompts step-up and then completes. While an elevated session lives, a quiet indicator by the operator's name in the sidebar (in the Old School view, the status bar) says when it ends if idle and lets them end it at once. When it ends, unsaved edits stay on screen and the next save prompts step-up again.
+
 The operator's password is held only in process memory in `CredentialCacheService`. It lives in a `Buffer` that is zeroed on eviction, is evicted when the elevated session ends by either limit (a sweep every few seconds catches an operator who never comes back), and is never written to disk or the database. An API restart wipes all cached passwords, forcing re-step-up — which is intentional.
 
 This is what enables **write-as-user**: every AD modification is bound as the operator, not as a shared service account, so AD's own audit log attributes the change to the right human.

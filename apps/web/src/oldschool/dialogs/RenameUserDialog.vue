@@ -66,7 +66,7 @@ function onInput(key: RenameField | 'givenName' | 'surname', ev: Event): void {
 function submit(): void {
   if (changedKeys.value.length === 0) return;
   err.value = null;
-  auth.requireEdit(async () => {
+  const apply = async (): Promise<void> => {
     try {
       await api.users.rename(props.id, buildRequest());
       toast.add({
@@ -78,9 +78,11 @@ function submit(): void {
       store.bumpData();
       emit('close');
     } catch (e) {
+      if (auth.retryAfterStepUp(e, apply)) return;
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
     }
-  }, 'Renaming a user requires step-up authentication.');
+  };
+  auth.requireStepUp(apply, 'Renaming a user requires step-up authentication.');
 }
 </script>
 

@@ -174,7 +174,7 @@ onMounted(load);
           severity="warn"
           size="small"
           :loading="saving"
-          @click="auth.requireEdit(() => save(true))"
+          @click="auth.requireStepUp(() => save(true))"
         />
       </div>
     </Message>
@@ -185,7 +185,7 @@ onMounted(load);
         icon="pi pi-check"
         :disabled="changed.length === 0 || saving"
         :loading="saving && !pendingAdminConfirm"
-        @click="auth.requireEdit(() => save())"
+        @click="auth.requireStepUp(() => save())"
       />
     </div>
   </Card>

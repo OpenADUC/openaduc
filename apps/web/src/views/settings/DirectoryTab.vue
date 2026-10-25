@@ -155,6 +155,7 @@ async function submitAdd(): Promise<void> {
     addOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, submitAdd)) return;
     addError.value = err instanceof ApiError ? err.message : 'Add failed';
   } finally {
     addSubmitting.value = false;
@@ -364,6 +365,7 @@ async function submitEdit(): Promise<void> {
     editOpen.value = false;
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, submitEdit)) return;
     editError.value = err instanceof ApiError ? err.message : 'Save failed';
   } finally {
     editSubmitting.value = false;
@@ -400,6 +402,7 @@ async function runSyncBindTest(): Promise<void> {
     const r = await api.directories.testSyncBind(editTarget.value.id, body);
     testResult.value = { ok: r.ok, message: r.message };
   } catch (err) {
+    if (auth.retryAfterStepUp(err, runSyncBindTest)) return;
     testResult.value = {
       ok: false,
       message: err instanceof ApiError ? err.message : 'Test failed',

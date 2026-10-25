@@ -33,8 +33,6 @@ const {
   run,
 } = useUserDeletion();
 
-// The context menu runs step-up before opening this window, so the
-// preflight (which binds as the operator) can go straight out.
 onMounted(() => void load([props.id]));
 
 const recycleText = computed(() => {
@@ -47,8 +45,8 @@ const recycleText = computed(() => {
 });
 
 async function submit(): Promise<void> {
-  const deleted = await run();
-  if (deleted.includes(props.id)) {
+  const deleted = await run(submit);
+  if (deleted?.includes(props.id)) {
     toast.add({
       severity: 'success',
       summary: 'Object deleted.',

@@ -3,8 +3,7 @@
      Tabs not backed by our cache schema (Dial-in, Environment, Sessions,
      Remote control, Remote Desktop Services Profile, COM+) render the
      authentic layout with disabled controls so the experience reads as
-     "ADUC, but our directory doesn't expose this here". Editable fields
-     submit through PATCH /users/:id and respect the step-up gate. -->
+     "ADUC, but our directory doesn't expose this here". -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import WinDialog from './WinDialog.vue';
@@ -23,6 +22,10 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const auth = useAuthStore();
 const store = useOldSchool();
 const toast = useToast();
+
+const canEditAttributes = computed(() => auth.hasCapability('write:user.attributes'));
+const canUnlock = computed(() => auth.hasCapability('write:user.unlock'));
+const canManageGroups = computed(() => auth.hasCapability('write:group.membership'));
 
 const user = ref<UserDetail | null>(null);
 const loading = ref(true);
@@ -248,27 +251,39 @@ async function save(closeAfter: boolean): Promise<void> {
   }
   const wantUnlock = draft.value.doUnlock && user.value.locked;
 
-  auth.requireEdit(async () => {
+  const hasPatch = Object.keys(patch).length > 0;
+  let patchApplied = !hasPatch;
+  const apply = async (): Promise<void> => {
     try {
-      if (Object.keys(patch).length > 0) {
+      if (!patchApplied) {
         await api.users.update(props.id, { patch });
+        patchApplied = true;
       }
-      if (wantUnlock) {
-        try {
-          await api.users.unlock(props.id);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (wantUnlock) await api.users.unlock(props.id);
       toast.add({ severity: 'success', summary: 'Changes applied.', life: 2500 });
       store.bumpData();
       // Refresh local snapshot from the new state.
       await load();
       if (closeAfter) emit('close');
     } catch (e) {
-      err.value = e instanceof ApiError ? e.message : (e as Error).message;
+      if (auth.retryAfterStepUp(e, apply)) return;
+      toast.add({
+        severity: 'error',
+        summary: !patchApplied
+          ? 'Apply failed'
+          : hasPatch
+            ? 'Changes applied, but the account was not unlocked.'
+            : 'Unlock failed',
+        detail: e instanceof ApiError ? e.message : (e as Error).message,
+        life: 6000,
+      });
+      if (hasPatch && patchApplied) {
+        store.bumpData();
+        await load();
+      }
     }
-  }, 'Updating a user requires step-up authentication.');
+  };
+  auth.requireStepUp(apply, 'Updating a user requires step-up authentication.');
 }
 
 // --- Member Of helpers -----------------------------------------------
@@ -281,7 +296,7 @@ function removeMembership(groupId: string, groupName: string): void {
     okLabel: 'Yes',
     destructive: false,
     onOk: () => {
-      auth.requireEdit(async () => {
+      const apply = async (): Promise<void> => {
         memberOfPending.value = groupId;
         try {
           await api.users.removeGroup(props.id, { groupId });
@@ -289,6 +304,7 @@ function removeMembership(groupId: string, groupName: string): void {
           await load();
           store.bumpData();
         } catch (e) {
+          if (auth.retryAfterStepUp(e, apply)) return;
           toast.add({
             severity: 'error',
             summary: 'Remove failed',
@@ -298,7 +314,8 @@ function removeMembership(groupId: string, groupName: string): void {
         } finally {
           memberOfPending.value = null;
         }
-      }, 'Removing a group membership requires step-up authentication.');
+      };
+      auth.requireStepUp(apply, 'Removing a group membership requires step-up authentication.');
     },
   });
 }
@@ -353,18 +370,38 @@ const upnLogonName = computed(() => {
         <div class="os-form">
           <label class="label" for="givenName">First name:</label>
           <div style="display: flex; gap: 8px">
-            <input id="givenName" class="os-input" v-model="draft.values.givenName" />
+            <input
+              id="givenName"
+              class="os-input"
+              v-model="draft.values.givenName"
+              :disabled="!canEditAttributes"
+            />
             <label class="label" style="flex: 0 0 60px; text-align: right; align-self: center"
               >Initials:</label
             >
             <input class="os-input" style="width: 60px" disabled />
           </div>
           <label class="label" for="surname">Last name:</label>
-          <input id="surname" class="os-input" v-model="draft.values.surname" />
+          <input
+            id="surname"
+            class="os-input"
+            v-model="draft.values.surname"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="displayName">Display name:</label>
-          <input id="displayName" class="os-input" v-model="draft.values.displayName" />
+          <input
+            id="displayName"
+            class="os-input"
+            v-model="draft.values.displayName"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="description">Description:</label>
-          <input id="description" class="os-input" v-model="draft.values.description" />
+          <input
+            id="description"
+            class="os-input"
+            v-model="draft.values.description"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="office">Office:</label>
           <input
             id="office"
@@ -377,11 +414,21 @@ const upnLogonName = computed(() => {
         <div class="os-form">
           <label class="label" for="phone">Telephone number:</label>
           <div style="display: flex; gap: 6px">
-            <input id="phone" class="os-input" v-model="draft.values.phone" />
+            <input
+              id="phone"
+              class="os-input"
+              v-model="draft.values.phone"
+              :disabled="!canEditAttributes"
+            />
             <button class="os-btn" disabled style="min-width: 70px">Other…</button>
           </div>
           <label class="label" for="email">E-mail:</label>
-          <input id="email" class="os-input" v-model="draft.values.email" />
+          <input
+            id="email"
+            class="os-input"
+            v-model="draft.values.email"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="webPage">Web page:</label>
           <div style="display: flex; gap: 6px">
             <input id="webPage" class="os-input" disabled />
@@ -399,17 +446,39 @@ const upnLogonName = computed(() => {
             class="os-textarea"
             rows="3"
             v-model="draft.values.homePostalAddress"
+            :disabled="!canEditAttributes"
           />
           <label class="label" for="pobox">P.O. Box:</label>
           <input id="pobox" class="os-input" :value="user.postOfficeBox ?? ''" disabled />
           <label class="label" for="city">City:</label>
-          <input id="city" class="os-input" v-model="draft.values.l" />
+          <input
+            id="city"
+            class="os-input"
+            v-model="draft.values.l"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="state">State/province:</label>
-          <input id="state" class="os-input" v-model="draft.values.st" />
+          <input
+            id="state"
+            class="os-input"
+            v-model="draft.values.st"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="zip">Zip/Postal Code:</label>
-          <input id="zip" class="os-input" v-model="draft.values.postalCode" />
+          <input
+            id="zip"
+            class="os-input"
+            v-model="draft.values.postalCode"
+            :disabled="!canEditAttributes"
+          />
           <label class="label" for="country">Country/region:</label>
-          <input id="country" class="os-input" v-model="draft.values.co" placeholder="(name)" />
+          <input
+            id="country"
+            class="os-input"
+            v-model="draft.values.co"
+            :disabled="!canEditAttributes"
+            placeholder="(name)"
+          />
         </div>
       </template>
 
@@ -429,7 +498,7 @@ const upnLogonName = computed(() => {
           <button class="os-btn" disabled>Log On To…</button>
         </div>
         <hr style="border: 0; border-top: 1px solid var(--os-window-border-soft); margin: 14px 0" />
-        <label class="os-check" :class="{ disabled: !user.locked }">
+        <label v-if="canUnlock" class="os-check" :class="{ disabled: !user.locked }">
           <input type="checkbox" v-model="draft.doUnlock" :disabled="!user.locked" />
           Unlock account. This account is currently
           {{ user.locked ? 'locked out' : 'not locked out' }} on this Active Directory Domain
@@ -531,19 +600,23 @@ const upnLogonName = computed(() => {
           <legend>Telephone numbers</legend>
           <div class="os-form" style="grid-template-columns: 80px minmax(0, 1fr) 80px">
             <label class="label">Home:</label>
-            <input class="os-input" v-model="draft.values.homePhone" />
+            <input
+              class="os-input"
+              v-model="draft.values.homePhone"
+              :disabled="!canEditAttributes"
+            />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Pager:</label>
             <input class="os-input" :value="user.pager ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Mobile:</label>
-            <input class="os-input" v-model="draft.values.mobile" />
+            <input class="os-input" v-model="draft.values.mobile" :disabled="!canEditAttributes" />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">Fax:</label>
             <input class="os-input" :value="user.facsimileTelephoneNumber ?? ''" disabled />
             <button class="os-btn" disabled>Other…</button>
             <label class="label">IP phone:</label>
-            <input class="os-input" v-model="draft.values.ipPhone" />
+            <input class="os-input" v-model="draft.values.ipPhone" :disabled="!canEditAttributes" />
             <button class="os-btn" disabled>Other…</button>
           </div>
         </fieldset>
@@ -557,11 +630,15 @@ const upnLogonName = computed(() => {
       <template v-else-if="activeTab === 'organization'">
         <div class="os-form">
           <label class="label">Title:</label>
-          <input class="os-input" v-model="draft.values.title" />
+          <input class="os-input" v-model="draft.values.title" :disabled="!canEditAttributes" />
           <label class="label">Department:</label>
-          <input class="os-input" v-model="draft.values.department" />
+          <input
+            class="os-input"
+            v-model="draft.values.department"
+            :disabled="!canEditAttributes"
+          />
           <label class="label">Company:</label>
-          <input class="os-input" v-model="draft.values.company" />
+          <input class="os-input" v-model="draft.values.company" :disabled="!canEditAttributes" />
         </div>
         <fieldset class="os-groupbox">
           <legend>Manager</legend>
@@ -614,7 +691,7 @@ const upnLogonName = computed(() => {
             <span style="color: var(--os-window-text-muted)" v-if="!g.direct">(via nested)</span>
           </div>
         </div>
-        <div style="display: flex; gap: 6px; margin-top: 8px">
+        <div v-if="canManageGroups" style="display: flex; gap: 6px; margin-top: 8px">
           <button class="os-btn" type="button" @click="openAddGroup">Add…</button>
           <button
             class="os-btn"

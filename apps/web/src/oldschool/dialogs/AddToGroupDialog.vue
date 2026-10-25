@@ -55,7 +55,7 @@ function ok(): void {
   const g = selected.value;
   if (!g) return;
   err.value = null;
-  auth.requireEdit(async () => {
+  const apply = async (): Promise<void> => {
     try {
       await api.users.addGroup(props.userId, { groupId: g.id });
       toast.add({
@@ -66,9 +66,11 @@ function ok(): void {
       store.bumpData();
       emit('close');
     } catch (e) {
+      if (auth.retryAfterStepUp(e, apply)) return;
       err.value = e instanceof ApiError ? e.message : (e as Error).message;
     }
-  }, 'Adding a group membership requires step-up authentication.');
+  };
+  auth.requireStepUp(apply, 'Adding a group membership requires step-up authentication.');
 }
 </script>
 
