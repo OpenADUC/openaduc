@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
+  childDn,
   groupCreateRequestSchema,
   groupDeletePreflightResponseSchema,
   groupDeleteRequestSchema,
@@ -23,7 +24,7 @@ import {
   isProtectedGroup,
 } from '../lib/groupDeletion.js';
 import { NotFound, Unauthorized } from '../plugins/errorHandler.js';
-import { childDn, leafRdnValue } from '../providers/active-directory/normalize.js';
+import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { auditContextFromRequest, withAudit } from '../services/auditContext.js';
 import { forgetDeletedGroup, upsertGroup } from '../services/groupCache.js';
 import { findCachedOu } from '../services/ouCache.js';

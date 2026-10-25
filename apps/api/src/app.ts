@@ -21,6 +21,7 @@ import { registerDeletedUserRoutes } from './routes/deletedUsers.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerDirectoryRoutes } from './routes/directories.js';
+import { registerNamingRoutes } from './routes/naming.js';
 import { registerEntraIntegrationRoutes } from './routes/entraIntegrations.js';
 import { registerRoleMappingRoutes, registerSettingsRoutes } from './routes/settings.js';
 import { registerGroupRoutes } from './routes/groups.js';
@@ -87,6 +88,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerDeletedUserRoutes(app);
   await registerAuditRoutes(app);
   await registerDirectoryRoutes(app);
+  await registerNamingRoutes(app);
   await registerEntraIntegrationRoutes(app);
   await registerSettingsRoutes(app);
   await registerRoleMappingRoutes(app);
