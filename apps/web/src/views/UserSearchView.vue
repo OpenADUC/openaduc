@@ -28,6 +28,7 @@ import EmptyState from '../design/primitives/EmptyState.vue';
 import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
+import PasteListDialog from '../design/feedback/PasteListDialog.vue';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
@@ -172,6 +173,11 @@ async function load(): Promise<void> {
     });
     rows.value = resp.rows.map(decorate);
     filteredRows.value = rows.value;
+    // Accounts gone from the cache can't be acted on, nor shown as selected.
+    const loaded = loadedIds.value;
+    if ([...selectedIds.value].some((id) => !loaded.has(id))) {
+      selectedIds.value = new Set([...selectedIds.value].filter((id) => loaded.has(id)));
+    }
     total.value = resp.total;
     freshness.value = resp.freshness;
   } catch (err) {
@@ -187,6 +193,11 @@ async function load(): Promise<void> {
 // "pages" — "select all" instead toggles every currently-visible row.
 const selectedIds = ref<Set<string>>(new Set());
 const selectedCount = computed(() => selectedIds.value.size);
+const loadedIds = computed(() => new Set(rows.value.map((r) => r.id)));
+const hiddenSelectedCount = computed(() => {
+  const visible = new Set(filteredRows.value.map((r) => r.id));
+  return [...selectedIds.value].filter((id) => !visible.has(id)).length;
+});
 
 const allFilteredSelected = computed(
   () =>
@@ -470,6 +481,11 @@ async function onBulkDeleted(deletedIds: string[]): Promise<void> {
   await load();
 }
 
+const canBulkAct = computed(
+  () => canBulkDisable.value || canBulkUnlock.value || canBulkDelete.value,
+);
+const pasteListOpen = ref(false);
+
 const bulkBusyMessage = computed(() => {
   if (!bulkRunning.value) return null;
   return `${bulkProgress.value.done} of ${bulkProgress.value.total} done`;
@@ -528,6 +544,15 @@ onMounted(() => {
           :severity="activeCount > 0 ? 'primary' : 'secondary'"
           :outlined="activeCount === 0"
           @click="drawerOpen = true"
+        />
+        <Button
+          v-if="canBulkAct"
+          label="Paste a list"
+          icon="pi pi-list-check"
+          severity="secondary"
+          outlined
+          :disabled="bulkRunning"
+          @click="pasteListOpen = true"
         />
         <Button
           v-if="auth.hasCapability('export:user')"
@@ -715,6 +740,9 @@ onMounted(() => {
       <div v-if="selectedCount > 0" class="bulkbar" role="region" aria-label="Bulk actions">
         <span class="bulkbar-count mono">
           <strong>{{ selectedCount }}</strong> selected
+          <template v-if="hiddenSelectedCount > 0">
+            · {{ hiddenSelectedCount }} hidden by filters
+          </template>
         </span>
         <span class="bulkbar-divider" />
         <div class="bulkbar-actions">
@@ -783,7 +811,14 @@ onMounted(() => {
       @update:visible="(v) => !v && cancelBulk()"
     >
       <p class="confirm-text">{{ bulkConfirm?.consequence }}</p>
-      <ul v-if="selectedRows.length <= 10" class="confirm-list">
+      <p v-if="hiddenSelectedCount > 0" class="confirm-text">
+        {{
+          hiddenSelectedCount === 1
+            ? '1 of them is hidden by the current filters.'
+            : `${hiddenSelectedCount} of them are hidden by the current filters.`
+        }}
+      </p>
+      <ul class="confirm-list">
         <li v-for="r in selectedRows" :key="r.id">{{ r.displayName ?? r.samAccountName }}</li>
       </ul>
       <template #footer>
@@ -796,6 +831,12 @@ onMounted(() => {
         />
       </template>
     </Dialog>
+
+    <PasteListDialog
+      v-model:visible="pasteListOpen"
+      v-model:selected="selectedIds"
+      :is-loaded="(id) => loadedIds.has(id)"
+    />
 
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
@@ -1167,5 +1208,7 @@ onMounted(() => {
   margin: 0;
   padding-left: 18px;
   font-size: 13px;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 </style>

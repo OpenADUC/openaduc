@@ -11,6 +11,9 @@ import authPlugin, { type RoutePolicyEntry } from '../plugins/auth.js';
 // elevated session itself.
 const STEP_UP_EXEMPT = new Set(['POST /api/auth/step-up', 'DELETE /api/auth/step-up']);
 
+// Reads sent as POST because their input doesn't fit a query string.
+const READ_ONLY_POSTS = new Set(['POST /api/users/match']);
+
 // Signed-in routes that act on no single directory (`directory: 'none'`) by
 // design. Every other signed-in route must be scoped to the caller's.
 const INSTALLATION_WIDE = new Set([
@@ -47,7 +50,12 @@ function problems(route: RoutePolicyEntry): string[] {
   if (!policy) return ['declares no policy'];
   if ('public' in policy) return [];
   const found: string[] = [];
-  if (STATE_CHANGING.has(method) && !policy.stepUp && !STEP_UP_EXEMPT.has(keyOf(route))) {
+  if (
+    STATE_CHANGING.has(method) &&
+    !policy.stepUp &&
+    !STEP_UP_EXEMPT.has(keyOf(route)) &&
+    !READ_ONLY_POSTS.has(keyOf(route))
+  ) {
     found.push('changes state without step-up');
   }
   if (policy.directory === 'none' && !INSTALLATION_WIDE.has(keyOf(route))) {
@@ -93,9 +101,21 @@ describe('route policies', () => {
     expect(broken).toEqual([]);
   });
 
+  it('exempts from step-up only POSTs that declare a read', () => {
+    const declared = routes
+      .filter((r) => READ_ONLY_POSTS.has(keyOf(r)))
+      .map((r) => {
+        const policy = r.policy && 'capability' in r.policy ? r.policy : null;
+        return [keyOf(r), policy?.capability?.startsWith('read:') === true, policy?.stepUp];
+      });
+    expect(declared).toEqual([...READ_ONLY_POSTS].map((key) => [key, true, false]));
+  });
+
   it('exempts only routes that exist', () => {
     const keys = new Set(routes.map(keyOf));
-    const missing = [...STEP_UP_EXEMPT, ...INSTALLATION_WIDE].filter((key) => !keys.has(key));
+    const missing = [...STEP_UP_EXEMPT, ...READ_ONLY_POSTS, ...INSTALLATION_WIDE].filter(
+      (key) => !keys.has(key),
+    );
     expect(missing).toEqual([]);
   });
 });
