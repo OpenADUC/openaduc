@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import { checkPassword, generatePassword, type PasswordPolicy } from './passwordPolicy.js';
+import { checkPassword, generatePassword, type PasswordPolicy } from './password.js';
 
 const complex: PasswordPolicy = { minPwdLength: 7, complexityRequired: true };
 const jane = { samAccountName: 'jdoe', displayName: 'Jane Doe-Smith' };
@@ -45,6 +45,13 @@ describe('generatePassword', () => {
       expect(password.length).toBeGreaterThanOrEqual(20);
       expect(checkPassword(password, policy, jane).every((c) => c.met)).toBe(true);
     }
+  });
+
+  it('makes a longer one when asked, never shorter than the policy’s', () => {
+    expect(generatePassword(complex, jane, 32)).toHaveLength(32);
+    expect(generatePassword({ minPwdLength: 40, complexityRequired: true }, jane, 32)).toHaveLength(
+      40,
+    );
   });
 
   it('meets complexity even when the policy doesn’t ask for it', () => {

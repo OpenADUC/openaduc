@@ -6,7 +6,7 @@ import PrimeVue from 'primevue/config';
 import { describe, expect, it, vi } from 'vitest';
 import type { DirectoryPolicy } from '@openaduc/shared';
 import { aUserDetail } from '../../test/userDetail.js';
-import { checkPassword } from '../lib/passwordPolicy.js';
+import { checkPassword } from '@openaduc/shared';
 
 const user = aUserDetail({ samAccountName: 'jdoe', displayName: 'Jane Doe' });
 const policy: DirectoryPolicy = {

@@ -44,6 +44,40 @@ const api = {
       group: { id: 'g1', name: 'Closers', samAccountName: 'Closers' },
     })),
   },
+  directories: {
+    naming: {
+      get: vi.fn(async () => ({
+        naming: { pattern: '{first}.{last}', upnSuffix: 'corp.example' },
+        upnSuffixes: ['corp.example'],
+      })),
+      check: vi.fn(async (_id: number, body: { names: { first: string; last: string }[] }) => {
+        const { resolveNames } = await import('@openaduc/shared');
+        return {
+          suggestions: resolveNames(
+            body.names.map((name) => ({ name })),
+            { pattern: '{first}.{last}', upnSuffix: 'corp.example' },
+            { samAccountNames: [], userPrincipalNames: [], mailAddresses: [], cns: [] },
+          ),
+        };
+      }),
+    },
+    newUsers: {
+      get: vi.fn(async () => ({
+        newUsers: { mailFromUpn: true, passwordMode: 'random', phoneCountry: null },
+      })),
+    },
+    policy: vi.fn(async () => ({ policy: { minPwdLength: 7, complexityRequired: true } })),
+  },
+  users: {
+    create: vi.fn(async () => ({
+      id: 'u1',
+      distinguishedName: `CN=Jane Doe,${SALES}`,
+      samAccountName: 'jane.doe',
+      completed: ['create', 'password', 'enable'],
+      remaining: [],
+      failure: null,
+    })),
+  },
 };
 vi.mock('../api/index.js', () => ({ api }));
 
@@ -53,10 +87,13 @@ const { useAuthStore } = await import('../stores/auth.js');
 async function openBrowser(path: string, capabilities = ['read:user']) {
   const pinia = createPinia();
   setActivePinia(pinia);
-  useAuthStore().actor = { capabilities, elevated: { active: true } } as never;
+  useAuthStore().actor = { directoryId: 1, capabilities, elevated: { active: true } } as never;
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/browse', name: 'ou-browser', component: OuBrowserView }],
+    routes: [
+      { path: '/browse', name: 'ou-browser', component: OuBrowserView },
+      { path: '/users/:id', name: 'user-detail', component: { template: '<div />' } },
+    ],
   });
   await router.push(path);
   const page = mount(OuBrowserView, {
@@ -121,5 +158,50 @@ describe('creating a group from an OU', () => {
     );
     expect(api.ous.contents).toHaveBeenLastCalledWith(SALES);
     expect(api.ous.contents).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('creating a user from an OU', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('isn’t offered without write:user.create', async () => {
+    const { page } = await openBrowser(`/browse?ou=${encodeURIComponent(SALES)}`);
+    expect(page.findAll('button').map((b) => b.text())).not.toContain('New user');
+  });
+
+  it('creates the user in the OU on screen, and opens their page', async () => {
+    const { page, router } = await openBrowser(`/browse?ou=${encodeURIComponent(SALES)}`, [
+      'read:user',
+      'write:user.create',
+    ]);
+    await page
+      .findAll('button')
+      .find((b) => b.text() === 'New user')!
+      .trigger('click');
+    await flushPromises();
+
+    await page.get('#nu-first').setValue('Jane');
+    await page.get('#nu-last').setValue('Doe');
+    const create = () =>
+      page
+        .get('[role="dialog"]')
+        .findAll('button')
+        .find((b) => b.text() === 'Create user')!;
+    await vi.waitFor(() => expect(create().attributes('disabled')).toBeUndefined(), {
+      timeout: 2000,
+    });
+    expect((page.get('#nu-sam').element as HTMLInputElement).value).toBe('jane.doe');
+    await create().trigger('click');
+    await flushPromises();
+
+    expect(api.users.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ouDn: SALES,
+        samAccountName: 'jane.doe',
+        userPrincipalName: 'jane.doe@corp.example',
+        password: { mode: 'random' },
+      }),
+    );
+    await vi.waitFor(() => expect(router.currentRoute.value.fullPath).toBe('/users/u1'));
   });
 });

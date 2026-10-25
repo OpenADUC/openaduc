@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 import {
   DEFAULT_NAMING_PATTERN,
+  DEFAULT_NEW_USER_SETTINGS,
   LDAP_TLS_MODES,
   type LdapTlsMode,
   type NamingSettings,
+  type NewUserSettings,
   ldapTransportProblem,
+  newUserSettingsSchema,
 } from '@openaduc/shared';
 import { type Kysely, sql } from 'kysely';
 import type { Env } from '../config/env.js';
@@ -53,6 +56,8 @@ export interface DirectoryProviderSummary {
   hasSyncBindPassword: boolean;
   /** How new accounts are named: the defaults until changed with configure:directory. */
   naming: NamingSettings;
+  /** What a new user gets unless the operator changes it: the defaults until changed. */
+  newUsers: NewUserSettings;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -215,7 +220,8 @@ export class DirectoryConfigService {
         : {}),
     };
 
-    // Merged in the database, so a concurrent updateNaming isn't overwritten.
+    // Merged in the database, so a concurrent updateNaming or updateNewUsers
+    // isn't overwritten.
     const setClause: Record<string, unknown> = {
       updated_at: new Date(),
       config_json: sql`config_json || ${JSON.stringify(configPatch)}::jsonb`,
@@ -260,6 +266,19 @@ export class DirectoryConfigService {
     return rowToSummary(updated, this.env);
   }
 
+  async updateNewUsers(id: number, newUsers: NewUserSettings): Promise<DirectoryProviderSummary> {
+    const updated = await this.db
+      .updateTable('directory_providers')
+      .set({
+        updated_at: new Date(),
+        config_json: sql`config_json || ${JSON.stringify({ newUsers })}::jsonb`,
+      })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return rowToSummary(updated, this.env);
+  }
+
   async listAll(): Promise<DirectoryProviderSummary[]> {
     const rows = await this.db
       .selectFrom('directory_providers')
@@ -283,6 +302,15 @@ function parseNaming(config: unknown, domain: string): NamingSettings {
     pattern: typeof stored?.pattern === 'string' ? stored.pattern : DEFAULT_NAMING_PATTERN,
     upnSuffix: typeof stored?.upnSuffix === 'string' ? stored.upnSuffix : domain.toLowerCase(),
   };
+}
+
+function parseNewUsers(config: unknown): NewUserSettings {
+  const stored = (config as { newUsers?: unknown } | null)?.newUsers;
+  const parsed = newUserSettingsSchema.safeParse({
+    ...DEFAULT_NEW_USER_SETTINGS,
+    ...(stored ?? {}),
+  });
+  return parsed.success ? parsed.data : { ...DEFAULT_NEW_USER_SETTINGS };
 }
 
 function rowToSummary(
@@ -321,6 +349,7 @@ function rowToSummary(
     syncBindUpn: row.sync_bind_upn ?? null,
     hasSyncBindPassword: !!row.sync_bind_secret_encrypted,
     naming: parseNaming(row.config_json, row.domain_name),
+    newUsers: parseNewUsers(row.config_json),
     createdAt: new Date(row.created_at),
     updatedAt: new Date(row.updated_at),
   };

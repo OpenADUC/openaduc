@@ -29,6 +29,7 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "libphonenumber-js": "^1.13.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {

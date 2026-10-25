@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
-import type { GroupScope, GroupType, NamingLookups, TakenNames } from '@openaduc/shared';
+import type {
+  GroupScope,
+  GroupType,
+  NamingLookups,
+  TakenNames,
+  UserCreateStep,
+} from '@openaduc/shared';
 import type { GroupDeleteFacts, RoleGroup } from '../lib/groupDeletion.js';
 
 // Provider abstraction over LDAP/AD/Entra. The MVP only ships an Active
@@ -536,6 +542,26 @@ export interface DirectoryProvider {
     input: GroupCreateInput,
     ctx: WriteContext,
   ): Promise<MutationResult & { group?: DirectoryGroup }>;
+  // Create a user at `input.dn` in AD's order: add it disabled, set its
+  // password (and must-change), then enable it unless `finish.enable` is
+  // false. Checks its names are free on the operator's bind first and
+  // returns `conflict` naming the holder otherwise. A step failing after
+  // the add stops there, leaving the account disabled.
+  createUser(
+    input: UserCreateInput,
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult>;
+  // What shows whether an account is as a create left it. Reads with the
+  // service account.
+  getAccountFingerprint(identifier: DirectoryObjectIdentifier): Promise<AccountFingerprint | null>;
+  // Run `steps`, the ones a create left undone, on the account it made.
+  finishUserCreate(
+    userId: DirectoryObjectIdentifier,
+    steps: readonly UserCreateStep[],
+    finish: UserCreateFinish,
+    ctx: WriteContext,
+  ): Promise<UserCreateResult>;
   // What decides whether a group may be deleted besides its own entry:
   // its parent groups and how many accounts have it as primary group.
   // Reads with the service account.
@@ -641,6 +667,52 @@ export interface GroupCreateInput {
   description: string | null;
   scope: GroupScope;
   type: GroupType;
+}
+
+export interface UserCreateInput {
+  /** The new account's DN, built with childDn. */
+  dn: string;
+  cn: string;
+  samAccountName: string;
+  userPrincipalName: string;
+  givenName: string;
+  surname: string;
+  displayName: string;
+  mail: string | null;
+  otherMailbox: string | null;
+  mobile: string | null;
+  telephoneNumber: string | null;
+}
+
+/** What the steps after the add need. */
+export interface UserCreateFinish {
+  password: string;
+  mustChange: boolean;
+  enable: boolean;
+}
+
+export interface UserCreateResult extends MutationResult {
+  /** The steps done, in order. */
+  completed: UserCreateStep[];
+  /** The step that failed after the account was made. */
+  failedStep?: UserCreateStep;
+  /** The account as read back, unless that failed. */
+  user?: DirectoryUser;
+  /** The account as the steps left it, unless that couldn't be read. */
+  fingerprint?: AccountFingerprint;
+}
+
+/**
+ * Raw values that change whenever anyone changes the account, so a later
+ * finish can tell the account is still as a create left it. uSNChanged
+ * is per domain controller.
+ */
+export interface AccountFingerprint {
+  objectGuid: string;
+  whenCreated: string | null;
+  usnChanged: string | null;
+  pwdLastSet: string | null;
+  lastLogonTimestamp: string | null;
 }
 
 export interface OuAttributePatch {

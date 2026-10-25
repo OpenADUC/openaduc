@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { BadRequest, NotFound } from '../plugins/errorHandler.js';
 import { auditContextFromRequest } from '../services/auditContext.js';
 import { findCachedOu } from '../services/ouCache.js';
+import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
 
 const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 
@@ -30,9 +31,7 @@ export async function registerNamingRoutes(app: FastifyInstance): Promise<void> 
   }
 
   async function upnSuffixes(req: FastifyRequest, domain: string): Promise<string[]> {
-    const provider = await app.services.providers.buildForRequest(req);
-    const all = [domain, ...(await provider.getUpnSuffixes())].map((s) => s.toLowerCase());
-    return [...new Set(all)];
+    return directoryUpnSuffixes(await app.services.providers.buildForRequest(req), domain);
   }
 
   // ---- GET /api/directories/:id/naming ---------------------------------
@@ -101,15 +100,22 @@ export async function registerNamingRoutes(app: FastifyInstance): Promise<void> 
         const cached = await findCachedOu(app.db, directory.id, ouDn);
         ous.set(ouDn, cached?.distinguished_name ?? ouDn);
       }
-      const requests = body.names.map(({ ouDn, ...name }) => ({
+      const requests = body.names.map(({ ouDn, overrides, ...name }) => ({
         name,
         ouDn: ouDn ? ous.get(ouDn) : undefined,
+        overrides,
       }));
       const provider = await app.services.providers.buildForRequest(req);
       const taken = await provider.findTakenNames(namingLookups(requests, directory.naming));
+      const typedUpn = requests.some((r) => r.overrides?.userPrincipalName?.trim());
       return {
         naming: directory.naming,
-        suggestions: resolveNames(requests, directory.naming, taken),
+        suggestions: resolveNames(
+          requests,
+          directory.naming,
+          taken,
+          typedUpn ? await upnSuffixes(req, directory.domain) : undefined,
+        ),
       };
     },
   });

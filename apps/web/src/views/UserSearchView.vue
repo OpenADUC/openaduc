@@ -19,7 +19,7 @@ import Toast from 'primevue/toast';
 import { useToast } from 'primevue/usetoast';
 import { FilterMatchMode, type FilterMatchModeValue } from '../design/lib/filterMatchMode.js';
 import { api } from '../api/index.js';
-import { csvRow, type UserSummary } from '@openaduc/shared';
+import { csvRow, type UserCreateResponse, type UserSummary } from '@openaduc/shared';
 import { useAuthStore } from '../stores/auth.js';
 import PageHeader from '../design/primitives/PageHeader.vue';
 import Avatar from '../design/primitives/Avatar.vue';
@@ -29,12 +29,28 @@ import ListSkeleton from '../design/primitives/ListSkeleton.vue';
 import { useListLoading } from '../design/composables/useListLoading.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import PasteListDialog from '../design/feedback/PasteListDialog.vue';
+import NewUserDialog from '../design/feedback/NewUserDialog.vue';
+import { announceUserCreated } from '../design/feedback/userToasts.js';
 import { fmtRelative } from '../design/lib/format.js';
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const toast = useToast();
+
+const canCreate = computed(() => auth.hasCapability('write:user.create'));
+const newUserOpen = ref(false);
+
+/** The operator lands on the new user's page. */
+async function onUserCreated(created: UserCreateResponse): Promise<void> {
+  newUserOpen.value = false;
+  if (created.id) {
+    await router.push({ name: 'user-detail', params: { id: created.id } });
+  } else {
+    await load();
+  }
+  announceUserCreated(toast, created);
+}
 
 type AcctStatus = 'enabled' | 'disabled' | 'locked';
 
@@ -539,6 +555,12 @@ onMounted(() => {
       <template #actions>
         <SyncFreshness :freshness="freshness" />
         <Button
+          v-if="canCreate"
+          label="New user"
+          icon="pi pi-user-plus"
+          @click="newUserOpen = true"
+        />
+        <Button
           :label="activeCount > 0 ? `Filter (${activeCount})` : 'Filter'"
           icon="pi pi-filter"
           :severity="activeCount > 0 ? 'primary' : 'secondary'"
@@ -837,6 +859,8 @@ onMounted(() => {
       v-model:selected="selectedIds"
       :is-loaded="(id) => loadedIds.has(id)"
     />
+
+    <NewUserDialog v-if="newUserOpen" v-model:visible="newUserOpen" @created="onUserCreated" />
 
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
