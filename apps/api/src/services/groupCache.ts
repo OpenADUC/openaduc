@@ -204,6 +204,16 @@ export interface CachedGroup {
   rawAttributes: Record<string, unknown>;
 }
 
+/** The cached groups with these objectGUIDs, keyed by lower-cased id. */
+export async function findCachedGroupsById(
+  db: Kysely<DB>,
+  providerId: number,
+  ids: readonly string[],
+): Promise<Map<string, CachedGroup>> {
+  const groups = await findCachedGroups(db, providerId, { ids });
+  return new Map(groups.map((g) => [g.id.toLowerCase(), g]));
+}
+
 /** Groups the cache holds and hasn't seen deleted, by objectGUID or by DN. */
 export async function findCachedGroups(
   db: Kysely<DB>,

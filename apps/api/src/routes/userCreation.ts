@@ -10,8 +10,6 @@ import {
   userCreateFinishRequestSchema,
   userCreateRequestSchema,
   type CopiedGroup,
-  type GroupPrivilege,
-  type Role,
   type UserCopySource,
   type UserCreatePassword,
   type UserCreateResponse,
@@ -19,9 +17,9 @@ import {
 } from '@openaduc/shared';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { isProtectedGroup } from '../lib/groupDeletion.js';
+import { groupPrivilege } from '../lib/groupPrivilege.js';
 import { rawScalarValue } from '../lib/rawAttributes.js';
-import { ridOf } from '../lib/sid.js';
+import { isDomainSid, ridOf } from '../lib/sid.js';
 import { BadRequest, Conflict, NotFound, Unauthorized } from '../plugins/errorHandler.js';
 import { parentDn } from '../providers/active-directory/normalize.js';
 import type {
@@ -32,7 +30,12 @@ import type {
 } from '../providers/types.js';
 import type { AuditEventInput } from '../services/audit.js';
 import { auditContextFromRequest, recordUserView, withAudit } from '../services/auditContext.js';
-import { findCachedGroups, type CachedGroup } from '../services/groupCache.js';
+import {
+  findCachedGroups,
+  findCachedGroupsById,
+  type CachedGroup,
+} from '../services/groupCache.js';
+import { membershipRequirement } from '../services/groupMembershipWrite.js';
 import { findCachedOu } from '../services/ouCache.js';
 import { directoryUpnSuffixes } from '../services/upnSuffixes.js';
 import { findCachedUser, upsertUser } from '../services/userCache.js';
@@ -71,6 +74,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       if (!ou) throw BadRequest('OU not found in directory cache');
       const { found: groups, missing } = await cachedGroups(provider.id, body.groups ?? []);
       if (missing[0]) throw BadRequest(`group ${missing[0]} not found in directory cache`);
+      await requireRoleGrant(req, groups);
       const managerId = body.organisation?.managerId;
       const manager = managerId
         ? await findCachedUser(app.db, provider.id, { id: managerId })
@@ -242,6 +246,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       const { found: groups, missing: gone } = steps.includes('groups')
         ? await cachedGroups(provider.id, progress.groupsLeft)
         : { found: [], missing: [] };
+      await requireRoleGrant(req, groups);
       const finish = await finishFor(provider, {
         password: body.password,
         groups,
@@ -361,20 +366,29 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
       app.services.authorization.roleGroups(),
     ]);
     const primaryRid = Number(rawScalarValue(user.rawAttributes['primaryGroupID']));
-    const roleOf = new Map(roleGroups.map((g) => [g.dn.toLowerCase(), g.role]));
     return groups
       .filter((g) => {
         const rid = ridOf(g.sid);
-        const ownDomain = !!g.sid?.startsWith('S-1-5-21-');
+        const ownDomain = isDomainSid(g.sid);
         return !(ownDomain && (rid === DOMAIN_USERS_RID || rid === primaryRid));
       })
       .map((g) => ({
         id: g.id,
         name: g.name,
         distinguishedName: g.distinguishedName,
-        privilege: privilegeOf(g, roleOf.get(g.distinguishedName.toLowerCase())),
+        privilege: groupPrivilege(g, roleGroups),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Adding the account to a role group hands out the role, as adding any member does. */
+  async function requireRoleGrant(req: FastifyRequest, groups: readonly GroupToAdd[]) {
+    const needs = membershipRequirement(
+      'add',
+      groups,
+      await app.services.authorization.roleGroups(),
+    );
+    if (needs) await app.requireCapability(req, needs.capability, needs.reason);
   }
 
   /** The groups asked for, in the order asked, and the ids the cache doesn't have. */
@@ -382,9 +396,7 @@ export async function registerUserCreationRoutes(app: FastifyInstance): Promise<
     providerId: number,
     ids: readonly string[],
   ): Promise<{ found: GroupToAdd[]; missing: string[] }> {
-    const byId = new Map(
-      (await findCachedGroups(app.db, providerId, { ids })).map((g) => [g.id.toLowerCase(), g]),
-    );
+    const byId = await findCachedGroupsById(app.db, providerId, ids);
     const found: GroupToAdd[] = [];
     const missing: string[] = [];
     for (const id of ids) {
@@ -521,12 +533,6 @@ async function finishFor(
     mustChange: false,
     groups,
   };
-}
-
-/** What membership in a group grants: AD's protection first, as the bigger of the two. */
-function privilegeOf(group: CachedGroup, role: Role | undefined): GroupPrivilege | null {
-  if (isProtectedGroup(group)) return { reason: 'protected' };
-  return role ? { reason: 'role', role } : null;
 }
 
 type AuditedCreate = ReturnType<typeof auditOf>;

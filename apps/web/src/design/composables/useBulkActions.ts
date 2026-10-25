@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
-// Bulk unlock / enable / disable over a selection of users, run as a job
-// on the server.
+// Bulk unlock / enable / disable over a selection of users, and adding
+// them to groups or removing them from groups, run as a job on the server.
 //
 // Every bulk action asks first: it changes more than one account, and
 // there's no undo for a whole run. The job carries on if the operator
@@ -10,12 +10,14 @@
 
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, type Ref } from 'vue';
 import type { ToastServiceMethods } from 'primevue/toastservice';
-import { bulkJobVerb, type BulkJob, type BulkJobVerb } from '@openaduc/shared';
+import type { BulkJob } from '@openaduc/shared';
 import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
-import { accounts, BULK_VERBS, bulkJobActive } from '../lib/bulkJob.js';
+import { accounts, BULK_VERBS, bulkJobActive, bulkJobTarget } from '../lib/bulkJob.js';
+import type { GroupChange } from './useBulkGroupMembership.js';
 
-export type BulkAction = BulkJobVerb;
+/** The bulk actions that change the accounts themselves. */
+export type BulkAction = 'disable' | 'enable' | 'unlock';
 
 const CONSEQUENCE: Record<BulkAction, string> = {
   disable: "They won't be able to sign in until an operator enables them again.",
@@ -76,8 +78,8 @@ export function useBulkActions(opts: {
       busy.value ||
       (job.value !== null && (job.value.status === 'paused' || bulkJobActive(job.value))),
   );
-  const pendingBulkAction = computed<BulkAction | null>(() =>
-    job.value && bulkJobActive(job.value) ? bulkJobVerb(job.value.action) : null,
+  const pendingBulkAction = computed<BulkJob['action'] | null>(() =>
+    job.value && bulkJobActive(job.value) ? job.value.action : null,
   );
 
   const confirmation = computed(() => {
@@ -156,8 +158,13 @@ export function useBulkActions(opts: {
   }
 
   async function settle(done: BulkJob, announce: boolean): Promise<void> {
-    const { rows: failures } =
-      done.counts.failed > 0 ? await api.bulkJobs.rows(done.id, 'failed') : { rows: [] };
+    const failures = (
+      await Promise.all(
+        (['failed', 'partial'] as const)
+          .filter((status) => done.counts[status] > 0)
+          .map(async (status) => (await api.bulkJobs.rows(done.id, status)).rows),
+      )
+    ).flat();
     if (job.value?.id !== done.id) return;
     bulkErrors.value = new Map(
       failures.map((f) => [f.targetId, f.errorMessage ?? f.errorCode ?? 'Failed']),
@@ -170,7 +177,8 @@ export function useBulkActions(opts: {
       const { ed } = BULK_VERBS[done.action];
       opts.toast.add({
         severity: 'success',
-        summary: `${ed} ${accounts(done.counts.succeeded)}`,
+        summary: `${ed} ${accounts(done.counts.succeeded)}${bulkJobTarget(done.action, done.subject)}`,
+        ...(done.counts.skipped > 0 ? { detail: `${done.counts.skipped} needed no change.` } : {}),
         life: 4000,
       });
       dismissJob();
@@ -212,6 +220,13 @@ export function useBulkActions(opts: {
     confirming.value = null;
     bulkErrors.value = new Map();
     write(() => api.bulkJobs.start(`user.${action}`, ids), true);
+  }
+
+  /** Add users to groups, or remove them, as the operator previewed it. */
+  function startGroupChange(change: GroupChange): void {
+    if (change.ids.length === 0 || change.groupIds.length === 0) return;
+    bulkErrors.value = new Map();
+    write(() => api.bulkJobs.startGroupChange(change), true);
   }
 
   function continueJob(): void {
@@ -264,6 +279,7 @@ export function useBulkActions(opts: {
     requestBulk,
     cancelBulk,
     startBulk,
+    startGroupChange,
     continueJob,
     retryFailed,
     stopJob,

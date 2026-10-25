@@ -41,12 +41,22 @@ function aJob(
   return {
     id: '7',
     action: 'user.disable',
+    subject: null,
     status,
     pauseReason: null,
     actorDisplayName: 'OpenADUC Operator',
     createdAt: new Date().toISOString(),
     finishedAt: status === 'finished' || status === 'cancelled' ? new Date().toISOString() : null,
-    counts: { total: 3, pending: 0, running: 0, succeeded: 0, failed: 0, skipped: 0, ...counts },
+    counts: {
+      total: 3,
+      pending: 0,
+      running: 0,
+      succeeded: 0,
+      partial: 0,
+      failed: 0,
+      skipped: 0,
+      ...counts,
+    },
     ...more,
   };
 }
@@ -139,7 +149,7 @@ describe('bulk actions', () => {
     await flushPromises();
     expect(bulk.job.value?.status).toBe('running');
     expect(bulk.bulkRunning.value).toBe(true);
-    expect(bulk.pendingBulkAction.value).toBe('disable');
+    expect(bulk.pendingBulkAction.value).toBe('user.disable');
 
     await after(POLL.firstMs);
     expect(bulk.job.value?.counts.succeeded).toBe(1);

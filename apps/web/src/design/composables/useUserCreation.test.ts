@@ -394,6 +394,51 @@ describe('useUserCreation', () => {
       );
     });
 
+    it('offers a role group only to an operator who may hand out roles', async () => {
+      const OPERATORS = 'g-operators';
+      const withRoleGroup = {
+        ...ALICE,
+        groups: [
+          ...ALICE.groups,
+          {
+            id: OPERATORS,
+            name: 'OpenADUC Operators',
+            distinguishedName: 'CN=OpenADUC Operators',
+            privilege: { reason: 'role' as const, role: 'operator' as const },
+          },
+        ],
+      };
+      copySource.mockResolvedValue(withRoleGroup);
+      const operator = signedIn(true, ['read:user', 'write:user.create', 'write:group.membership']);
+      await operator.creation.startCopy('u-alice');
+
+      const choice = () => operator.creation.groupChoices.value.find((g) => g.id === OPERATORS);
+      expect(choice()).toEqual({
+        id: OPERATORS,
+        name: 'OpenADUC Operators',
+        ticked: false,
+        disabled: true,
+        warning:
+          'Gives its members OpenADUC’s Operator role. Adding the copy to it takes the configure:security capability.',
+      });
+      operator.creation.toggleGroup(OPERATORS);
+      expect(operator.creation.form.groups).not.toContain(OPERATORS);
+
+      copySource.mockResolvedValue(withRoleGroup);
+      const admin = signedIn(true, [
+        'read:user',
+        'write:user.create',
+        'write:group.membership',
+        'configure:security',
+      ]);
+      await admin.creation.startCopy('u-alice');
+      admin.creation.toggleGroup(OPERATORS);
+      expect(admin.creation.groupChoices.value.find((g) => g.id === OPERATORS)).toMatchObject({
+        ticked: true,
+        disabled: false,
+      });
+    });
+
     it('adds no groups for an operator who can’t change memberships', async () => {
       const { creation, onCreated } = await copying(['read:user', 'write:user.create']);
       await named(creation);

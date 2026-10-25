@@ -8,6 +8,7 @@ const counts = (c: Partial<BulkJobCounts>): BulkJobCounts => ({
   pending: 0,
   running: 0,
   succeeded: 0,
+  partial: 0,
   failed: 0,
   skipped: 0,
   ...c,
@@ -15,6 +16,7 @@ const counts = (c: Partial<BulkJobCounts>): BulkJobCounts => ({
 
 const summary = (more: Partial<AuditBulkSummary>): AuditBulkSummary => ({
   action: 'user.disable',
+  subject: null,
   status: 'finished',
   pauseReason: null,
   total: 42,
@@ -50,7 +52,23 @@ describe('a bulk job in the audit log', () => {
         summary({ status: 'cancelled', counts: counts({ succeeded: 10, skipped: 32 }) }),
         'J',
       ),
-    ).toMatchObject({ outcome: 'Stopped: 10 succeeded · 0 failed', tone: 'amber' });
+    ).toMatchObject({ outcome: 'Stopped: 10 succeeded · 0 failed · 32 skipped', tone: 'amber' });
+  });
+
+  it('names the groups a membership job changed', () => {
+    const groups = (...names: string[]) => ({
+      groups: names.map((name, i) => ({ id: `g${i}`, name, distinguishedName: `CN=${name}` })),
+    });
+    expect(
+      describeBulkEntry(summary({ action: 'user.group.add', subject: groups('Sales') }), 'Jane')
+        .title,
+    ).toBe('Bulk add to Sales by Jane: 42 users');
+    expect(
+      describeBulkEntry(
+        summary({ action: 'user.group.remove', subject: groups('Sales', 'HR', 'Ops') }),
+        null,
+      ).title,
+    ).toBe('Bulk remove from Sales and 2 other groups: 42 users');
   });
 
   it('keeps its heading once the job’s record is gone', () => {

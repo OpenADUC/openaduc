@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { GroupDeleteBlockReason, Role } from '@openaduc/shared';
 import { GROUP_TYPE } from '../providers/active-directory/normalize.js';
+import { grantedRole, isProtectedGroup, type GroupLike, type RoleGroup } from './groupPrivilege.js';
 import { rawFlag, rawScalarValue } from './rawAttributes.js';
 import { ridOf } from './sid.js';
-
-export interface GroupLike {
-  distinguishedName: string;
-  sid: string | null;
-  rawAttributes: Record<string, unknown>;
-}
 
 /** What else, beyond the group's own entry, decides whether it may go. */
 export interface GroupDeleteFacts {
@@ -16,11 +11,6 @@ export interface GroupDeleteFacts {
   parents: readonly GroupLike[];
   /** Accounts whose primary group it is; null when AD couldn't be asked. */
   primaryGroupMembers: number | null;
-}
-
-export interface RoleGroup {
-  dn: string;
-  role: Role;
 }
 
 export interface GroupDeleteBlock {
@@ -36,26 +26,6 @@ export interface GroupDeleteBlock {
 // Domain Admins (512), Domain Users (513), Cert Publishers (517), … and
 // every group in the Builtin domain (S-1-5-32-5xx) have RIDs below 1000.
 const FIRST_NON_BUILTIN_RID = 1000;
-
-// The groups AdminSDHolder protects, by well-known SID rather than name
-// (names are localized and can be changed): in the Builtin domain
-// Administrators, Account/Server/Print/Backup Operators and Replicator; in
-// the domain Domain Admins, Domain Controllers, Schema Admins, Enterprise
-// Admins, Read-only Domain Controllers, Key Admins, Enterprise Key Admins.
-// DnsAdmins and DnsUpdateProxy have no well-known RID, so only their
-// adminCount can mark them.
-const PROTECTED_BUILTIN_RIDS = new Set([544, 548, 549, 550, 551, 552]);
-const PROTECTED_DOMAIN_RIDS = new Set([512, 516, 518, 519, 521, 526, 527]);
-
-/** True for a group AdminSDHolder protects, or has flagged with adminCount=1. */
-export function isProtectedGroup(group: GroupLike): boolean {
-  if (rawScalarValue(group.rawAttributes['adminCount']) === '1') return true;
-  const rid = ridOf(group.sid);
-  if (rid === null) return false;
-  return group.sid!.startsWith('S-1-5-32-')
-    ? PROTECTED_BUILTIN_RIDS.has(rid)
-    : PROTECTED_DOMAIN_RIDS.has(rid);
-}
 
 /**
  * Why this group must not be deleted, or null when it may be. Shared by
@@ -79,9 +49,8 @@ export function groupDeleteBlock(
     return { reason: 'builtin_group' };
   }
   if (isProtectedGroup(group)) return { reason: 'protected_group' };
-  const dn = group.distinguishedName.toLowerCase();
-  const mapped = roleGroups.find((g) => g.dn.toLowerCase() === dn);
-  if (mapped) return { reason: 'role_group', role: mapped.role };
+  const role = grantedRole(group.distinguishedName, roleGroups);
+  if (role) return { reason: 'role_group', role };
   const protectedParents = facts.parents.filter(isProtectedGroup);
   if (protectedParents.length > 0) {
     return { reason: 'member_of_protected_group', parents: protectedParents };

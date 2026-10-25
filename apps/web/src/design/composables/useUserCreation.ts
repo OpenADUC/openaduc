@@ -36,7 +36,7 @@ import { api } from '../../api/index.js';
 import { useAuthStore } from '../../stores/auth.js';
 import { errorMessage } from '../lib/errorMessage.js';
 import { latestRequest } from '../lib/latestRequest.js';
-import { privilegeWarning } from '../lib/newUser.js';
+import { privilegeNote, privilegeWarning } from '../lib/newUser.js';
 
 const CHECK_DELAY_MS = 300;
 
@@ -297,22 +297,33 @@ export function useUserCreation(options: {
   // ---- Plan ----------------------------------------------------------------
 
   const canAddGroups = computed(() => auth.hasCapability('write:group.membership'));
+  const canGrantRoles = computed(() => auth.hasCapability('configure:security'));
 
   /**
    * The source's groups as the checklist shows them: ticked while the copy
-   * is to be added, and why a privileged one deserves a second thought.
+   * is to be added, and why a privileged one deserves a second thought. A
+   * group that hands out an OpenADUC role is the server's to refuse
+   * without configure:security, so it's offered only to who may grant it.
    */
   const groupChoices = computed(() =>
-    (copySource.value?.groups ?? []).map((g) => ({
-      id: g.id,
-      name: g.name,
-      ticked: canAddGroups.value && !!form.groups?.includes(g.id),
-      disabled: !canAddGroups.value,
-      warning: g.privilege ? privilegeWarning(g.privilege) : null,
-    })),
+    (copySource.value?.groups ?? []).map((g) => {
+      const blocked = g.privilege?.reason === 'role' && !canGrantRoles.value;
+      return {
+        id: g.id,
+        name: g.name,
+        ticked: canAddGroups.value && !blocked && !!form.groups?.includes(g.id),
+        disabled: !canAddGroups.value || blocked,
+        warning: !g.privilege
+          ? null
+          : blocked
+            ? `${privilegeNote(g.privilege)} Adding the copy to it takes the configure:security capability.`
+            : privilegeWarning(g.privilege),
+      };
+    }),
   );
 
   function toggleGroup(id: string): void {
+    if (groupChoices.value.find((g) => g.id === id)?.disabled) return;
     const groups = form.groups ?? [];
     form.groups = groups.includes(id) ? groups.filter((g) => g !== id) : [...groups, id];
   }

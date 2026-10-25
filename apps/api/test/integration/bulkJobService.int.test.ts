@@ -91,7 +91,7 @@ describe('the bulk job runner', () => {
         sessions: { findActiveElevated: async () => ({ id: 'e1' }) as never },
         credentialCache: { get: () => 'pw' },
         providers: { buildForDirectory: async () => ({ id: actor.directoryId }) as never },
-        userLiveRefresh: { refresh: async () => null },
+        userLiveRefresh: { refresh: async () => null, reconcileDirectMemberships: async () => {} },
         ...deps,
       },
       api.app.log,

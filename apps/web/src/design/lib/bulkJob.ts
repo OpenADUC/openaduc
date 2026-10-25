@@ -6,19 +6,47 @@ import type {
   BulkJobCounts,
   BulkJobPauseReason,
   BulkJobStatus,
+  BulkJobSubject,
 } from '@openaduc/shared';
 
 export const BULK_VERBS: Record<BulkJobAction, { verb: string; ing: string; ed: string }> = {
   'user.disable': { verb: 'Disable', ing: 'Disabling', ed: 'Disabled' },
   'user.enable': { verb: 'Enable', ing: 'Enabling', ed: 'Enabled' },
   'user.unlock': { verb: 'Unlock', ing: 'Unlocking', ed: 'Unlocked' },
+  'user.group.add': { verb: 'Add', ing: 'Adding', ed: 'Added' },
+  'user.group.remove': { verb: 'Remove', ing: 'Removing', ed: 'Removed' },
 };
 
 export const accounts = (n: number): string => (n === 1 ? '1 account' : `${n} accounts`);
 
+/** Groups by name: "Sales", "Sales and HR", or "Sales and 3 other groups". */
+export function groupNames(groups: readonly { name: string }[]): string {
+  if (groups.length <= 2) return groups.map((g) => g.name).join(' and ');
+  return `${groups[0]!.name} and ${groups.length - 1} other groups`;
+}
+
+/** Where a job's change goes, said after what it changes: " to Sales", or nothing. */
+export function bulkJobTarget(action: BulkJobAction, subject: BulkJobSubject | null): string {
+  if (!subject?.groups.length) return '';
+  if (action === 'user.group.add') return ` to ${groupNames(subject.groups)}`;
+  if (action === 'user.group.remove') return ` from ${groupNames(subject.groups)}`;
+  return '';
+}
+
 /** Rows got through, whatever their outcome. */
-const done = (c: BulkJobCounts): number => c.succeeded + c.failed + c.skipped;
-const tally = (c: BulkJobCounts): string => `${c.succeeded} succeeded · ${c.failed} failed`;
+const done = (c: BulkJobCounts): number => c.succeeded + c.partial + c.failed + c.skipped;
+const tally = (c: BulkJobCounts): string =>
+  [
+    `${c.succeeded} succeeded`,
+    c.partial > 0 ? `${c.partial} partly` : null,
+    `${c.failed} failed`,
+    c.skipped > 0 ? `${c.skipped} skipped` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+/** Rows that still have changes to make: the ones a retry runs again. */
+export const bulkJobProblems = (c: BulkJobCounts): number => c.failed + c.partial;
 
 /** Still writing, or about to: worth polling often. */
 export const bulkJobActive = (job: BulkJob): boolean =>
@@ -60,14 +88,25 @@ export interface BulkJobDescription {
 /** What a bulk job's progress panel says, and which controls it offers. */
 export function describeBulkJob(job: BulkJob): BulkJobDescription {
   const { ing, ed } = BULK_VERBS[job.action];
+  const target = bulkJobTarget(job.action, job.subject);
   const { counts } = job;
   const { label, open } = STATUS[job.status];
   const progress = counts.total === 0 ? 0 : Math.round((done(counts) / counts.total) * 100);
+  const problems = bulkJobProblems(counts);
   const failedNote =
-    counts.failed === 0
+    problems === 0
       ? null
-      : `${counts.failed} failed. ${counts.failed === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
-  const afterwards: BulkJobControl[] = counts.failed > 0 ? ['retry', 'dismiss'] : ['dismiss'];
+      : `${[
+          counts.partial > 0
+            ? `${counts.partial} ${counts.partial === 1 ? 'was' : 'were'} only partly changed`
+            : null,
+          counts.failed > 0 ? `${counts.failed} failed` : null,
+        ]
+          .filter(Boolean)
+          .join(
+            ' and ',
+          )}. ${problems === 1 ? 'It’s' : 'They’re'} still selected, with the reason under each name.`;
+  const afterwards: BulkJobControl[] = problems > 0 ? ['retry', 'dismiss'] : ['dismiss'];
 
   if (job.status === 'paused') {
     return {
@@ -81,7 +120,7 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
   if (open) {
     return {
       tone: 'info',
-      title: `${ing} ${accounts(counts.total)}…`,
+      title: `${ing} ${accounts(counts.total)}${target}…`,
       detail: `${done(counts)} of ${counts.total} done. You can leave this page; it carries on. ${PAUSES_WHEN}`,
       progress,
       controls: ['stop'],
@@ -91,32 +130,38 @@ export function describeBulkJob(job: BulkJob): BulkJobDescription {
     const skipped = counts.skipped > 0 ? `${counts.skipped} weren’t changed.` : null;
     return {
       tone: 'warn',
-      title: `${label}: ${ed.toLowerCase()} ${counts.succeeded} of ${accounts(counts.total)}`,
+      title: `${label}: ${ed.toLowerCase()} ${counts.succeeded} of ${accounts(counts.total)}${target}`,
       detail: [skipped, failedNote].filter(Boolean).join(' ') || null,
       progress: null,
       controls: afterwards,
     };
   }
+  // A finished job's skipped rows needed no change (a user already in the group).
+  const unchanged = counts.skipped > 0 ? `${counts.skipped} needed no change.` : null;
   return {
-    tone: counts.failed > 0 ? 'warn' : 'success',
+    tone: problems > 0 ? 'warn' : 'success',
     title:
-      counts.failed > 0
-        ? `${ed} ${counts.succeeded} of ${accounts(counts.total)}`
-        : `${ed} ${accounts(counts.succeeded)}`,
-    detail: failedNote,
+      counts.succeeded === counts.total
+        ? `${ed} ${accounts(counts.succeeded)}${target}`
+        : `${ed} ${counts.succeeded} of ${accounts(counts.total)}${target}`,
+    detail: [unchanged, failedNote].filter(Boolean).join(' ') || null,
     progress: null,
     controls: afterwards,
   };
 }
 
-/** A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe: 42 users". */
+/**
+ * A bulk job's heading in the audit log, e.g. "Bulk disable by Jane Doe:
+ * 42 users" or "Bulk add to Sales by Jane Doe: 42 users".
+ */
 export function describeBulkEntry(
   bulk: AuditBulkSummary,
   actor: string | null,
 ): { title: string; outcome: string | null; tone: 'green' | 'amber' | 'red' | 'muted' } {
   const verb = BULK_VERBS[bulk.action].verb.toLowerCase();
   const users = bulk.total === 1 ? '1 user' : `${bulk.total} users`;
-  const title = `Bulk ${verb}${actor ? ` by ${actor}` : ''}: ${users}`;
+  const target = bulkJobTarget(bulk.action, bulk.subject);
+  const title = `Bulk ${verb}${target}${actor ? ` by ${actor}` : ''}: ${users}`;
   const { status, counts } = bulk;
   if (status === null || counts === null) return { title, outcome: null, tone: 'muted' };
 

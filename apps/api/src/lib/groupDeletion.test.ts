@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { describe, expect, it } from 'vitest';
-import {
-  groupDeleteBlock,
-  isProtectedGroup,
-  type GroupDeleteFacts,
-  type GroupLike,
-} from './groupDeletion.js';
+import { groupDeleteBlock, type GroupDeleteFacts } from './groupDeletion.js';
+import { isProtectedGroup, type GroupLike } from './groupPrivilege.js';
 
 const DOMAIN = 'S-1-5-21-850847357-2675788760-1070107763';
 const ordinary: GroupLike = {

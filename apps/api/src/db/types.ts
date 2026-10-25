@@ -6,6 +6,7 @@
 import type { ColumnType, Generated, JSONColumnType } from 'kysely';
 import type {
   BulkJobAction,
+  BulkJobSubject,
   BulkJobPauseReason,
   BulkJobRowStatus,
   BulkJobStatus,
@@ -211,6 +212,7 @@ export interface BulkJobsTable {
   status: BulkJobStatus;
   pause_reason: BulkJobPauseReason | null;
   run_token: string | null;
+  subject_json: JSONColumnType<BulkJobSubject> | null;
   actor_user_id: string;
   actor_display_name: string | null;
   actor_username: string;
