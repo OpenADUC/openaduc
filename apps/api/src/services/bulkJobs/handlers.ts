@@ -2,10 +2,15 @@
 import type { Kysely } from 'kysely';
 import { z } from 'zod';
 import {
+  BULK_ACCOUNT_ACTIONS,
+  BULK_ACCOUNT_CAPABILITIES,
+  bulkAccountChangeSchema,
+  bulkAccountRequestSchema,
   bulkAttributeChangesSchema,
   bulkGroupMembershipRequestSchema,
   bulkJobCreateRequestSchema,
   bulkUserAttributesRequestSchema,
+  type BulkAccountOp,
   type BulkGroupMembershipRequest,
   type BulkJobAction,
   type BulkJobSubject,
@@ -21,6 +26,7 @@ import {
   type WriteContext,
 } from '../../providers/types.js';
 import type { AuditEventInput, AuditService } from '../audit.js';
+import { accountPreviewToken, resolveAccountChange } from '../bulkAccountChange.js';
 import {
   attributesPreviewToken,
   changesSubject,
@@ -38,7 +44,7 @@ import {
   type MembershipCacheDeps,
   type MembershipRequirement,
 } from '../groupMembershipWrite.js';
-import { previewToken } from '../groupMembershipPreview.js';
+import { membershipPreviewToken } from '../groupMembershipPreview.js';
 import { alreadyAsAsked, membershipState } from '../membershipState.js';
 import { BulkJobRequestError } from './errors.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../userAttributeWrite.js';
@@ -113,7 +119,7 @@ export interface BulkJobHandler<Request = unknown, Input = unknown> {
   prepare?(
     request: Request,
     lookup: { db: Kysely<DB>; directoryId: number },
-  ): Promise<BulkJobSubject>;
+  ): Promise<BulkJobSubject | null>;
   /** A capability the job's subject takes beyond `capability`, checked at start, continue and retry. */
   requires?(
     subject: BulkJobSubject | null,
@@ -145,31 +151,94 @@ function userAccountHandler(
     request: bulkJobCreateRequestSchema,
     rows: ({ ids }) => ids.map((id) => ({ targetId: id.toLowerCase(), input: null })),
     input: z.null(),
+    run: (row, ctx) => accountRow(row, ctx, account),
+  };
+}
+
+/** One user's account write, as the single-user route makes it, as the row's outcome. */
+async function accountRow(
+  row: {
+    targetId: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown> | null;
+  },
+  ctx: BulkRowContext,
+  account: AccountWrite,
+): Promise<BulkRowOutcome> {
+  const written = await writeUserAccount(
+    ctx.services,
+    ctx.provider,
+    account,
+    row.targetId,
+    ctx.writeCtx,
+    ctx.audit,
+  );
+  if (!written) return { ok: false, errorCode: 'not_found', audited: false };
+  const { result, user, unchanged } = written;
+  const targetDn = user.distinguishedName;
+  // A no-op keeps what an earlier run changed, if one did, for a revert to restore.
+  if (unchanged) return { ok: true, unchanged, before: row.before, after: row.after, targetDn };
+  const fields = { before: result.before ?? null, after: result.after ?? null, targetDn };
+  if (result.ok) return { ok: true, ...fields };
+  const errorCode = result.errorCode ?? 'directory_error';
+  const message = account.refused?.(errorCode, user);
+  return {
+    ok: false,
+    errorCode,
+    errorMessage: result.errorMessage ?? null,
+    ...(message ? { message } : {}),
+    audited: true,
+    ...fields,
+  };
+}
+
+const accountChangeInputSchema = z.object({ change: bulkAccountChangeSchema });
+
+/**
+ * Change each user's account the one way the job asks: move them to an
+ * OU, set when it expires, make them change their password at next
+ * sign-in, or clear "password never expires". A row reads the user live
+ * and makes the single-user write, audited as its route audits it; a user
+ * already as asked isn't written, and is skipped, audited as a no-op.
+ */
+function accountChangeHandler(
+  op: BulkAccountOp,
+): BulkJobHandler<
+  z.infer<typeof bulkAccountRequestSchema>,
+  z.infer<typeof accountChangeInputSchema>
+> {
+  return {
+    action: BULK_ACCOUNT_ACTIONS[op],
+    capability: BULK_ACCOUNT_CAPABILITIES[op],
+    request: bulkAccountRequestSchema.refine((r) => r.change.op === op, {
+      message: `change.op must be ${op}`,
+      path: ['change', 'op'],
+    }),
+    rows: ({ ids, change }) => ids.map((id) => ({ targetId: id.toLowerCase(), input: { change } })),
+    input: accountChangeInputSchema,
+    async prepare({ ids, change, previewToken: token }, { db, directoryId }) {
+      if (token !== accountPreviewToken(ids, change)) {
+        throw new BulkJobRequestError(
+          'preview_mismatch',
+          'The users or the change aren’t the ones previewed. Preview it again.',
+        );
+      }
+      return (await resolveAccountChange(db, directoryId, change)).subject;
+    },
     async run(row, ctx) {
-      const written = await writeUserAccount(
-        ctx.services,
-        ctx.provider,
-        account,
-        row.targetId,
-        ctx.writeCtx,
-        ctx.audit,
-      );
-      if (!written) return { ok: false, errorCode: 'not_found', audited: false };
-      const { result, user } = written;
-      const fields = {
-        before: result.before ?? null,
-        after: result.after ?? null,
-        targetDn: user.distinguishedName,
-      };
-      return result.ok
-        ? { ok: true, ...fields }
-        : {
-            ok: false,
-            errorCode: result.errorCode ?? 'directory_error',
-            errorMessage: result.errorMessage ?? null,
-            audited: true,
-            ...fields,
-          };
+      let change;
+      try {
+        change = await resolveAccountChange(ctx.db, ctx.provider.id, row.input.change);
+      } catch (err) {
+        if (!(err instanceof BulkJobRequestError)) throw err;
+        return {
+          ok: false,
+          errorCode: 'not_found',
+          message: 'The OU is no longer in the directory.',
+          audited: false,
+        };
+      }
+      return accountRow(row, ctx, change.write);
     },
   };
 }
@@ -201,7 +270,7 @@ function groupMembershipHandler(
       { ids: userIds, groupIds, previewToken: token, acknowledgeProtected },
       { db, directoryId },
     ) {
-      if (token !== previewToken(op, userIds, groupIds)) {
+      if (token !== membershipPreviewToken(op, userIds, groupIds)) {
         throw new BulkJobRequestError(
           'preview_mismatch',
           'The users or groups aren’t the ones previewed. Preview the change again.',
@@ -486,4 +555,8 @@ export const BULK_JOB_HANDLERS: BulkJobHandlers = {
   'user.group.add': groupMembershipHandler('add'),
   'user.group.remove': groupMembershipHandler('remove'),
   'user.update': userAttributesHandler(),
+  'user.move': accountChangeHandler('move'),
+  'user.accountExpiry.set': accountChangeHandler('accountExpiry'),
+  'user.passwordMustChange.set': accountChangeHandler('mustChangePassword'),
+  'user.passwordNeverExpires.clear': accountChangeHandler('clearPasswordNeverExpires'),
 };

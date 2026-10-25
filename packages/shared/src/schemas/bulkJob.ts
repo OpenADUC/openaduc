@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 import { z } from 'zod';
 import { directoryCountry } from '../country.js';
-import { CONTROL_CHARS } from './user.js';
+import type { Capability } from '../capabilities.js';
+import { moveRequestSchema, ouRefSchema } from './ou.js';
+import { accountExpiryRequestSchema, CONTROL_CHARS } from './user.js';
 import { previewUserListSchema, previewUserSchema, PREVIEW_LIST_LIMIT } from './preview.js';
 import { groupPrivilegeSchema } from './userCreate.js';
 
@@ -13,6 +15,10 @@ export const BULK_JOB_ACTIONS = [
   'user.group.add',
   'user.group.remove',
   'user.update',
+  'user.move',
+  'user.accountExpiry.set',
+  'user.passwordMustChange.set',
+  'user.passwordNeverExpires.clear',
 ] as const;
 export type BulkJobAction = (typeof BULK_JOB_ACTIONS)[number];
 
@@ -23,6 +29,10 @@ const BULK_JOB_PATHS: Record<BulkJobAction, string> = {
   'user.group.add': '/users/bulk-add-to-groups',
   'user.group.remove': '/users/bulk-remove-from-groups',
   'user.update': '/users/bulk-update',
+  'user.move': '/users/bulk-move',
+  'user.accountExpiry.set': '/users/bulk-account-expiry',
+  'user.passwordMustChange.set': '/users/bulk-require-password-change',
+  'user.passwordNeverExpires.clear': '/users/bulk-clear-password-never-expires',
 };
 
 /** The route, under /api, that starts a job of this action. */
@@ -308,6 +318,126 @@ export const bulkUserAttributesPreviewSchema = z.object({
 });
 export type BulkUserAttributesPreview = z.infer<typeof bulkUserAttributesPreviewSchema>;
 
+/**
+ * Changes to the accounts themselves, each with one target state for
+ * every user: moving them to an OU, setting when their accounts expire
+ * (null: never), making them change their password at next sign-in
+ * (pwdLastSet 0), or clearing "password never expires".
+ */
+export const BULK_ACCOUNT_OPS = [
+  'move',
+  'accountExpiry',
+  'mustChangePassword',
+  'clearPasswordNeverExpires',
+] as const;
+export type BulkAccountOp = (typeof BULK_ACCOUNT_OPS)[number];
+
+/** The job, and each row's audit action, for each account change. */
+export const BULK_ACCOUNT_ACTIONS = {
+  move: 'user.move',
+  accountExpiry: 'user.accountExpiry.set',
+  mustChangePassword: 'user.passwordMustChange.set',
+  clearPasswordNeverExpires: 'user.passwordNeverExpires.clear',
+} as const satisfies Record<BulkAccountOp, BulkJobAction>;
+
+/**
+ * The capability each account change takes. Expiry and clearing "password
+ * never expires" write the Account Restrictions property set, as enabling
+ * does; must-change is half of a password reset, and ADUC's delegation
+ * wizard grants the two together.
+ */
+export const BULK_ACCOUNT_CAPABILITIES = {
+  move: 'write:user.move',
+  accountExpiry: 'write:user.enableDisable',
+  mustChangePassword: 'write:user.resetPassword',
+  clearPasswordNeverExpires: 'write:user.enableDisable',
+} as const satisfies Record<BulkAccountOp, Capability>;
+
+export const bulkAccountChangeSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('move'), targetOuDn: moveRequestSchema.shape.targetOuDn }).strict(),
+  z
+    .object({
+      op: z.literal('accountExpiry'),
+      expiresAt: accountExpiryRequestSchema.shape.expiresAt,
+    })
+    .strict(),
+  z.object({ op: z.literal('mustChangePassword') }).strict(),
+  z.object({ op: z.literal('clearPasswordNeverExpires') }).strict(),
+]);
+export type BulkAccountChange = z.infer<typeof bulkAccountChangeSchema>;
+
+/**
+ * What an account change would do to these users, asked first.
+ * `offset` and `limit` page through the users it changes.
+ */
+export const bulkAccountPreviewRequestSchema = z.object({
+  ids: uniqueGuids(MAX_BULK_JOB_ROWS, 'ids'),
+  change: bulkAccountChangeSchema,
+  offset: z.number().int().min(0).default(0),
+  limit: z.number().int().min(1).max(500).default(PREVIEW_LIST_LIMIT),
+});
+export type BulkAccountPreviewRequest = z.input<typeof bulkAccountPreviewRequestSchema>;
+
+/**
+ * Making an account change: one row per user, at the route for its
+ * op's action. `previewToken` is the preview's, so the job runs on
+ * exactly the users and change previewed.
+ */
+export const bulkAccountRequestSchema = z.object({
+  ids: uniqueGuids(MAX_BULK_JOB_ROWS, 'ids'),
+  change: bulkAccountChangeSchema,
+  previewToken: z.string().min(1),
+});
+export type BulkAccountRequest = z.input<typeof bulkAccountRequestSchema>;
+
+/**
+ * Users the preview points out, besides who it changes:
+ * - `never_expires`: their password never expires, and while it doesn't,
+ *   AD doesn't ask them to change it, must-change or not.
+ * - `random_password`: created here with a random password nobody saw and
+ *   not reset since; they sign in through Entra, where must-change stops
+ *   a synced user signing in unless Connect Sync's force-change flag is on.
+ * - `must_change`: already due to change their password, which AD holds
+ *   back while it never expires; clearing that asks them at next sign-in.
+ * - `name_taken`: their name (RDN) is taken in the OU a move goes to, by
+ *   an object there or another user being moved; the move would fail.
+ */
+export const BULK_ACCOUNT_NOTES = [
+  'never_expires',
+  'random_password',
+  'must_change',
+  'name_taken',
+] as const;
+export type BulkAccountNote = (typeof BULK_ACCOUNT_NOTES)[number];
+
+export const bulkAccountPreviewUserSchema = previewUserSchema.extend({
+  /** What the user has now: the DN of the container they're in, or when their account expires (null: never). */
+  from: z.string().nullable(),
+});
+export type BulkAccountPreviewUser = z.infer<typeof bulkAccountPreviewUserSchema>;
+
+/** An account change's preview, read from the cache. Lists hold the first PREVIEW_LIST_LIMIT by name. */
+export const bulkAccountPreviewSchema = z.object({
+  op: z.enum(BULK_ACCOUNT_OPS),
+  /** The users it would change: the page asked for. */
+  changed: z.object({
+    count: z.number().int(),
+    offset: z.number().int(),
+    users: z.array(bulkAccountPreviewUserSchema),
+  }),
+  /** The users already as asked, whose rows would be skipped. */
+  unchanged: previewUserListSchema,
+  /** Among the users it changes; only the notes that apply, each listing whom. */
+  notes: z.array(previewUserListSchema.extend({ kind: z.enum(BULK_ACCOUNT_NOTES) })),
+  /** The OU a move puts them in. */
+  ou: ouRefSchema.nullable(),
+  /** Users asked for that the cache doesn't know; their rows would fail. */
+  unknownCount: z.number().int(),
+  /** Starting the job takes this back. */
+  previewToken: z.string(),
+});
+export type BulkAccountPreview = z.infer<typeof bulkAccountPreviewSchema>;
+
 export const bulkJobCountsSchema = z.object({
   total: z.number().int(),
   pending: z.number().int(),
@@ -321,8 +451,9 @@ export type BulkJobCounts = z.infer<typeof bulkJobCountsSchema>;
 
 /**
  * What a job does besides naming its rows: the groups a membership job
- * adds to or removes from, or the fields an edit sets (to the value
- * shown, a manager by name) or clears (null).
+ * adds to or removes from, the fields an edit sets (to the value shown,
+ * a manager by name) or clears (null), the OU a move puts users in, or
+ * when an expiry job makes accounts expire (null: never).
  */
 export const bulkJobSubjectSchema = z.object({
   groups: z
@@ -331,6 +462,8 @@ export const bulkJobSubjectSchema = z.object({
   attributes: z
     .array(z.object({ field: z.enum(BULK_ATTRIBUTE_FIELDS), value: z.string().nullable() }))
     .optional(),
+  ou: ouRefSchema.optional(),
+  expiresAt: z.string().nullable().optional(),
 });
 export type BulkJobSubject = z.infer<typeof bulkJobSubjectSchema>;
 

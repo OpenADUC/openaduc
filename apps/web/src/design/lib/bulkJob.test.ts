@@ -92,6 +92,29 @@ describe('a bulk job in the audit log', () => {
     ).toBe('Bulk edit (department and 3 more fields): 42 users');
   });
 
+  it('names the OU a move went to, and when an expiry ends the accounts', () => {
+    const ou = { distinguishedName: 'OU=Leavers,DC=corp', name: 'Leavers' };
+    expect(describeBulkEntry(summary({ action: 'user.move', subject: { ou } }), 'J').title).toBe(
+      'Bulk move to Leavers by J: 42 users',
+    );
+    const endOfDay = new Date(2031, 2, 2).toISOString();
+    expect(
+      describeBulkEntry(
+        summary({ action: 'user.accountExpiry.set', subject: { expiresAt: endOfDay } }),
+        null,
+      ).title,
+    ).toBe(`Bulk set expiry to the end of ${new Date(2031, 2, 1).toLocaleDateString()}: 42 users`);
+    expect(
+      describeBulkEntry(
+        summary({ action: 'user.accountExpiry.set', subject: { expiresAt: null } }),
+        null,
+      ).title,
+    ).toBe('Bulk set expiry to never: 42 users');
+    expect(
+      describeBulkEntry(summary({ action: 'user.passwordNeverExpires.clear' }), null).title,
+    ).toBe('Bulk clear “password never expires”: 42 users');
+  });
+
   it('keeps its heading once the job’s record is gone', () => {
     expect(describeBulkEntry(summary({ status: null, counts: null }), 'Jane Doe')).toEqual({
       title: 'Bulk disable by Jane Doe: 42 users',

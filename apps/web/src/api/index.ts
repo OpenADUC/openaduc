@@ -5,11 +5,13 @@
 import type {
   AccountExpiryRequest,
   AuditBulkSummary,
+  BulkAccountPreview,
+  BulkAccountPreviewRequest,
+  BulkAccountRequest,
   BulkGroupMembershipPreview,
   BulkGroupMembershipPreviewRequest,
   BulkGroupMembershipRequest,
   BulkJob,
-  BulkJobAction,
   BulkJobRow,
   BulkJobRowStatus,
   BulkMembershipOp,
@@ -77,7 +79,7 @@ import type {
   UserSearchResponse,
   UserUpdateRequest,
 } from '@openaduc/shared';
-import { bulkJobPath } from '@openaduc/shared';
+import { BULK_ACCOUNT_ACTIONS, bulkJobPath } from '@openaduc/shared';
 import { apiFetch, type ApiFetchInit } from './client.js';
 
 export interface AuditEventRow {
@@ -528,6 +530,13 @@ export const api = {
         body: JSON.stringify(body),
       });
     },
+    /** What moving these users or changing their account settings would change; nothing is written. */
+    previewAccountChange(body: BulkAccountPreviewRequest): Promise<BulkAccountPreview> {
+      return apiFetch('/users/bulk-account/preview', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
     /** What editing these users' attributes would change, and their current values; nothing is written. */
     previewAttributeEdit(
       body: BulkUserAttributesPreviewRequest,
@@ -690,7 +699,7 @@ export const api = {
   },
   bulkJobs: {
     start(
-      action: Exclude<BulkJobAction, 'user.group.add' | 'user.group.remove' | 'user.update'>,
+      action: 'user.disable' | 'user.enable' | 'user.unlock',
       ids: string[],
     ): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath(action), {
@@ -709,6 +718,12 @@ export const api = {
     },
     startAttributeEdit(body: BulkUserAttributesRequest): Promise<{ job: BulkJob }> {
       return apiFetch(bulkJobPath('user.update'), {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+    },
+    startAccountChange(body: BulkAccountRequest): Promise<{ job: BulkJob }> {
+      return apiFetch(bulkJobPath(BULK_ACCOUNT_ACTIONS[body.change.op]), {
         method: 'POST',
         body: JSON.stringify(body),
       });
