@@ -7,6 +7,7 @@ import {
   type NamingCheckRequest,
   type NamingDeviation,
   type NewUserSettings,
+  type UserCopySource,
   type UserCreateResponse,
 } from '@openaduc/shared';
 import { ApiError } from '../../api/client.js';
@@ -30,6 +31,7 @@ const check = vi.fn(async (_id: number, body: NamingCheckRequest) => ({
 }));
 const create = vi.fn();
 const finishCreate = vi.fn();
+const copySource = vi.fn();
 const stepUp = vi.fn(async () => ({
   elevated: {
     active: true,
@@ -47,7 +49,7 @@ vi.mock('../../api/index.js', () => ({
       newUsers: { get: async () => ({ newUsers }) },
       policy: async () => ({ policy: { minPwdLength: 8, complexityRequired: true } }),
     },
-    users: { create, finishCreate },
+    users: { create, finishCreate, copySource },
     auth: { stepUp },
   },
 }));
@@ -64,18 +66,63 @@ const DONE: UserCreateResponse = {
   failure: null,
 };
 
-async function setup(elevated = true) {
+function signedIn(elevated: boolean, capabilities: string[]) {
   setActivePinia(createPinia());
   const auth = useAuthStore();
-  auth.actor = {
-    directoryId: 1,
-    capabilities: ['read:user', 'write:user.create'],
-    elevated: { active: elevated },
-  } as never;
+  auth.actor = { directoryId: 1, capabilities, elevated: { active: elevated } } as never;
   const onCreated = vi.fn();
-  const creation = useUserCreation({ onCreated });
-  await creation.start({ ouDn: OU });
-  return { creation, auth, onCreated };
+  return { creation: useUserCreation({ onCreated }), auth, onCreated };
+}
+
+async function setup(elevated = true) {
+  const signed = signedIn(elevated, ['read:user', 'write:user.create']);
+  await signed.creation.start({ ouDn: OU });
+  return signed;
+}
+
+const ENGINEERING = 'g-engineering';
+const ADMINS = 'g-admins';
+const ALICE: UserCopySource = {
+  source: {
+    id: 'u-alice',
+    distinguishedName: `CN=Alice Anders,${OU}`,
+    samAccountName: 'alice.anders',
+    displayName: 'Alice Anders',
+  },
+  ouDn: OU,
+  organisation: {
+    title: 'Engineer',
+    department: 'Engineering',
+    company: null,
+    physicalDeliveryOfficeName: 'Leeds',
+    streetAddress: null,
+    l: 'Leeds',
+    st: null,
+    postalCode: null,
+    c: 'GB',
+    co: 'United Kingdom',
+    countryCode: '826',
+  },
+  manager: { id: 'u-bob', distinguishedName: `CN=Bob Baker,${OU}`, displayName: 'Bob Baker' },
+  groups: [
+    {
+      id: ADMINS,
+      name: 'Domain Admins',
+      distinguishedName: 'CN=Domain Admins',
+      privilege: { reason: 'protected' },
+    },
+    { id: ENGINEERING, name: 'Engineering', distinguishedName: 'CN=Engineering', privilege: null },
+  ],
+};
+
+/** Start a copy of Alice as an operator who can change memberships, or not. */
+async function copying(
+  capabilities = ['read:user', 'write:user.create', 'write:group.membership'],
+) {
+  copySource.mockResolvedValue(ALICE);
+  const signed = signedIn(true, capabilities);
+  await signed.creation.startCopy('u-alice');
+  return signed;
 }
 
 /** Let the name check's debounce run and its answer arrive. */
@@ -97,6 +144,7 @@ describe('useUserCreation', () => {
     check.mockClear();
     create.mockReset().mockResolvedValue(DONE);
     finishCreate.mockReset();
+    copySource.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -284,6 +332,138 @@ describe('useUserCreation', () => {
 
     await vi.waitFor(() => expect(creation.error.value).toBe('the logon name is already used'));
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  describe('copying a user', () => {
+    it('starts in its OU with its organisation and ordinary groups, and none of its own details', async () => {
+      const { creation } = await copying();
+
+      expect(copySource).toHaveBeenCalledWith('u-alice');
+      expect(creation.copySource.value).toEqual(ALICE);
+      expect(creation.form).toMatchObject({
+        ouDn: OU,
+        first: '',
+        last: '',
+        personalEmail: '',
+        mobile: '',
+        telephoneNumber: '',
+        copiedFrom: 'u-alice',
+        groups: [ENGINEERING],
+      });
+      expect(creation.groupChoices.value).toEqual([
+        {
+          id: ADMINS,
+          name: 'Domain Admins',
+          ticked: false,
+          disabled: false,
+          warning: expect.stringContaining('Administrative group'),
+        },
+        { id: ENGINEERING, name: 'Engineering', ticked: true, disabled: false, warning: null },
+      ]);
+      expect(creation.manager.value).toEqual(ALICE.manager);
+      expect(creation.country.value).toBe('United Kingdom (GB)');
+    });
+
+    it('creates the copy with what was copied and the groups left ticked', async () => {
+      const { creation, onCreated } = await copying();
+      await named(creation);
+      creation.toggleGroup(ENGINEERING);
+      creation.toggleGroup(ADMINS);
+      creation.form.organisation!.title = 'Senior Engineer';
+
+      creation.submit();
+      await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(DONE));
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          givenName: 'Jane',
+          ouDn: OU,
+          organisation: expect.objectContaining({
+            title: 'Senior Engineer',
+            department: 'Engineering',
+            physicalDeliveryOfficeName: 'Leeds',
+            l: 'Leeds',
+            c: 'GB',
+            co: 'United Kingdom',
+            countryCode: '826',
+            managerId: 'u-bob',
+          }),
+          groups: [ADMINS],
+          copiedFrom: 'u-alice',
+        }),
+      );
+    });
+
+    it('adds no groups for an operator who can’t change memberships', async () => {
+      const { creation, onCreated } = await copying(['read:user', 'write:user.create']);
+      await named(creation);
+
+      expect(creation.canAddGroups.value).toBe(false);
+      expect(creation.groupChoices.value.every((g) => g.disabled && !g.ticked)).toBe(true);
+      expect(creation.plan.value.warnings).toEqual([expect.objectContaining({ field: 'groups' })]);
+      creation.submit();
+      await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+
+      expect(create.mock.calls[0]![0]).not.toHaveProperty('groups');
+      expect(create.mock.calls[0]![0]).toHaveProperty('copiedFrom', 'u-alice');
+    });
+
+    it('retries a group the directory refused, then enables the account', async () => {
+      const { creation, onCreated } = await copying();
+      await named(creation);
+      create.mockResolvedValue({
+        ...DONE,
+        completed: ['create', 'password'],
+        remaining: ['groups', 'enable'],
+        failure: { step: 'groups', message: 'Domain Admins: insufficient access' },
+      });
+
+      creation.submit();
+      await vi.waitFor(() => expect(creation.unfinished.value).not.toBeNull());
+
+      expect(creation.unfinishedSummary.value).toEqual({
+        title: 'jane.doe exists, but it’s disabled.',
+        failed: 'Couldn’t add it to its groups: Domain Admins: insufficient access',
+        left: 'Still to do: add it to its groups, then enable it.',
+      });
+      finishCreate.mockResolvedValue(DONE);
+      creation.finish();
+      await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(DONE));
+      expect(finishCreate).toHaveBeenCalledWith('u1', { enabled: true });
+    });
+
+    it('says so when the user to copy can’t be loaded', async () => {
+      copySource.mockRejectedValueOnce(new ApiError(404, 'not_found', 'user not found'));
+      const { creation } = signedIn(true, ['read:user', 'write:user.create']);
+
+      await creation.startCopy('u-gone');
+
+      expect(creation.copyError.value).toBe('user not found');
+      expect(creation.copySource.value).toBeNull();
+      expect(creation.loading.value).toBe(false);
+      creation.form.first = 'Jane';
+      creation.form.last = 'Doe';
+      expect(creation.canSubmit.value).toBe(false);
+    });
+
+    it('drops the manager or the whole country when cleared', async () => {
+      const { creation, onCreated } = await copying();
+      await named(creation);
+
+      creation.clearManager();
+      creation.clearCountry();
+      creation.submit();
+      await vi.waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
+
+      expect(creation.manager.value).toBeNull();
+      expect(creation.country.value).toBeNull();
+      expect(create.mock.calls[0]![0].organisation).toMatchObject({
+        managerId: null,
+        c: null,
+        co: null,
+        countryCode: null,
+      });
+    });
   });
 
   it('falls back to the pattern when the check fails, saying so', async () => {

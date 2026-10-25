@@ -4,6 +4,7 @@ import type { DB } from '../db/types.js';
 import type { DirectoryGroup } from '../providers/types.js';
 import { stringifyForJsonb } from '../lib/jsonbSafe.js';
 import { uuidNotIn } from '../lib/sqlSets.js';
+import { leafRdnValue } from '../providers/active-directory/normalize.js';
 import { rawValuesArray } from './userCache.js';
 
 /**
@@ -192,4 +193,40 @@ async function dropRawValue(
         SELECT 1 FROM jsonb_array_elements_text(${values}) AS e WHERE lower(e) = lower(${dn})
       )
   `.execute(db);
+}
+
+export interface CachedGroup {
+  id: string;
+  distinguishedName: string;
+  /** The group's name, else its RDN value. */
+  name: string;
+  sid: string | null;
+  rawAttributes: Record<string, unknown>;
+}
+
+/** Groups the cache holds and hasn't seen deleted, by objectGUID or by DN. */
+export async function findCachedGroups(
+  db: Kysely<DB>,
+  providerId: number,
+  by: { ids: readonly string[] } | { dns: readonly string[] },
+): Promise<CachedGroup[]> {
+  const keys = 'ids' in by ? by.ids : by.dns.map((dn) => dn.toLowerCase());
+  if (keys.length === 0) return [];
+  let query = db
+    .selectFrom('group_cache_records')
+    .select(['object_guid', 'name', 'distinguished_name', 'sid', 'raw_attributes_json'])
+    .where('provider_id', '=', providerId)
+    .where('deleted_at', 'is', null);
+  query =
+    'ids' in by
+      ? query.where('object_guid', 'in', [...keys])
+      : query.where(sql<string>`lower(distinguished_name)`, 'in', [...keys]);
+  const rows = await query.execute();
+  return rows.map((r) => ({
+    id: r.object_guid,
+    distinguishedName: r.distinguished_name,
+    name: r.name ?? leafRdnValue(r.distinguished_name) ?? r.distinguished_name,
+    sid: r.sid,
+    rawAttributes: r.raw_attributes_json,
+  }));
 }

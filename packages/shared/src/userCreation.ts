@@ -8,8 +8,10 @@ import { normalizePhone, type NormalizedPhone } from './phone.js';
 import { checkPassword, type PasswordCheck, type PasswordPolicy } from './password.js';
 import {
   PHONE_FIELDS,
+  type NewUserOrganisation,
   type PasswordMode,
   type PhoneField,
+  type UserCopySource,
   type UserCreatePassword,
   type UserCreateRequest,
 } from './schemas/userCreate.js';
@@ -30,6 +32,12 @@ export interface NewUserForm {
   password: string;
   mustChange: boolean;
   enabled: boolean;
+  /** Organisation attributes, as a copy carries them over. */
+  organisation?: NewUserOrganisation;
+  /** Groups to add the account to, by id. */
+  groups?: string[];
+  /** The user this one is a copy of. */
+  copiedFrom?: string | null;
 }
 
 export interface NewUserPlanContext {
@@ -39,6 +47,8 @@ export interface NewUserPlanContext {
   approved: ReadonlySet<string>;
   policy: PasswordPolicy | null;
   phoneCountry: string | null;
+  /** The operator may change group memberships (`write:group.membership`). */
+  canAddGroups: boolean;
 }
 
 export type NewUserField =
@@ -51,7 +61,8 @@ export type NewUserField =
   | 'personalEmail'
   | 'mobile'
   | 'telephoneNumber'
-  | 'password';
+  | 'password'
+  | 'groups';
 
 export interface NewUserIssue {
   field: NewUserField | null;
@@ -79,6 +90,8 @@ export interface NewUserPlan {
   passwordChecks: PasswordCheck[];
   /** The password part of the request, once the password is ready. */
   password: UserCreatePassword | null;
+  /** The groups the create adds the account to. */
+  groups: string[];
 }
 
 export const RANDOM_MODE_MUST_CHANGE_NOTE =
@@ -136,6 +149,22 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
       ? { mode: form.passwordMode as 'generate' | 'set', password: form.password, mustChange }
       : null;
 
+  if (form.copiedFrom && !form.ouDn) {
+    blockers.push({
+      field: 'ouDn',
+      message: 'The user being copied isn’t in an OU, so the copy needs an OU to go in.',
+    });
+  }
+  const organisation =
+    form.organisation && Object.keys(form.organisation).length > 0 ? form.organisation : null;
+  const groups = ctx.canAddGroups ? (form.groups ?? []) : [];
+  if (!ctx.canAddGroups && form.groups?.length) {
+    warnings.push({
+      field: 'groups',
+      message: 'You can’t change group memberships, so the copy isn’t added to any groups.',
+    });
+  }
+
   const incomplete = !form.ouDn || !form.first.trim() || !form.last.trim() || !s || !password;
 
   const request: UserCreateRequest | null =
@@ -157,6 +186,9 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
           keepPhonesAsTyped: PHONE_FIELDS.filter((f) => !phones[f].readable),
           password: password!,
           enabled: form.enabled,
+          ...(organisation ? { organisation } : {}),
+          ...(groups.length > 0 ? { groups } : {}),
+          ...(form.copiedFrom ? { copiedFrom: form.copiedFrom } : {}),
         };
 
   return {
@@ -171,6 +203,25 @@ export function planNewUser(form: NewUserForm, ctx: NewUserPlanContext): NewUser
     mustChangeNote: random ? RANDOM_MODE_MUST_CHANGE_NOTE : null,
     passwordChecks,
     password,
+    groups,
+  };
+}
+
+/**
+ * What a copy of a user starts with: the source's OU, organisation and
+ * groups, as ADUC's Copy does. The groups that grant administrative
+ * rights are left unticked, so adding the copy to one is a choice the
+ * operator makes. Names, email, phones, employee IDs and the description
+ * belong to the person, so the copy starts without them.
+ */
+export function copyToForm(
+  copy: UserCopySource,
+): Required<Pick<NewUserForm, 'ouDn' | 'organisation' | 'groups' | 'copiedFrom'>> {
+  return {
+    ouDn: copy.ouDn,
+    copiedFrom: copy.source.id,
+    organisation: { ...copy.organisation, managerId: copy.manager?.id ?? null },
+    groups: copy.groups.filter((g) => !g.privilege).map((g) => g.id),
   };
 }
 

@@ -20,9 +20,14 @@ import AppToast from '../design/feedback/AppToast.vue';
 import ConfirmDialog from '../design/feedback/ConfirmDialog.vue';
 import InlineFailure from '../design/feedback/InlineFailure.vue';
 import { undoable } from '../design/feedback/undoToast.js';
-import { accountActionToast, passwordResetToast } from '../design/feedback/userToasts.js';
+import {
+  accountActionToast,
+  announceUserCreated,
+  passwordResetToast,
+} from '../design/feedback/userToasts.js';
 import DeleteUsersDialog from '../design/feedback/DeleteUsersDialog.vue';
 import MoveToOuDialog from '../design/feedback/MoveToOuDialog.vue';
+import NewUserDialog from '../design/feedback/NewUserDialog.vue';
 import RenameUserDialog from '../design/feedback/RenameUserDialog.vue';
 import ResetPasswordDialog from '../design/feedback/ResetPasswordDialog.vue';
 import AccountExpiryDialog from '../design/feedback/AccountExpiryDialog.vue';
@@ -35,7 +40,7 @@ import ActivityFeed from '../design/primitives/ActivityFeed.vue';
 import SignInEventsList from '../design/primitives/SignInEventsList.vue';
 import SignInEventDetailDialog from '../design/feedback/SignInEventDetailDialog.vue';
 import { fmtAbsolute, nameOf } from '../design/lib/format.js';
-import type { UserDetail } from '@openaduc/shared';
+import type { UserCreateResponse, UserDetail } from '@openaduc/shared';
 import ObjectPageLayout from './_detail/ObjectPageLayout.vue';
 import type { ObjectAction, ObjectLink, ObjectPageTab } from './_detail/objectPage';
 import type { ActionFailure } from '../design/lib/actionFailure.js';
@@ -806,6 +811,14 @@ const actions = computed<ObjectAction[]>(() => {
         renameDialogOpen.value = true;
       },
     },
+    {
+      label: 'Copy…',
+      icon: 'pi-copy',
+      capability: 'write:user.create',
+      run: () => {
+        copyDialogOpen.value = true;
+      },
+    },
     // Delete is offered only once the account is disabled, which is also
     // what the server enforces.
     {
@@ -827,6 +840,14 @@ const actions = computed<ObjectAction[]>(() => {
 const router = useRouter();
 const renameDialogOpen = ref(false);
 const deleteDialogOpen = ref(false);
+const copyDialogOpen = ref(false);
+
+/** The operator lands on the copy's page. */
+async function onCopied(created: UserCreateResponse): Promise<void> {
+  copyDialogOpen.value = false;
+  if (created.id) await router.push({ name: 'user-detail', params: { id: created.id } });
+  announceUserCreated(toast, created);
+}
 
 async function onRenamed(): Promise<void> {
   toast.add({ severity: 'success', summary: 'User renamed', life: 4000 });
@@ -1841,6 +1862,12 @@ watch(user, (u) => {
 
     <ResetPasswordDialog v-model:visible="resetDialogOpen" :user="user" @reset="onPasswordReset" />
     <RenameUserDialog v-model:visible="renameDialogOpen" :user="user" @renamed="onRenamed" />
+    <NewUserDialog
+      v-if="copyDialogOpen"
+      v-model:visible="copyDialogOpen"
+      :copy-from="id"
+      @created="onCopied"
+    />
     <DeleteUsersDialog
       v-if="deleteDialogOpen"
       v-model:visible="deleteDialogOpen"

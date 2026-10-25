@@ -186,3 +186,21 @@ export async function cachedMembersOf(
     .execute();
   return rows.map((r) => r.object_guid);
 }
+
+/** A user the cache holds and hasn't seen deleted, by objectGUID or by DN. */
+export function findCachedUser(
+  db: Kysely<DB>,
+  providerId: number,
+  by: { id: string } | { dn: string },
+) {
+  const query = db
+    .selectFrom('user_cache_records')
+    .select(['object_guid', 'distinguished_name', 'sam_account_name', 'display_name'])
+    .where('provider_id', '=', providerId)
+    .where('deleted_at', 'is', null);
+  return (
+    'id' in by
+      ? query.where('object_guid', '=', by.id)
+      : query.where(sql<string>`lower(distinguished_name)`, '=', by.dn.toLowerCase())
+  ).executeTakeFirst();
+}

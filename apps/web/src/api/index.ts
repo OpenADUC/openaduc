@@ -36,6 +36,7 @@ import type {
   NamingSettingsResponse,
   NewUserSettings,
   NewUserSettingsResponse,
+  UserCopySource,
   UserCreateFinishRequest,
   UserCreateRequest,
   UserCreateResponse,
@@ -422,6 +423,9 @@ export const api = {
     },
     create(body: UserCreateRequest): Promise<UserCreateResponse> {
       return apiFetch('/users', { method: 'POST', body: JSON.stringify(body) });
+    },
+    copySource(id: string): Promise<UserCopySource> {
+      return apiFetch(`/users/${encodeURIComponent(id)}/copy`);
     },
     finishCreate(id: string, body: UserCreateFinishRequest): Promise<UserCreateResponse> {
       return apiFetch(`/users/${encodeURIComponent(id)}/finish-create`, {

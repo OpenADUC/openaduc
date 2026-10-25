@@ -416,6 +416,12 @@ function exitOldSchool(): void {
         :parent-dn="w.dialog.parentDn"
         @close="store.closeWindow(w.id)"
       />
+      <NewUserDialog
+        v-else-if="w.dialog.kind === 'copy-user'"
+        :window-id="w.id"
+        :copy-from="w.dialog.id"
+        @close="store.closeWindow(w.id)"
+      />
       <NewGroupDialog
         v-else-if="w.dialog.kind === 'new-group'"
         :window-id="w.id"

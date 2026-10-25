@@ -17,6 +17,8 @@ export interface UnfinishedCreate {
   createdAt: Date;
   completed: UserCreateStep[];
   remaining: UserCreateStep[];
+  /** The groups, by objectGUID, the groups step still has to add the account to. */
+  groupsLeft: string[];
   /** The account as the latest step left it; null when it couldn't be read. */
   account: AccountFingerprint | null;
 }
@@ -57,6 +59,9 @@ export async function findUnfinishedCreate(
     createdAt: new Date(create.timestamp as unknown as string),
     completed,
     remaining,
+    groupsLeft: Array.isArray(after?.groupsLeft)
+      ? after.groupsLeft.filter((id): id is string => typeof id === 'string')
+      : [],
     account: fingerprintOf(after?.account),
   };
 }
