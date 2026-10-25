@@ -104,10 +104,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
   // ---- PATCH /api/settings ----------------------------------------------
   // Body shape: { "key1": value1, "key2": value2, ... }. Each key must be in
-  // ALLOWED_SETTINGS or the whole patch is rejected. Capability gated and
-  // audited per key.
+  // ALLOWED_SETTINGS or the whole patch is rejected. Needs step-up: these
+  // settings can turn off view auditing and lengthen sessions. Audited per
+  // key.
   app.patch('/api/settings', {
-    config: { policy: { capability: 'configure:security', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:security', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const body = patchBodySchema.parse(req.body);
       const updates = Object.entries(body);
@@ -157,6 +158,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
             action: 'settings.update',
             result: 'success',
             actorAuthMethod: 'ad-password',
+            // One set of settings for every directory.
+            providerId: null,
             targetType: 'config',
             targetId: u.key,
             metadata: { key: u.key },
@@ -332,7 +335,8 @@ export async function registerRoleMappingRoutes(app: FastifyInstance): Promise<v
         action: 'settings.roles.update',
         result: 'success',
         actorAuthMethod: 'ad-password',
-        providerId,
+        // The role mapping applies to every directory.
+        providerId: null,
         targetType: 'config',
         targetId: 'roles',
         before,

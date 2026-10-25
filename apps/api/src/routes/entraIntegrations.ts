@@ -14,7 +14,8 @@ import { ENTRA_TASK_KEYS } from '../services/syncTasks/registry.js';
 
 // Per-directory Entra (Microsoft Graph) integration management. Mirrors
 // the AD directory routes' shape — list / put / delete / test — and uses
-// the same step-up gate for any change to a stored secret.
+// the same step-up gate for any change to a stored secret. Every route
+// acts only on the caller's own directory: another directory's id is 404.
 //
 // Reads (GET integration, GET photo) require `read:user` so the photo on
 // a user's detail card doesn't 403 for an operator who can read users
@@ -57,7 +58,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // UI on initial load and by the user-detail page to decide whether to
   // show the photo + sign-in fields.
   app.get('/api/directories/:id/entra', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -74,7 +75,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   app.put('/api/directories/:id/entra', {
     config: {
       rateLimit: { max: 10, timeWindow: '1 minute' },
-      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'param' },
     },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
@@ -133,7 +134,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           ...auditContextFromRequest(req),
           action: existing ? 'directory.entra.update' : 'directory.entra.create',
           result: 'success',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),
@@ -151,7 +152,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
 
   // ---- DELETE /api/directories/:id/entra -------------------------------
   app.delete('/api/directories/:id/entra', {
-    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'param' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -170,7 +171,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           // 'success' even when no row existed — the operator-facing
           // intent (no integration after this call) was achieved.
           result: 'success',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),
@@ -188,7 +189,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   app.post('/api/directories/:id/entra/test', {
     config: {
       rateLimit: { max: 10, timeWindow: '1 minute' },
-      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'param' },
     },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
@@ -223,7 +224,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
           ...auditContextFromRequest(req),
           action: 'directory.entra.test',
           result: result.ok ? 'success' : 'failure',
-          actorAuthMethod: 'step-up',
+          actorAuthMethod: 'ad-password',
           providerId: id,
           targetType: 'config',
           targetId: String(id),
@@ -249,7 +250,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // Pagination is page-based (table-style) because the SPA renders
   // them in DataTable / "Load more" patterns.
   app.get('/api/directories/:id/signin-events', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const querySchema = z.object({
@@ -276,7 +277,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // ---- GET /api/directories/:id/signin-events/apps ---------------------
   // Distinct app list for the audit-tab filter dropdown.
   app.get('/api/directories/:id/signin-events/apps', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const apps = await app.services.signInEvents.distinctApps(id);
@@ -289,7 +290,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // Powers the row-click modal; the list endpoint omits detail_json to
   // keep the wire size small.
   app.get('/api/directories/:id/signin-events/:eventId', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const { eventId } = z
@@ -313,7 +314,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   //   method — exact method name (mobilePhone, microsoftAuthenticatorPush, …)
   //   search — substring match on UPN / displayName
   app.get('/api/directories/:id/mfa-registration', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const querySchema = z.object({
@@ -443,7 +444,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // the audit-tab method dropdown. Pulls from the JSONB column via
   // jsonb_array_elements_text and dedupes.
   app.get('/api/directories/:id/mfa-registration/methods', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const rows = await app.db
@@ -469,7 +470,7 @@ export async function registerEntraIntegrationRoutes(app: FastifyInstance): Prom
   // 404 short-circuits with a "no-photo" header so the SPA can fall back
   // to the initials avatar without retrying.
   app.get('/api/directories/:id/users/:userId/photo', {
-    config: { policy: { capability: 'read:user', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'read:user', stepUp: false, directory: 'param' } },
     handler: async (req, reply) => {
       const { id } = idParamSchema.parse(req.params);
       const { userId } = z

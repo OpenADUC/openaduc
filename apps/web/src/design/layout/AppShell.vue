@@ -86,11 +86,6 @@ function onDialogVisibility(open: boolean): void {
         <slot />
       </div>
     </main>
-    <StepUpDialog
-      :visible="auth.stepUpRequested"
-      :reason="auth.stepUpReason"
-      @update:visible="onDialogVisibility"
-    />
     <EditModeFab />
     <EditModeStatusPill />
 
@@ -99,6 +94,13 @@ function onDialogVisibility(open: boolean): void {
          non-bare route. -->
     <OldSchoolMmc v-if="oldSchoolActive" />
   </div>
+
+  <!-- In both layouts: the setup wizard's later steps need step-up too. -->
+  <StepUpDialog
+    :visible="auth.stepUpRequested"
+    :reason="auth.stepUpReason"
+    @update:visible="onDialogVisibility"
+  />
 </template>
 
 <style scoped>

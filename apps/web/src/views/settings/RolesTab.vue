@@ -95,10 +95,8 @@ async function save(confirmAdminChange = false): Promise<void> {
     });
     await load();
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'step_up_required') {
-      // The step-up dialog is opening; save again once it succeeds.
-      auth.stepUpPendingAction = () => save(confirmAdminChange);
-    } else if (err instanceof ApiError && err.status === 409) {
+    if (auth.retryAfterStepUp(err, () => save(confirmAdminChange))) return;
+    if (err instanceof ApiError && err.status === 409) {
       pendingAdminConfirm.value = err.message;
     } else {
       toast.add({

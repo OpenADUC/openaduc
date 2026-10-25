@@ -503,7 +503,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   app.post('/api/directories/:id/sync-tasks/:key/run', {
     config: {
       rateLimit: { max: 30, timeWindow: '1 minute' },
-      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
     },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
@@ -591,7 +591,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // ---- POST /api/directories/:id/sync-tasks/:key/reset -----------------
   // Operator escape hatch — flip a single stuck task out of `running`.
   app.post('/api/directories/:id/sync-tasks/:key/reset', {
-    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const { key } = z.object({ key: z.string().min(1) }).parse(req.params);
@@ -620,7 +620,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   // resetting every stuck task for the directory. Removed in a future
   // release once the UI fully migrates.
   app.post('/api/directories/:id/sync/reset', {
-    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);
       const directory = await app.services.directoryConfig.getById(id);
@@ -652,7 +652,7 @@ export async function registerDirectoryRoutes(app: FastifyInstance): Promise<voi
   app.post('/api/directories/:id/sync', {
     config: {
       rateLimit: { max: 10, timeWindow: '1 minute' },
-      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
     },
     handler: async (req) => {
       const { id } = idParamSchema.parse(req.params);

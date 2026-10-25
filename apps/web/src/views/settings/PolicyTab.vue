@@ -78,6 +78,7 @@ async function save(): Promise<void> {
     toast.add({ severity: 'success', summary: 'Settings saved', life: 3000 });
     await load();
   } catch (err) {
+    if (auth.retryAfterStepUp(err, save)) return;
     toast.add({
       severity: 'error',
       summary: 'Save failed',
@@ -218,7 +219,7 @@ onMounted(async () => {
       icon="pi pi-check"
       :loading="saving"
       :disabled="loading"
-      @click="save"
+      @click="auth.requireEdit(save)"
     />
     <span v-else class="hint">
       You don't have <span class="mono">configure:security</span> capability — view only.

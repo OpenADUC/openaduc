@@ -52,6 +52,7 @@ async function submit(): Promise<void> {
     });
     emit('next');
   } catch (err) {
+    if (auth.retryAfterStepUp(err, submit)) return;
     error.value =
       err instanceof ApiError
         ? err.message

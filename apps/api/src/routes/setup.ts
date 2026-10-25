@@ -19,9 +19,9 @@ import { TASK_REGISTRY } from '../services/syncTasks/registry.js';
 
 // Setup is a multi-step, first-run wizard. Step 1 (POST /api/setup/initialize)
 // is intentionally PUBLIC — until at least one directory is configured the
-// instance has nothing to authenticate against. Subsequent steps run while
-// the operator is signed in (the auto-elevated session from step 1 carries
-// them through the rest of the wizard) and are gated on
+// instance has nothing to authenticate against. Subsequent steps need a
+// signed-in admin with a live step-up (the elevated session step 1 opens
+// carries them through the rest of the wizard) and are gated on
 // `onboarding.completed_at IS NULL` so they can't be replayed afterwards.
 //
 // After onboarding completes, additional domains, service-account rotations
@@ -366,7 +366,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/setup/service-account', {
     config: {
       rateLimit: { max: 10, timeWindow: '1 minute' },
-      policy: { capability: 'configure:directory', stepUp: false, directory: 'none' },
+      policy: { capability: 'configure:directory', stepUp: true, directory: 'none' },
     },
     handler: async (req) => {
       await ensureOnboardingActive();
@@ -453,13 +453,11 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ---- POST /api/setup/policy -----------------------------------------
-  // Step 3: write the three password-policy keys to app_settings. We
-  // deliberately bypass the usual `configure:security` step-up gate
-  // because the operator is mid-onboarding from a freshly-elevated
-  // session — making them step up again to set defaults would be
-  // theatre.
+  // Step 3: write the password-policy display thresholds to app_settings.
+  // Gated on `configure:directory` rather than PATCH /api/settings'
+  // `configure:security`: it's part of setup, run by the setup admin.
   app.post('/api/setup/policy', {
-    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const body = policySchema.parse(req.body);
@@ -509,6 +507,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
             action: 'settings.update',
             result: 'success',
             actorAuthMethod: 'ad-password',
+            providerId: null,
             targetType: 'config',
             targetId: u.key,
             metadata: { key: u.key, source: 'setup-wizard' },
@@ -533,7 +532,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // it — even on failure — so a partial onboarding doesn't leave sync
   // permanently disabled.
   app.post('/api/setup/run-initial-sync', {
-    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
@@ -606,7 +605,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
   // earlier-succeeded tasks untouched, then resume the sequence from the
   // next pending task.
   app.post('/api/setup/retry-task', {
-    config: { policy: { capability: 'configure:directory', stepUp: false, directory: 'none' } },
+    config: { policy: { capability: 'configure:directory', stepUp: true, directory: 'none' } },
     handler: async (req) => {
       await ensureOnboardingActive();
       const directoryId = await firstConfiguredDirectoryId();
