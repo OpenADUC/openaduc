@@ -12,12 +12,14 @@ updates:
     ignore:
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
-      # PrimeVue 5 and @primeuix/themes 3 are under a commercial licence
-      # (licence key, redistribution limits). Stay on the MIT 4.x / 2.x
-      # lines until PrimeVue is replaced.
+      # PrimeVue 5, @primeuix/themes 3 and primeicons 8 are under a commercial
+      # licence (licence key, redistribution limits). Stay on the MIT 4.x /
+      # 2.x / 7.x lines until PrimeVue is replaced.
       - dependency-name: 'primevue'
         update-types: ['version-update:semver-major']
       - dependency-name: '@primeuix/themes'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'primeicons'
         update-types: ['version-update:semver-major']
     groups:
       types:
