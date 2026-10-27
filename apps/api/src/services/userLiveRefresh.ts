@@ -3,7 +3,7 @@ import { sql } from 'kysely';
 import type { Kysely } from 'kysely';
 import type { DB } from '../db/types.js';
 import type { DirectoryProvider, DirectoryUser } from '../providers/types.js';
-import { upsertUser } from './userCache.js';
+import { forgetDeletedUsers, upsertUser } from './userCache.js';
 
 export interface UserLiveRefreshResult {
   user: DirectoryUser;
@@ -15,7 +15,9 @@ export interface UserLiveRefreshResult {
 /**
  * Resolve a user from AD by objectGUID, upsert the cache, and return both
  * the live record and freshness metadata. Used by GET /api/users/:id and
- * (with `mustSucceed: true`) before any write.
+ * (with `mustSucceed: true`) before any write. A user AD no longer has
+ * leaves the cache too: nothing else removes accounts deleted outside
+ * OpenADUC until the tombstone sync exists.
  */
 export class UserLiveRefreshService {
   constructor(private readonly db: Kysely<DB>) {}
@@ -25,7 +27,10 @@ export class UserLiveRefreshService {
     objectGuid: string,
   ): Promise<UserLiveRefreshResult | null> {
     const live = await provider.getUser({ kind: 'objectGuid', value: objectGuid });
-    if (!live) return null;
+    if (!live) {
+      await forgetDeletedUsers(this.db, provider.id, [objectGuid]);
+      return null;
+    }
     await upsertUser(this.db, provider.id, live, { source: 'live-refresh' });
     const refreshedAt = new Date();
     return {

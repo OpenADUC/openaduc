@@ -558,7 +558,8 @@ function openBulkDelete(): void {
 }
 
 async function onBulkDeleted(deletedIds: string[]): Promise<void> {
-  if (deletedIds.length === 0) return;
+  // Reload even when nothing was deleted: accounts found already gone have
+  // left the cache too.
   const next = new Set(selectedIds.value);
   for (const id of deletedIds) next.delete(id);
   selectedIds.value = next;
