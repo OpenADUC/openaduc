@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
+  capabilitiesOfRoles,
   LDAP_TLS_MODES,
   ldapTransportProblem,
   meResponseSchema,
@@ -288,7 +289,8 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         }
         return row;
       });
-      const capabilities = await app.services.authorization.resolveCapabilities(groupDns);
+      const roles = await app.services.authorization.resolveRoles(groupDns);
+      const capabilities = capabilitiesOfRoles(roles);
 
       const { session, cookieToken } = await app.services.sessions.createAdminSession({
         directoryId: created.id,
@@ -297,7 +299,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         actorUsername: bindUsername,
         actorEmail: auth.user.email,
         actorDn: auth.user.distinguishedName,
-        capabilities,
+        roles,
         sourceIp: req.ip,
         userAgent: req.headers['user-agent'] ?? null,
       });
@@ -311,7 +313,7 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         'configure:directory',
         'configure:security',
       ];
-      const elevatedCaps = writeCaps.filter((c) => (capabilities as Capability[]).includes(c));
+      const elevatedCaps = writeCaps.filter((c) => capabilities.includes(c));
       const elevated = await app.services.sessions.createElevatedSession({
         adminSessionId: session.id,
         actorUserId: auth.user.objectGuid,

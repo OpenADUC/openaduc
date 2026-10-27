@@ -52,4 +52,21 @@ setUnauthorizedHandler(() => {
   void router.push({ name: 'login', query: { next: current.fullPath, expired: '1' } });
 });
 
+// A deploy replaces the hashed route chunks, so a tab still running the
+// previous build can't load the next page: load that page from the server,
+// which serves the new build. At most once a minute, in case a chunk is
+// missing for some other reason.
+let chunkLoadFailed = false;
+window.addEventListener('vite:preloadError', () => {
+  chunkLoadFailed = true;
+});
+router.onError((_err, to) => {
+  if (!chunkLoadFailed) return;
+  chunkLoadFailed = false;
+  const key = 'openaduc:reloaded-for-new-build';
+  if (Date.now() - Number(sessionStorage.getItem(key) ?? 0) < 60_000) return;
+  sessionStorage.setItem(key, String(Date.now()));
+  window.location.assign(to.fullPath);
+});
+
 app.mount('#app');

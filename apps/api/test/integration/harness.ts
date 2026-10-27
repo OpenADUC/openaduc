@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance, HTTPMethods, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { Client as LdapClient } from 'ldapts';
 import pg from 'pg';
-import { inject, vi } from 'vitest';
+import { inject, onTestFinished, vi } from 'vitest';
 import type { BulkJob } from '@openaduc/shared';
 import { TEMPLATE_DB } from './globalSetup.js';
 
@@ -151,6 +151,29 @@ export async function setUserAttribute(
   } finally {
     await client.unbind();
   }
+}
+
+/**
+ * Give `samAccountName`'s sessions exactly `capabilities`, for a test of a
+ * set no role grants. Lasts until the returned function is called or the
+ * test ends.
+ */
+export function overrideCapabilities(
+  api: TestApi,
+  samAccountName: string,
+  capabilities: readonly string[],
+): () => void {
+  const sessions = api.app.services.sessions;
+  const resolve = sessions.resolve.bind(sessions);
+  const spy = vi.spyOn(sessions, 'resolve').mockImplementation(async (token) => {
+    const session = await resolve(token);
+    return session?.actorUsername === `${samAccountName}@${DC.domain}`
+      ? { ...session, capabilities: [...capabilities] }
+      : session;
+  });
+  const restore = () => spy.mockRestore();
+  onTestFinished(restore);
+  return restore;
 }
 
 // ---- API instance ------------------------------------------------------

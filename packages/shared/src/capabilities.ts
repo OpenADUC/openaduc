@@ -63,3 +63,8 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   ],
   auditor: ['read:user', 'read:group', 'read:computer', 'view:audit'],
 };
+
+/** Everything the roles allow between them. */
+export function capabilitiesOfRoles(roles: readonly Role[]): Capability[] {
+  return [...new Set(roles.flatMap((role) => ROLE_CAPABILITIES[role]))];
+}

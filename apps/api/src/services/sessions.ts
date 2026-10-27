@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { Kysely } from 'kysely';
-import { ELEVATED_SESSION_LIMITS, type ElevatedSessionState } from '@openaduc/shared';
+import {
+  capabilitiesOfRoles,
+  ELEVATED_SESSION_LIMITS,
+  type ElevatedSessionState,
+  type Role,
+  ROLES,
+} from '@openaduc/shared';
 import type { DB } from '../db/types.js';
 import { generateToken, hashToken } from '../lib/crypto.js';
 import type { SettingsService } from './settings.js';
@@ -19,6 +25,12 @@ export interface AdminSession {
   actorUsername: string | null;
   actorEmail: string | null;
   actorDn: string | null;
+  /** Read from AD group membership at sign-in and step-up. */
+  roles: Role[];
+  /**
+   * What the roles allow under this build's role definitions, so a deploy
+   * that changes them applies to sessions already open.
+   */
   capabilities: string[];
   sourceIp: string | null;
   userAgent: string | null;
@@ -48,7 +60,7 @@ export interface CreateSessionInput {
   actorUsername: string | null;
   actorEmail: string | null;
   actorDn: string | null;
-  capabilities: string[];
+  roles: Role[];
   sourceIp: string | null;
   userAgent: string | null;
   /**
@@ -92,7 +104,7 @@ export class SessionsService {
         actor_username: input.actorUsername,
         actor_email: input.actorEmail,
         actor_dn: input.actorDn,
-        capabilities_json: JSON.stringify(input.capabilities),
+        roles_json: JSON.stringify(input.roles),
         source_ip: input.sourceIp,
         user_agent: input.userAgent,
         expires_at: expiresAt.toISOString(),
@@ -109,6 +121,8 @@ export class SessionsService {
    *   - the row is revoked
    *   - the absolute expiry has passed
    *   - the idle timeout has elapsed since last_seen_at
+   *   - it holds no role (a session from before roles were stored that
+   *     the migration couldn't place)
    *
    * On success, last_seen_at is bumped (sliding session).
    */
@@ -130,6 +144,9 @@ export class SessionsService {
     const lastSeenAt = new Date(row.last_seen_at).getTime();
     if (now - lastSeenAt > (await this.signInIdleMs())) return null;
 
+    const session = rowToSession(row);
+    if (session.roles.length === 0) return null;
+
     // Bump last_seen_at. Don't await; the resolve has succeeded — a failure to
     // record activity should not invalidate the request.
     void this.db
@@ -139,7 +156,7 @@ export class SessionsService {
       .execute()
       .catch(() => undefined);
 
-    return rowToSession(row);
+    return session;
   }
 
   /**
@@ -369,7 +386,7 @@ function rowToSession(row: {
   actor_username: string | null;
   actor_email: string | null;
   actor_dn: string | null;
-  capabilities_json: unknown;
+  roles_json: unknown;
   source_ip: string | null;
   user_agent: string | null;
   created_at: Date | string;
@@ -377,7 +394,7 @@ function rowToSession(row: {
   expires_at: Date | string;
   revoked_at: Date | string | null;
 }): AdminSession {
-  const caps = parseCapabilities(row.capabilities_json);
+  const roles = parseRoles(row.roles_json);
   return {
     id: row.id,
     directoryId: Number(row.directory_id),
@@ -386,7 +403,8 @@ function rowToSession(row: {
     actorUsername: row.actor_username,
     actorEmail: row.actor_email,
     actorDn: row.actor_dn,
-    capabilities: caps,
+    roles,
+    capabilities: capabilitiesOfRoles(roles),
     sourceIp: row.source_ip,
     userAgent: row.user_agent,
     createdAt: toDate(row.created_at),
@@ -412,7 +430,7 @@ function rowToElevated(row: {
     adminSessionId: row.admin_session_id,
     actorUserId: row.actor_user_id,
     authMethod: row.auth_method,
-    capabilities: parseCapabilities(row.capabilities_json),
+    capabilities: parseStrings(row.capabilities_json),
     createdAt: toDate(row.created_at),
     idleExpiresAt: toDate(row.idle_expires_at),
     absoluteExpiresAt: toDate(row.expires_at),
@@ -420,7 +438,11 @@ function rowToElevated(row: {
   };
 }
 
-function parseCapabilities(value: unknown): string[] {
+function parseRoles(value: unknown): Role[] {
+  return parseStrings(value).filter((v): v is Role => (ROLES as readonly string[]).includes(v));
+}
+
+function parseStrings(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string');
   if (typeof value === 'string') {
     try {

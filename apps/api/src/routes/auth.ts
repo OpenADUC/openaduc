@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { meResponseSchema, stepUpRequestSchema, type Capability } from '@openaduc/shared';
+import {
+  capabilitiesOfRoles,
+  meResponseSchema,
+  stepUpRequestSchema,
+  type Capability,
+} from '@openaduc/shared';
 import { loadEnv } from '../config/env.js';
 import {
   AppError,
@@ -140,9 +145,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
       const { user } = result;
       const groupDns = result.groupDns ?? user.memberOfDns;
-      const capabilities = await app.services.authorization.resolveCapabilities(groupDns);
+      const roles = await app.services.authorization.resolveRoles(groupDns);
+      const capabilities = capabilitiesOfRoles(roles);
 
-      if (capabilities.length === 0) {
+      if (roles.length === 0) {
         await app.services.audit
           .recordEvent({
             ...baseAudit,
@@ -164,7 +170,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         actorUsername: bindUsername,
         actorEmail: user.email,
         actorDn: user.distinguishedName,
-        capabilities,
+        roles,
         sourceIp: req.ip,
         userAgent: req.headers['user-agent'] ?? null,
       });
@@ -179,7 +185,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           sessionId: session.id,
           targetId: user.objectGuid,
           targetDn: user.distinguishedName,
-          metadata: { capabilities, directoryId: directory.id },
+          metadata: { roles, capabilities, directoryId: directory.id },
         })
         .catch((err) => req.log.error({ err }, 'audit insert failed for auth.login success'));
 
@@ -310,10 +316,11 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       // Roles come from AD group membership, which may have changed since
       // sign-in. Re-read them from this bind so a revoked role can't be kept
       // alive by stepping up.
-      const capabilities = await app.services.authorization.resolveCapabilities(
+      const roles = await app.services.authorization.resolveRoles(
         result.groupDns ?? result.user?.memberOfDns ?? [],
       );
-      if (capabilities.length === 0) {
+      const capabilities = capabilitiesOfRoles(roles);
+      if (roles.length === 0) {
         const { revokedElevatedIds } = await app.services.sessions.revokeAdminSession(
           actor.session.id,
         );
@@ -349,7 +356,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
           actorUsername: actor.session.actorUsername,
           actorEmail: actor.session.actorEmail,
           actorDn: actor.session.actorDn,
-          capabilities,
+          roles,
           sourceIp: req.ip,
           userAgent: req.headers['user-agent'] ?? null,
           notAfter: actor.session.expiresAt,

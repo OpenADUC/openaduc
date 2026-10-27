@@ -269,7 +269,9 @@ export interface AdminSessionsTable {
   actor_username: string | null;
   actor_email: string | null;
   actor_dn: string | null;
-  capabilities_json: JSONColumnType<string[]>;
+  // The roles AD group membership gave at sign-in or step-up. Capabilities
+  // are derived from them per request.
+  roles_json: JSONColumnType<string[]>;
   source_ip: string | null;
   user_agent: string | null;
   created_at: TimestampDefault;

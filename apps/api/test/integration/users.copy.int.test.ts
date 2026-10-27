@@ -10,6 +10,7 @@ import {
   DC,
   asAdministrator,
   configureDirectory,
+  overrideCapabilities,
   readDirectoryUser,
   setGroupMember,
   setUserAttribute,
@@ -140,14 +141,7 @@ describe('copying a user', () => {
       copiedFrom: alice,
     });
   const dropGroupMembership = () =>
-    api.app.db
-      .updateTable('admin_sessions')
-      .set({
-        capabilities_json: JSON.stringify(['read:user', 'read:group', 'write:user.create']),
-      })
-      .where('actor_username', '=', `oa.operator@${DC.domain}`)
-      .where('revoked_at', 'is', null)
-      .execute();
+    overrideCapabilities(api, 'oa.operator', ['read:user', 'read:group', 'write:user.create']);
 
   beforeAll(async () => {
     await removeNewUsers();
@@ -243,8 +237,6 @@ describe('copying a user', () => {
       requiredCapability: 'write:group.membership',
       route: '/api/users',
     });
-    await operator.signIn(api, 'oa.operator');
-    await operator.stepUp();
   });
 
   it('refuses a group, manager or source it doesn’t know, and writes nothing', async () => {
@@ -351,8 +343,6 @@ describe('copying a user', () => {
       const res = await operator.post(`/api/users/${created.id}/finish-create`, { enabled: true });
 
       expect(res.statusCode).toBe(403);
-      await operator.signIn(api, 'oa.operator');
-      await operator.stepUp();
     });
 
     it('lets someone with the rights finish it: the group that failed, then enabling', async () => {
@@ -509,20 +499,15 @@ describe('copying a user', () => {
 
     // An operator who briefly may grant roles starts a copy whose add to
     // Domain Admins (the admin role's group) AD refuses, so it's left to finish.
-    await api.app.db
-      .updateTable('admin_sessions')
-      .set({
-        capabilities_json: JSON.stringify([...ROLE_CAPABILITIES.operator, 'configure:security']),
-      })
-      .where('actor_username', '=', `oa.operator@${DC.domain}`)
-      .where('revoked_at', 'is', null)
-      .execute();
+    const mayGrantRoles = overrideCapabilities(api, 'oa.operator', [
+      ...ROLE_CAPABILITIES.operator,
+      'configure:security',
+    ]);
     const started = await operator.post('/api/users', copyOfAlice('uma.urban', [domainAdmins]));
     expect(started.statusCode, started.body).toBe(200);
     const unfinished = started.json<UserCreateResponse>();
     expect(unfinished.remaining).toEqual(['groups', 'enable']);
-    await operator.signIn(api, 'oa.operator');
-    await operator.stepUp();
+    mayGrantRoles();
 
     const finish = await operator.post(`/api/users/${unfinished.id}/finish-create`, {
       enabled: true,
