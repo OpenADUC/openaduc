@@ -1116,6 +1116,18 @@ onMounted(() => {
   position: relative;
 }
 
+/* page-fill flexes whichever child comes last. The bulk bar is last while
+   rows are selected, so name the filler instead and keep the bar its own
+   height. */
+.users-page.page-fill > .users-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.users-page.page-fill > .bulkbar {
+  flex: none;
+}
+
 .chip-strip {
   display: flex;
   flex-wrap: wrap;
@@ -1268,13 +1280,15 @@ onMounted(() => {
   padding: 8px 14px;
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  /* A pill on one row; a rounded box once the actions wrap. */
+  border-radius: 26px;
   box-shadow: var(--shadow-lg);
   font-size: 12.5px;
   align-self: center;
 }
 
 .bulkbar-count {
+  flex-shrink: 0;
   color: var(--text-2);
   font-size: 12px;
 }
@@ -1285,6 +1299,7 @@ onMounted(() => {
 }
 
 .bulkbar-divider {
+  flex-shrink: 0;
   width: 1px;
   height: 16px;
   background: var(--border-strong);
@@ -1292,8 +1307,10 @@ onMounted(() => {
 
 .bulkbar-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 
 .bulk-fade-enter-active,
