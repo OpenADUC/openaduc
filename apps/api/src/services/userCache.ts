@@ -112,6 +112,34 @@ export async function upsertUser(
 }
 
 /**
+ * Drop users that are gone from the directory (deleted, or moved out of the
+ * base DN) from list views, with their group memberships, rather than
+ * waiting for a sync. A restore or sync upserts the row, which clears
+ * deleted_at again.
+ */
+export async function forgetDeletedUsers(
+  db: Kysely<DB>,
+  providerId: number,
+  objectGuids: readonly string[],
+): Promise<void> {
+  if (objectGuids.length === 0) return;
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .updateTable('user_cache_records')
+      .set({ deleted_at: new Date().toISOString() })
+      .where('provider_id', '=', providerId)
+      .where('object_guid', 'in', objectGuids)
+      .where('deleted_at', 'is', null)
+      .execute();
+    await trx
+      .deleteFrom('user_group_memberships')
+      .where('provider_id', '=', providerId)
+      .where('user_object_guid', 'in', objectGuids)
+      .execute();
+  });
+}
+
+/**
  * Mark cached users the last full crawl didn't see as stale (shown with a
  * staleness badge; deletion is the tombstone sync's job).
  */

@@ -51,7 +51,7 @@ import { previewAttributes } from '../services/bulkAttributes.js';
 import { refuseBulkRequest } from '../services/bulkJobs/errors.js';
 import { previewGroupMembership } from '../services/groupMembershipPreview.js';
 import { findCachedOu, userMoveRefusal } from '../services/ouCache.js';
-import { findCachedUser } from '../services/userCache.js';
+import { findCachedUser, forgetDeletedUsers } from '../services/userCache.js';
 import { UserAttributeRefusal, writeUserAttributes } from '../services/userAttributeWrite.js';
 import {
   DISABLE_USER,
@@ -1258,6 +1258,21 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         .execute();
       const byId = new Map(rows.map((r) => [r.object_guid, r]));
 
+      // The cache keeps accounts deleted or moved out of the base DN outside
+      // OpenADUC (no sync removes them yet), so confirm each one is still
+      // there rather than offer a delete that can only fail. If AD can't be
+      // asked, the delete's own live read still catches them.
+      try {
+        const ids = [...byId.keys()];
+        const live = ids.length > 0 ? await provider.findObjects({ dns: [], guids: ids }) : [];
+        const present = new Set(live.map((o) => o.objectGuid.toLowerCase()));
+        const gone = ids.filter((id) => !present.has(id.toLowerCase()));
+        await forgetDeletedUsers(app.db, provider.id, gone);
+        for (const id of gone) byId.delete(id);
+      } catch (err) {
+        req.log.warn({ err }, 'live check unavailable for delete preflight');
+      }
+
       // Recycle Bin state needs the operator's bind (Optional Features is
       // usually unreadable to a minimal service account). Not knowing it
       // shouldn't block a delete, so anything but a dead step-up session
@@ -1277,7 +1292,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       let childCounts = new Map<string, number | null>();
       try {
         childCounts = await provider.countChildObjects(
-          rows.map((r) => r.distinguished_name),
+          [...byId.values()].map((r) => r.distinguished_name),
           ctx(actor, req),
         );
       } catch (err) {
@@ -1389,19 +1404,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
 
       // Drop the account from list views now rather than at the next full
       // sync. A restore upserts the row, which clears deleted_at again.
-      await app.db.transaction().execute(async (trx) => {
-        await trx
-          .updateTable('user_cache_records')
-          .set({ deleted_at: new Date().toISOString() })
-          .where('provider_id', '=', provider.id)
-          .where('object_guid', '=', live.objectGuid)
-          .execute();
-        await trx
-          .deleteFrom('user_group_memberships')
-          .where('provider_id', '=', provider.id)
-          .where('user_object_guid', '=', live.objectGuid)
-          .execute();
-      });
+      await forgetDeletedUsers(app.db, provider.id, [live.objectGuid]);
 
       return { ok: true, treeDelete: result.treeDelete };
     },
