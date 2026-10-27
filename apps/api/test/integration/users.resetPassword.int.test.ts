@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   configureDirectory,
   DC,
+  overrideCapabilities,
   readDirectoryUser,
   reseedDirectory,
   sambaTool,
@@ -63,14 +64,7 @@ describe('resetting a locked-out user’s password', () => {
 
   it('needs the unlock capability too when asked to unlock', async () => {
     const before = await pwdLastSet('dave.diaz');
-    await api.app.db
-      .updateTable('admin_sessions')
-      .set({
-        capabilities_json: JSON.stringify(['read:user', 'write:user.resetPassword']),
-      })
-      .where('actor_username', '=', `oa.operator@${DC.domain}`)
-      .where('revoked_at', 'is', null)
-      .execute();
+    overrideCapabilities(api, 'oa.operator', ['read:user', 'write:user.resetPassword']);
 
     const res = await resetDave({ newPassword: 'Unused-Reset-9a', unlock: true });
 
@@ -83,9 +77,6 @@ describe('resetting a locked-out user’s password', () => {
       route: '/api/users/:id/reset-password',
     });
     expect(await auditRows('user.password.reset')).toEqual([]);
-
-    await operator.signIn(api, 'oa.operator');
-    await operator.stepUp();
   });
 
   it('leaves the account locked when the directory rejects the password', async () => {

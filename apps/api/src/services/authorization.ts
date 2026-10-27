@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-import { type Capability, ROLE_CAPABILITIES, type Role } from '@openaduc/shared';
+import { type Capability, capabilitiesOfRoles, type Role } from '@openaduc/shared';
 import type { Env } from '../config/env.js';
 import type { SettingsService } from './settings.js';
 
@@ -20,21 +20,21 @@ export class AuthorizationService {
   ) {}
 
   /**
-   * Resolve the effective capability set for a user given their AD group DNs.
-   * Returns an empty array if the user matches no configured role group AND
-   * is not in the bootstrap admin group.
+   * The roles a user's AD group DNs give them. Empty if the user matches no
+   * configured role group AND is not in the bootstrap admin group.
    */
-  async resolveCapabilities(memberOfDns: readonly string[]): Promise<Capability[]> {
+  async resolveRoles(memberOfDns: readonly string[]): Promise<Role[]> {
     const groups = new Set(memberOfDns.map((dn) => dn.toLowerCase()));
     const matchedRoles = new Set<Role>();
     for (const g of await this.roleGroups()) {
       if (groups.has(g.dn.toLowerCase())) matchedRoles.add(g.role);
     }
-    const caps = new Set<Capability>();
-    for (const role of matchedRoles) {
-      for (const cap of ROLE_CAPABILITIES[role]) caps.add(cap);
-    }
-    return Array.from(caps);
+    return Array.from(matchedRoles);
+  }
+
+  /** The effective capability set for a user given their AD group DNs. */
+  async resolveCapabilities(memberOfDns: readonly string[]): Promise<Capability[]> {
+    return capabilitiesOfRoles(await this.resolveRoles(memberOfDns));
   }
 
   /**
@@ -54,7 +54,7 @@ export class AuthorizationService {
 
   /**
    * Pure helper used by route guards. Does not hit the DB; works against the
-   * already-resolved capability snapshot stored on the session.
+   * capabilities the session's roles give it.
    */
   has(capabilities: readonly string[], required: Capability): boolean {
     return capabilities.includes(required);

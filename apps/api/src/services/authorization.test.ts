@@ -86,6 +86,24 @@ describe('AuthorizationService.resolveCapabilities', () => {
   });
 });
 
+describe('AuthorizationService.resolveRoles', () => {
+  it('returns each role whose group the user is in', async () => {
+    const svc = new AuthorizationService(
+      env,
+      settingsStub({
+        'authz.operator_group_dn': 'CN=Operators,CN=Users,DC=x,DC=y',
+        'authz.auditor_group_dn': 'CN=Auditors,CN=Users,DC=x,DC=y',
+      }),
+    );
+    const roles = await svc.resolveRoles([
+      'CN=Operators,CN=Users,DC=x,DC=y',
+      'CN=Auditors,CN=Users,DC=x,DC=y',
+      'CN=Random,CN=Users,DC=x,DC=y',
+    ]);
+    expect(roles.sort()).toEqual(['auditor', 'operator']);
+  });
+});
+
 describe('AuthorizationService.has / hasAny', () => {
   const svc = new AuthorizationService(env, settingsStub({}));
   it('has() checks single capability', () => {

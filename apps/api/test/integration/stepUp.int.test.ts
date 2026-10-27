@@ -20,7 +20,7 @@ describe('step-up re-reads the operator’s roles from AD', () => {
   const sessionRow = async (actorUsername: string) =>
     api.app.db
       .selectFrom('admin_sessions')
-      .select(['capabilities_json', 'expires_at'])
+      .select('expires_at')
       .where('actor_username', '=', actorUsername)
       .where('revoked_at', 'is', null)
       .orderBy('created_at', 'desc')
